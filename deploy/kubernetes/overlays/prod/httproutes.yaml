@@ -36,6 +36,8 @@ spec:
           name: ic-invoice-api
           port: 8080
 ---
+# The Payment Service's own routes ARE /payments and /purchases
+# (design/contracts.md), so both prefixes route through with no URLRewrite.
 apiVersion: gateway.networking.k8s.io/v1
 kind: HTTPRoute
 metadata:
@@ -54,18 +56,17 @@ spec:
         - path:
             type: PathPrefix
             value: /payments
-      filters:
-        - type: URLRewrite
-          urlRewrite:
-            path:
-              type: ReplacePrefixMatch
-              replacePrefixMatch: /
+        - path:
+            type: PathPrefix
+            value: /purchases
       backendRefs:
         - group: ""
           kind: Service
           name: ic-payment-api
           port: 8080
 ---
+# The Payer Account Service's own route IS /payers (design/contracts.md), so the
+# prefix routes through with no URLRewrite.
 apiVersion: gateway.networking.k8s.io/v1
 kind: HTTPRoute
 metadata:
@@ -83,13 +84,7 @@ spec:
     - matches:
         - path:
             type: PathPrefix
-            value: /payer-accounts
-      filters:
-        - type: URLRewrite
-          urlRewrite:
-            path:
-              type: ReplacePrefixMatch
-              replacePrefixMatch: /
+            value: /payers
       backendRefs:
         - group: ""
           kind: Service

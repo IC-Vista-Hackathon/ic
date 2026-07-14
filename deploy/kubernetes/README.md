@@ -2,12 +2,39 @@
 
 Shared namespace, RBAC, network policy, and workload manifests live here.
 
-Raw YAML for now — static objects, not enough variation yet to justify Helm/Kustomize.
+## Control-plane services (Kustomize)
+
+The control-plane service workloads are managed with Kustomize:
+
+- `base/` — namespace-agnostic Deployment/Service manifests for the five services
+  (`ic-biller-experience-api`, `ic-biller-experience-worker`, `ic-invoice-api`,
+  `ic-payment-api`, `ic-payer-account-api`) plus the `ic-workload` service account.
+- `overlays/nonprod/` — the `ic-nonprod` namespace. Deployed on every PR; functional
+  tests reach it via `kubectl port-forward` (no public routes).
+- `overlays/prod/` — the `ic` namespace plus public kgateway `HTTPRoute`s. Deployed on
+  merge to `main`.
+
+Deploys are automated by GitHub Actions (`.github/workflows/deploy-{nonprod,prod}.yml`):
+each pins every image to the commit SHA (`kustomize`/`newTag`) and runs
+`kubectl apply -k deploy/kubernetes/overlays/<env>`. To apply manually:
+
+```sh
+kubectl apply -k deploy/kubernetes/overlays/nonprod   # or .../prod
+```
+
+Note: the AKS API server is public, so GitHub-hosted runners reach it directly with
+`az aks get-credentials`. This Devin sandbox cannot (it egresses through an intercepting
+proxy AKS won't trust), which is why the manual/`biller-sites` steps below use
+`az aks command invoke` instead.
+
+## Publication & platform manifests (raw YAML)
+
+The publication-plane and platform objects below are static enough to stay as raw YAML:
 
 | File | Creates |
 |---|---|
-| `namespace.yaml` | the `ic` namespace |
-| `service-account.yaml` | `ic-workload` service account, federated to `uami-ic-hack-workload` via workload identity (see `infra/bicep`) |
+| `base/service-account.yaml` | `ic-workload` service account, federated to `uami-ic-hack-workload` via workload identity (see `infra/bicep`); namespace set per overlay |
+| `overlays/{nonprod,prod}/namespace.yaml` | the `ic-nonprod` / `ic` namespaces |
 | `biller-experience.template.yaml` | API, worker, Studio, demo PWA, services, probes, resource controls, and Gateway API routes |
 | `biller-sites-namespace.yaml` | the `biller-sites` namespace — where all `biller-{slug}` workloads (Deployment, Service, ConfigMap, HTTPRoute) are published |
 | `biller-publisher-service-account.yaml` | `biller-publisher` service account in the `ic` namespace, dedicated to `IC.BillerExperience.Worker` |

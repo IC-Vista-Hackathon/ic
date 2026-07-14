@@ -6,7 +6,9 @@ metadata:
     app: ic-payment-api
     app.kubernetes.io/part-of: ic
 spec:
-  replicas: 2
+  # In-memory stores: replicas MUST stay 1 until Cosmos lands — with 2+, seeds
+  # land on one pod and lookups hit the other.
+  replicas: 1
   selector:
     matchLabels:
       app: ic-payment-api
@@ -22,6 +24,11 @@ spec:
           ports:
             - name: http
               containerPort: 8080
+          env:
+            # In-cluster Invoice Service. Namespace-relative name so nonprod
+            # (ic-nonprod) and prod (ic) each resolve to their own invoice API.
+            - name: Services__InvoiceApi
+              value: http://ic-invoice-api:8080
           readinessProbe:
             httpGet:
               path: /health/ready

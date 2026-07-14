@@ -6,7 +6,9 @@ metadata:
     app: ic-biller-experience-api
     app.kubernetes.io/part-of: ic
 spec:
-  replicas: 2
+  # In-memory stores: replicas MUST stay 1 until Cosmos lands — with 2+, writes
+  # land on one pod and reads hit the other.
+  replicas: 1
   selector:
     matchLabels:
       app: ic-biller-experience-api
