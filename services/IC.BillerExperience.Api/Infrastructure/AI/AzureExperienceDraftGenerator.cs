@@ -97,7 +97,7 @@ public sealed partial class AzureExperienceDraftGenerator(
               "schemaVersion":{"type":"string"},"billerId":{"type":"string"},
               "enabledPaymentCapabilities":{"type":"array","items":{"type":"string"}},
               "brand":{"type":"object","additionalProperties":false,"required":["displayName","primaryColor","secondaryColor","logoAssetId","fontFamily"],"properties":{"displayName":{"type":"string"},"primaryColor":{"type":"string"},"secondaryColor":{"type":"string"},"logoAssetId":{"type":["string","null"]},"fontFamily":{"type":["string","null"]}}},
-              "content":{"type":"object","additionalProperties":false,"required":["heading","introduction","supportText","privacyPolicyUrl","termsOfServiceUrl"],"properties":{"heading":{"type":"string"},"introduction":{"type":"string"},"supportText":{"type":"string"},"privacyPolicyUrl":{"type":"string","format":"uri"},"termsOfServiceUrl":{"type":"string","format":"uri"}}},
+              "content":{"type":"object","additionalProperties":false,"required":["heading","introduction","supportText","privacyPolicyUrl","termsOfServiceUrl"],"properties":{"heading":{"type":"string"},"introduction":{"type":"string"},"supportText":{"type":"string"},"privacyPolicyUrl":{"type":"string"},"termsOfServiceUrl":{"type":"string"}}},
               "pwa":{"type":"object","additionalProperties":false,"required":["name","shortName","themeColor","backgroundColor","iconAssetId"],"properties":{"name":{"type":"string"},"shortName":{"type":"string"},"themeColor":{"type":"string"},"backgroundColor":{"type":"string"},"iconAssetId":{"type":["string","null"]}}}
             }}
           }
