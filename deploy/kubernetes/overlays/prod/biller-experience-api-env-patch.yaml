@@ -28,4 +28,5 @@ spec:
             - { name: BillerExperience__Model__Deployment, value: gpt-5.4-mini }
             - { name: BillerExperience__PublishedExperience__StorageEndpoint, value: "https://stichackjk4zmntatjem4.blob.core.windows.net/" }
             - { name: BillerExperience__PublishedExperience__ContainerName, value: payer-experiences }
+            - { name: BillerExperience__SupportingServices__InvoiceBaseUrl, value: "http://ic-invoice-api.ic.svc.cluster.local:8080/" }
             - { name: APPLICATIONINSIGHTS_CONNECTION_STRING, value: "${APPLICATIONINSIGHTS_CONNECTION_STRING}" }

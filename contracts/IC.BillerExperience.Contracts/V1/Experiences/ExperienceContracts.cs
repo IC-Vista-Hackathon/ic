@@ -6,7 +6,64 @@ public sealed record BillerExperienceDefinition(
     ExperienceBrand Brand,
     ExperienceContent Content,
     PwaConfiguration Pwa,
-    IReadOnlyList<string> EnabledPaymentCapabilities);
+    IReadOnlyList<string> EnabledPaymentCapabilities,
+    ExperienceUi? Ui = null,
+    ExperiencePreferences? Preferences = null);
+
+public sealed record ExperiencePreferences(
+    bool GuestCheckoutAllowed,
+    bool OfferAutopay,
+    bool EnrollDuringPayment,
+    bool OfferPaperless,
+    ReminderChannel ReminderChannel,
+    IReadOnlyList<string> AcceptedMethods,
+    bool SelfServiceHistory,
+    bool SelfServiceUpdates,
+    FeeHandling FeeHandling,
+    PreviewPreferences Preview,
+    IReadOnlyDictionary<string, string>? RecommendationRationale = null);
+
+public sealed record PreviewPreferences(string DefaultDevice, IReadOnlyList<string> EnabledScenarios);
+
+public enum ReminderChannel
+{
+    Email,
+    Text,
+    Both,
+    None
+}
+
+public enum FeeHandling
+{
+    Absorb,
+    Charge,
+    Mixed,
+    Undecided
+}
+
+public sealed record ExperienceUi(
+    string Layout,
+    ExperienceTheme Theme,
+    IReadOnlyList<ExperienceSection> Sections,
+    IReadOnlyList<ExperienceAction> Actions);
+
+public sealed record ExperienceTheme(string Density, string Radius, string Surface);
+
+public sealed record ExperienceSection(string Id, string Type, string Variant = "default", bool Visible = true);
+
+public sealed record ExperienceAction(
+    string Id,
+    string Label,
+    ExperienceActionType Action,
+    string Variant = "primary");
+
+public enum ExperienceActionType
+{
+    StartPayment,
+    SchedulePayment,
+    ViewBill,
+    ContactSupport
+}
 
 public sealed record UpdateExperienceRequest(BillerExperienceDefinition Definition, string? ExpectedETag);
 

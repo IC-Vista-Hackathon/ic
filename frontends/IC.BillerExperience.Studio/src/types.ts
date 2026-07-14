@@ -7,7 +7,26 @@ export interface ExperienceDefinition {
   content: { heading: string; introduction: string; support_text: string; privacy_policy_url: string; terms_of_service_url: string };
   pwa: { name: string; short_name: string; theme_color: string; background_color: string; icon_asset_id: string | null };
   enabled_payment_capabilities: string[];
+  ui?: ExperienceUi;
+  preferences?: ExperiencePreferences;
 }
+
+export interface ExperienceUi { layout: string; theme: { density: string; radius: string; surface: string }; sections: Array<{ id: string; type: string; variant: string; visible: boolean }>; actions: Array<{ id: string; label: string; action: number | string; variant: string }> }
+export interface ExperiencePreferences {
+  guest_checkout_allowed: boolean;
+  offer_autopay: boolean;
+  enroll_during_payment: boolean;
+  offer_paperless: boolean;
+  reminder_channel: number | 'email' | 'text' | 'both' | 'none';
+  accepted_methods: string[];
+  self_service_history: boolean;
+  self_service_updates: boolean;
+  fee_handling: number | 'absorb' | 'charge' | 'mixed' | 'undecided';
+  preview: { default_device: 'desktop' | 'mobile'; enabled_scenarios: PreviewScenario[] };
+  recommendation_rationale?: Record<string, string>;
+}
+export type PreviewScenario = 'payment' | 'history' | 'communication' | 'complex';
+export interface AgentActivity { event_id: string; sequence: number; run_id: string; agent_id: string; display_name: string; status: 'queued'|'running'|'completed'|'needs_input'|'failed'; summary: string; occurred_at: string; trace_id?: string }
 
 export interface ExperienceRevision {
   biller_id: string;
