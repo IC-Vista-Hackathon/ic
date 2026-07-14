@@ -33,6 +33,7 @@ Re-run the same command to apply changes; Bicep is idempotent (ARM incremental d
 | Resource group `rg-ic-hack` | Everything below lives here |
 | Log Analytics workspace | AKS Container Insights |
 | ACR (Basic) | Single registry, no promotion tiers |
+| Storage account (Standard_LRS, StorageV2) + `payer-experiences` blob container | Holds every biller's published Payer Experience SPA (static assets). One shared account instead of per-biller compute — a single router workload reads a biller's SPA by prefix and serves it. Workload identity gets `Storage Blob Data Contributor`; keys/anonymous access disabled |
 | Cosmos DB (serverless) | Containers per entities.md, partitioned `/biller_id` (`/id` for `billers`) |
 | AI Foundry account + project | Hosts agents (services.md's "AI Foundry" plane) |
 | AKS (2-4 node autoscale, kubenet) | Runs services + agents |

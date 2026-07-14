@@ -45,6 +45,17 @@ module workloadIdentity 'modules/workloadIdentity.bicep' = {
   }
 }
 
+module storage 'modules/storage.bicep' = {
+  name: 'storage'
+  scope: rg
+  params: {
+    // Storage account names must be globally unique, 3-24 chars, lowercase alphanumeric, no hyphens.
+    name: 'st${replace(prefix, '-', '')}${suffix}'
+    location: location
+    workloadIdentityPrincipalId: workloadIdentity.outputs.principalId
+  }
+}
+
 module cosmos 'modules/cosmos.bicep' = {
   name: 'cosmos'
   scope: rg
@@ -120,6 +131,8 @@ output resourceGroup string = rg.name
 output cosmosEndpoint string = cosmos.outputs.endpoint
 output aiFoundryEndpoint string = aiFoundry.outputs.endpoint
 output acrLoginServer string = acr.outputs.loginServer
+output payerExperienceBlobEndpoint string = storage.outputs.blobEndpoint
+output payerExperienceContainer string = storage.outputs.containerName
 output aksClusterName string = aks.outputs.name
 output workloadIdentityClientId string = workloadIdentity.outputs.clientId
 output appInsightsConnectionString string = appInsights.outputs.connectionString
