@@ -12,6 +12,9 @@ Raw YAML for now — static objects, not enough variation yet to justify Helm/Ku
 | `biller-sites-namespace.yaml` | the `biller-sites` namespace — where all `biller-{slug}` workloads (Deployment, Service, ConfigMap, HTTPRoute) are published |
 | `biller-publisher-service-account.yaml` | `biller-publisher` service account in the `ic` namespace, dedicated to `IC.BillerExperience.Worker` |
 | `biller-publisher-role.yaml` | a `Role` + `RoleBinding` in `biller-sites` granting `biller-publisher` get/list/watch/create/update/patch/delete on Deployments (apps), Services/ConfigMaps (core), and HTTPRoutes (gateway.networking.k8s.io) only |
+| `invoice-api/` | `ic-invoice-api` Deployment + ClusterIP Service + Gateway API HTTPRoute (`/invoices`, prefix stripped) |
+| `payment-api/` | `ic-payment-api` Deployment + ClusterIP Service + HTTPRoute (`/payments`, `/purchases`) |
+| `payer-account-api/` | `ic-payer-account-api` Deployment + ClusterIP Service + HTTPRoute (`/payers`) |
 
 The Biller Experience template is rendered at deploy time. Replace `ACR_LOGIN_SERVER`,
 `IMAGE_TAG`, `COSMOS_ENDPOINT`, `AI_FOUNDRY_ENDPOINT`, and
@@ -40,6 +43,29 @@ az aks command invoke -g rg-ic-hack -n aks-ic-hack \
   --file namespace.yaml --file service-account.yaml \
   --file biller-sites-namespace.yaml --file biller-publisher-service-account.yaml --file biller-publisher-role.yaml
 ```
+
+## Foundation service apps (invoice / payment / payer-account)
+
+Each of `invoice-api/`, `payment-api/`, and `payer-account-api/` is a self-contained
+Deployment + ClusterIP Service + Gateway API HTTPRoute. Images are pinned to an immutable
+release tag (git short SHA, e.g. `:7f853a2`) — never a mutable `:v1`/`latest` — so re-applying a
+manifest can't silently pull a different image and `imagePullPolicy: IfNotPresent` is safe.
+
+The routes are exposed through the shared `ic-gateway` (see below). Unlike `/invoices` (whose
+prefix is stripped via URLRewrite), `/payments`, `/purchases`, and `/payers` are the services'
+own route roots per `design/contracts.md`, so they route through unmodified.
+
+Apply one service, e.g. payment-api (repeat per directory):
+
+```sh
+cd deploy/kubernetes/payment-api
+az aks command invoke -g rg-ic-hack -n aks-ic-hack \
+  --command "kubectl apply -f deployment.yaml -f service.yaml -f httproute.yaml" \
+  --file deployment.yaml --file service.yaml --file httproute.yaml
+```
+
+> These are in-memory services: `replicas` MUST stay `1` until Cosmos lands, otherwise seeds
+> land on one pod and lookups hit another. The comment in each `deployment.yaml` says the same.
 
 ## Gateway API / kgateway ingress
 

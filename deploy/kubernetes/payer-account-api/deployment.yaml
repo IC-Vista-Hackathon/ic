@@ -23,7 +23,9 @@ spec:
       serviceAccountName: ic-workload
       containers:
         - name: payer-account-api
-          image: acrichackjk4zmntatjem4.azurecr.io/ic-payer-account-api:v1
+          # Immutable release tag (git short SHA) — see deploy/kubernetes/README.md.
+          image: acrichackjk4zmntatjem4.azurecr.io/ic-payer-account-api:7f853a2
+          imagePullPolicy: IfNotPresent
           ports:
             - name: http
               containerPort: 8080
