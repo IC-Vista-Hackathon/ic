@@ -108,3 +108,60 @@ spec:
           kind: Service
           name: ic-biller-experience-api
           port: 8080
+---
+# Frontends: root redirects to /studio/, and /studio + /pay serve the static SPAs.
+# Mirrors prod's biller-experience route so per-PR nonprod previews the full UI.
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: ic-biller-experience-frontends
+  labels:
+    app.kubernetes.io/part-of: ic-biller-experience
+spec:
+  parentRefs:
+    - group: gateway.networking.k8s.io
+      kind: Gateway
+      name: ic-nonprod-gateway
+      sectionName: http
+  rules:
+    - matches:
+        - path:
+            type: Exact
+            value: /
+      filters:
+        - type: RequestRedirect
+          requestRedirect:
+            path:
+              type: ReplaceFullPath
+              replaceFullPath: /studio/
+            statusCode: 302
+    - matches:
+        - path:
+            type: PathPrefix
+            value: /studio
+      filters:
+        - type: URLRewrite
+          urlRewrite:
+            path:
+              type: ReplacePrefixMatch
+              replacePrefixMatch: /
+      backendRefs:
+        - group: ""
+          kind: Service
+          name: ic-biller-experience-studio
+          port: 8080
+    - matches:
+        - path:
+            type: PathPrefix
+            value: /pay
+      filters:
+        - type: URLRewrite
+          urlRewrite:
+            path:
+              type: ReplacePrefixMatch
+              replacePrefixMatch: /
+      backendRefs:
+        - group: ""
+          kind: Service
+          name: ic-biller-payments-pwa
+          port: 8080

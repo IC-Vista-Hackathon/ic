@@ -13,6 +13,10 @@ resources:
   - ../../base
   - gateway.yaml
   - httproutes.yaml
+  # Static Studio + Payments PWA so per-PR nonprod serves the full UI like prod.
+  # No Azure identity needed (static nginx), so — unlike prod's Worker/Cosmos API —
+  # these are safe in ic-nonprod. The Worker stays prod-only.
+  - frontends.yaml
 
 # Cosmos-backed persistence + workload-identity opt-in for the foundation services, pointed at
 # the dedicated nonprod Cosmos account. The workload identity is federated to
@@ -24,6 +28,10 @@ patches:
 # image to the PR head commit's immutable tag. `latest` here is only a placeholder.
 images:
   - name: acrichackjk4zmntatjem4.azurecr.io/ic-biller-experience-api
+    newTag: latest
+  - name: acrichackjk4zmntatjem4.azurecr.io/ic-biller-experience-studio
+    newTag: latest
+  - name: acrichackjk4zmntatjem4.azurecr.io/ic-biller-payments-pwa
     newTag: latest
   - name: acrichackjk4zmntatjem4.azurecr.io/ic-invoice-api
     newTag: latest
