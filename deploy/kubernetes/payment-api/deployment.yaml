@@ -26,7 +26,7 @@ spec:
       containers:
         - name: payment-api
           # Immutable release tag (git short SHA) — see deploy/kubernetes/README.md.
-          image: acrichackjk4zmntatjem4.azurecr.io/ic-payment-api:v1
+          image: acrichackjk4zmntatjem4.azurecr.io/ic-payment-api:6463e29
           imagePullPolicy: IfNotPresent
           ports:
             - name: http
