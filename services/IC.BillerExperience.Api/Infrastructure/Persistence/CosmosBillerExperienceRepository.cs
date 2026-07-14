@@ -144,13 +144,9 @@ public sealed partial class CosmosBillerExperienceRepository(
         await DeletePartitionAsync(Deployments, partition, cancellationToken);
 
         // The billers container is partitioned by /id (which equals the biller id).
-        try
-        {
-            using var _ = await Billers.DeleteItemStreamAsync(billerId, partition, cancellationToken: cancellationToken);
-        }
-        catch (CosmosException exception) when (exception.StatusCode == HttpStatusCode.NotFound)
-        {
-        }
+        // DeleteItemStreamAsync returns a ResponseMessage and does NOT throw on a non-success
+        // status, so a missing biller (404) is naturally a no-op — no try/catch required.
+        using var _ = await Billers.DeleteItemStreamAsync(billerId, partition, cancellationToken: cancellationToken);
     }
 
     private static async Task DeletePartitionAsync(
