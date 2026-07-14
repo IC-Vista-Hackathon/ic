@@ -14,7 +14,7 @@
 #   deploy/smoke/smoke-test.sh
 #
 # Config via env vars:
-#   BASE_URL          public gateway base (default: http://ic-hack.eastus2.cloudapp.azure.com)
+#   BASE_URL          public gateway base (default: http://pronto.eastus2.cloudapp.azure.com)
 #   HTTP_TIMEOUT      per-request timeout seconds (default: 10)
 #   SKIP_KUBECTL=1    skip layer 1 (when cluster credentials aren't available)
 #
@@ -22,7 +22,7 @@
 
 set -uo pipefail
 
-BASE_URL="${BASE_URL:-http://ic-hack.eastus2.cloudapp.azure.com}"
+BASE_URL="${BASE_URL:-http://pronto.eastus2.cloudapp.azure.com}"
 HTTP_TIMEOUT="${HTTP_TIMEOUT:-10}"
 SKIP_KUBECTL="${SKIP_KUBECTL:-0}"
 GATEWAY_NS="kgateway-system"

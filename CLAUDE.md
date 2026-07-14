@@ -158,7 +158,7 @@ is still just a placeholder README.
 - Test coverage is thin outside Invoice/Payment. `BillerExperience.IntegrationTests` now has
   in-process integration tests for the Invoice API (health endpoints + seed-then-lookup flow),
   added with the GitHub Actions CI/CD pipeline; `BillerExperience.Worker.Tests` remains sparse.
-- The public Gateway endpoint (`ic-hack.eastus2.cloudapp.azure.com`) is live and verified.
+- The public Gateway endpoint (`pronto.eastus2.cloudapp.azure.com`) is live and verified.
 
 Don't assume build/deploy tooling exists beyond what's described above — check before relying on
 it.

@@ -1,5 +1,5 @@
 # Public exposure for the nonprod control-plane APIs via the dedicated nonprod
-# Gateway (ic-nonprod-gateway, hostname ic-hack-nonprod.eastus2.cloudapp.azure.com).
+# Gateway (ic-nonprod-gateway, hostname pronto-nonprod.eastus2.cloudapp.azure.com).
 # Path scheme mirrors prod exactly (parity for functional tests); isolation comes
 # from the separate Gateway/LB, not from different paths.
 apiVersion: gateway.networking.k8s.io/v1

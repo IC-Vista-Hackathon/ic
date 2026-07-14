@@ -3,7 +3,7 @@ kind: Kustomization
 
 # Nonprod environment: an isolated `ic-nonprod` namespace on the same aks-ic-hack
 # cluster. Deployed on every PR. Publicly exposed through its OWN kgateway Gateway
-# (ic-hack-nonprod.eastus2.cloudapp.azure.com), separate from prod's LB and
+# (pronto-nonprod.eastus2.cloudapp.azure.com), separate from prod's LB and
 # hostname. Smoke tests still use `kubectl port-forward` (deterministic; doesn't
 # wait on LB/DNS provisioning).
 namespace: ic-nonprod
