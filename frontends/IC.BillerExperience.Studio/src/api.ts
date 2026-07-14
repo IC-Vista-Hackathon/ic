@@ -1,7 +1,7 @@
 import type { Bootstrap, ChatResponse, Deployment, ExperienceRevision } from './types';
 import { logError, logEvent, newTrace } from './telemetry';
 
-const baseUrl = import.meta.env.VITE_API_URL ?? 'http://localhost:5000';
+const baseUrl = import.meta.env.VITE_API_URL ?? (import.meta.env.PROD ? '/api' : 'http://localhost:5000');
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const trace = newTrace();

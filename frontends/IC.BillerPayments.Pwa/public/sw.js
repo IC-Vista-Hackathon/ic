@@ -1,5 +1,5 @@
 const CACHE = 'biller-payments-v1';
-self.addEventListener('install', event => event.waitUntil(caches.open(CACHE).then(cache => cache.addAll(['/', '/config.json']))));
+self.addEventListener('install', event => event.waitUntil(caches.open(CACHE).then(cache => cache.addAll([self.registration.scope, new URL('config.json', self.registration.scope).href]))));
 self.addEventListener('activate', event => event.waitUntil(self.clients.claim()));
 self.addEventListener('fetch', event => {
   if (event.request.method !== 'GET') return;
