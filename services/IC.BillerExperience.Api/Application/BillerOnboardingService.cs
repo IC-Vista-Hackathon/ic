@@ -66,7 +66,7 @@ public sealed partial class BillerOnboardingService(
         var savedExperience = await repository.SaveExperienceAsync(experience, null, cancellationToken);
         var savedRun = await repository.SaveRunAsync(run, null, cancellationToken);
         try { await (invoiceSeeder ?? new NullInvoiceSeeder()).SeedAsync(id, biller.BillType, cancellationToken); }
-        catch (Exception ex) { logger.LogError(ex, "Invoice seeding failed for biller {BillerId}; continuing with biller creation", id); }
+        catch (Exception ex) { LogInvoiceSeedingFailed(logger, id, ex); }
         LogBillerCreated(logger, id, savedRun.Id, draftGenerator.Provider);
         return (Map(biller), Map(savedRun), Map(savedExperience));
     }
@@ -469,4 +469,7 @@ public sealed partial class BillerOnboardingService(
 
     [LoggerMessage(1901, LogLevel.Error, "Experience validation failed for biller {BillerId} with {FindingCount} findings")]
     private static partial void LogDefinitionValidationFailed(ILogger logger, string billerId, int findingCount);
+
+    [LoggerMessage(1902, LogLevel.Error, "Invoice seeding failed for biller {BillerId}; continuing with biller creation")]
+    private static partial void LogInvoiceSeedingFailed(ILogger logger, string billerId, Exception exception);
 }
