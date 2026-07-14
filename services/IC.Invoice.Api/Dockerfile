@@ -15,12 +15,14 @@ WORKDIR /src
 COPY global.json NuGet.config Directory.Build.props Directory.Packages.props ./
 COPY contracts/IC.Invoice.Contracts/IC.Invoice.Contracts.csproj contracts/IC.Invoice.Contracts/
 COPY libraries/IC.Persistence.Cosmos/IC.Persistence.Cosmos.csproj libraries/IC.Persistence.Cosmos/
+COPY libraries/IC.ServiceDefaults/IC.ServiceDefaults.csproj libraries/IC.ServiceDefaults/
 COPY services/IC.Invoice.Api/IC.Invoice.Api.csproj services/IC.Invoice.Api/
 RUN dotnet restore services/IC.Invoice.Api/IC.Invoice.Api.csproj
 
 # Copy the actual sources and publish a Release build.
 COPY contracts/IC.Invoice.Contracts/ contracts/IC.Invoice.Contracts/
 COPY libraries/IC.Persistence.Cosmos/ libraries/IC.Persistence.Cosmos/
+COPY libraries/IC.ServiceDefaults/ libraries/IC.ServiceDefaults/
 COPY services/IC.Invoice.Api/ services/IC.Invoice.Api/
 RUN dotnet publish services/IC.Invoice.Api/IC.Invoice.Api.csproj \
     -c Release --no-restore -o /app/publish
