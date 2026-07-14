@@ -1,9 +1,11 @@
+import { randomId } from './id';
+
 export interface ClientTrace { correlationId: string; traceparent: string }
 
 export function newTrace(): ClientTrace {
-  const traceId = crypto.randomUUID().replaceAll('-', '');
-  const spanId = crypto.randomUUID().replaceAll('-', '').slice(0, 16);
-  return { correlationId: crypto.randomUUID(), traceparent: `00-${traceId}-${spanId}-01` };
+  const traceId = randomId().replaceAll('-', '');
+  const spanId = randomId().replaceAll('-', '').slice(0, 16);
+  return { correlationId: randomId(), traceparent: `00-${traceId}-${spanId}-01` };
 }
 
 export function logEvent(name: string, fields: Record<string, unknown> = {}): void {
