@@ -9,6 +9,9 @@ param vmSize string
 param uamiName string
 param workloadNamespace string
 param workloadServiceAccountName string
+param publisherUamiName string
+param publisherNamespace string
+param publisherServiceAccountName string
 param monitorWorkspaceId string
 param monitorWorkspaceLocation string
 
@@ -18,6 +21,10 @@ resource acr 'Microsoft.ContainerRegistry/registries@2023-07-01' existing = {
 
 resource uami 'Microsoft.ManagedIdentity/userAssignedIdentities@2023-01-31' existing = {
   name: uamiName
+}
+
+resource publisherUami 'Microsoft.ManagedIdentity/userAssignedIdentities@2023-01-31' existing = {
+  name: publisherUamiName
 }
 
 resource aks 'Microsoft.ContainerService/managedClusters@2024-02-01' = {
@@ -84,6 +91,16 @@ resource federatedCredential 'Microsoft.ManagedIdentity/userAssignedIdentities/f
   properties: {
     issuer: aks.properties.oidcIssuerProfile.issuerURL
     subject: 'system:serviceaccount:${workloadNamespace}:${workloadServiceAccountName}'
+    audiences: [ 'api://AzureADTokenExchange' ]
+  }
+}
+
+resource publisherFederatedCredential 'Microsoft.ManagedIdentity/userAssignedIdentities/federatedIdentityCredentials@2023-01-31' = {
+  parent: publisherUami
+  name: 'aks-${publisherNamespace}-${publisherServiceAccountName}'
+  properties: {
+    issuer: aks.properties.oidcIssuerProfile.issuerURL
+    subject: 'system:serviceaccount:${publisherNamespace}:${publisherServiceAccountName}'
     audiences: [ 'api://AzureADTokenExchange' ]
   }
 }

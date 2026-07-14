@@ -3,7 +3,7 @@
 param name string
 param location string
 param databaseName string = 'ic'
-param workloadIdentityPrincipalId string
+param dataContributorPrincipalIds array
 
 param containers array = [
   { name: 'billers', partitionKeyPath: '/id' }
@@ -52,15 +52,15 @@ resource sqlContainers 'Microsoft.DocumentDB/databaseAccounts/sqlDatabases/conta
 
 // Cosmos data-plane access isn't a normal Azure RBAC role — it's this SQL-role-assignment
 // resource, scoped to the account, granting the built-in "Data Contributor" role.
-resource dataAccess 'Microsoft.DocumentDB/databaseAccounts/sqlRoleAssignments@2024-05-15' = {
+resource dataAccess 'Microsoft.DocumentDB/databaseAccounts/sqlRoleAssignments@2024-05-15' = [for principalId in dataContributorPrincipalIds: {
   parent: account
-  name: guid(account.id, workloadIdentityPrincipalId, 'DataContributor')
+  name: guid(account.id, principalId, 'DataContributor')
   properties: {
     roleDefinitionId: '${account.id}/sqlRoleDefinitions/00000000-0000-0000-0000-000000000002'
-    principalId: workloadIdentityPrincipalId
+    principalId: principalId
     scope: account.id
   }
-}
+}]
 
 output id string = account.id
 output name string = account.name

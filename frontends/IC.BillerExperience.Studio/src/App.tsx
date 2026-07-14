@@ -60,14 +60,26 @@ export function App() {
 
   async function publish() {
     if (!bootstrap || !draft) return; setBusy(true); setError('');
-    try { setDeployment(await api.publish(bootstrap.biller.biller_id, draft.revision)); }
+    try { const requested = await api.publish(bootstrap.biller.biller_id, draft.revision); setDeployment(requested); void monitorDeployment(bootstrap.biller.biller_id, requested.deployment_id); }
     catch (caught) { setError(toMessage(caught)); logError('studio.publication.failed', caught); }
     finally { setBusy(false); }
   }
 
+  async function monitorDeployment(billerId: string, deploymentId: string) {
+    try {
+      for (let attempt = 0; attempt < 60; attempt++) {
+        const current = await api.deployment(billerId, deploymentId); setDeployment(current);
+        if (current.state === 'ready') { logEvent('studio.publication.ready', { biller_id: billerId, deployment_id: deploymentId, published_url: current.published_url }); return; }
+        if (current.state === 'failed' || current.state === 'rolled_back') { setError(current.failure_message ?? 'Publication failed.'); logError('studio.publication.terminal_failure', new Error(current.failure_message ?? current.state), { biller_id: billerId, deployment_id: deploymentId, failure_code: current.failure_code }); return; }
+        await delay(2000);
+      }
+      throw new Error('Publication is still running. Refresh to check its status.');
+    } catch (caught) { setError(toMessage(caught)); logError('studio.publication.monitor_failed', caught, { biller_id: billerId, deployment_id: deploymentId }); }
+  }
+
   if (!bootstrap) return <Landing busy={busy} error={error} onSubmit={createBiller} />;
   return <main className="studio-shell">
-    <header className="topbar"><div><span className="eyebrow">IC Biller Studio</span><h1>{bootstrap.biller.display_name}</h1></div><span className={`status status-${session?.state}`}>{deployment ? 'Publication queued' : humanize(session?.state ?? 'collecting_information')}</span></header>
+    <header className="topbar"><div><span className="eyebrow">IC Biller Studio</span><h1>{bootstrap.biller.display_name}</h1></div><span className={`status status-${deployment?.state ?? session?.state}`}>{deployment ? humanize(deployment.state) : humanize(session?.state ?? 'collecting_information')}</span></header>
     {error && <div className="alert error" role="alert">{error}</div>}
     <div className="workspace">
       <section className="chat-panel" aria-label="Onboarding conversation">
@@ -82,7 +94,7 @@ export function App() {
       <aside className="review-panel"><h2>Ready to publish?</h2><p>Publication stays locked until the biller explicitly reviews the experience.</p><ul className="checklist">{checklist.map(([label, done]) => <li key={label} className={done ? 'done' : ''}><span aria-hidden="true">{done ? '✓' : '○'}</span>{label}</li>)}</ul>
         {draft?.findings?.map(finding => <div className="alert guidance" key={finding.code}><strong>Guidance for review</strong><p>{finding.message}</p></div>)}
         {!approved ? <button className="secondary" disabled={busy || session?.state !== 'draft_ready'} onClick={approve}>Approve reviewed draft</button> : <button disabled={busy || Boolean(deployment)} onClick={publish}>{deployment ? 'Publication queued' : 'Publish experience'}</button>}
-        {deployment && <div className="deployment"><strong>Deployment request accepted</strong><span>{deployment.deployment_id}</span><span>State: {deployment.state}</span></div>}
+        {deployment && <div className="deployment"><strong>{deployment.state === 'ready' ? 'Experience published' : 'Publication request accepted'}</strong><span>{deployment.deployment_id}</span><span>State: {humanize(deployment.state)}</span>{deployment.published_url && <a href={deployment.published_url} target="_blank" rel="noreferrer">Open payer experience</a>}</div>}
       </aside>
     </div>
   </main>;
@@ -95,3 +107,4 @@ function Landing({ busy, error, onSubmit }: { busy: boolean; error: string; onSu
 function PaymentPreview({ draft }: { draft: ExperienceRevision }) { const d = draft.definition; return <div className="device" style={{ '--brand': d.brand.primary_color, '--brand-secondary': d.brand.secondary_color } as React.CSSProperties}><div className="customer-header"><div className="logo-mark">{d.brand.display_name.split(' ').map(word => word[0]).slice(0, 2).join('')}</div><strong>{d.brand.display_name}</strong></div><div className="customer-body"><p className="muted">Account ••••4421</p><h3>{d.content.heading}</h3><p>{d.content.introduction}</p><div className="amount"><span>Amount due</span><strong>$128.42</strong><small>Due August 4</small></div><button style={{ background: d.brand.primary_color }}>Pay now</button><div className="methods">Accepted: {d.enabled_payment_capabilities.join(' · ')}</div><p className="support">{d.content.support_text}</p></div></div>; }
 function humanize(value: string) { return value.replaceAll('_', ' ').replace(/\b\w/g, match => match.toUpperCase()); }
 function toMessage(error: unknown) { return error instanceof Error ? error.message : 'The request failed.'; }
+function delay(milliseconds: number) { return new Promise(resolve => window.setTimeout(resolve, milliseconds)); }

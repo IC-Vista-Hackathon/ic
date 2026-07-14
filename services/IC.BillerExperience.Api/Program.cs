@@ -3,12 +3,14 @@ using System.Text.Json.Serialization;
 using Azure.AI.OpenAI;
 using Azure.Identity;
 using Azure.Monitor.OpenTelemetry.AspNetCore;
+using Azure.Storage.Blobs;
 using IC.BillerExperience.Api;
 using IC.BillerExperience.Api.Application;
 using IC.BillerExperience.Api.Configuration;
 using IC.BillerExperience.Api.Infrastructure;
 using IC.BillerExperience.Api.Infrastructure.AI;
 using IC.BillerExperience.Api.Infrastructure.Persistence;
+using IC.BillerExperience.Api.Infrastructure.Publication;
 using IC.Agentic.Orchestration.Abstractions;
 using IC.Agentic.Orchestration.Execution;
 using IC.Agentic.Orchestration.Telemetry;
@@ -34,6 +36,22 @@ builder.Services.Configure<BillerExperienceOptions>(builder.Configuration.GetSec
 builder.Services.AddSingleton<IOrchestrationRunner, OrchestrationRunner>();
 builder.Services.AddSingleton<BillerOnboardingService>();
 builder.Services.AddSingleton<DeterministicExperienceDraftGenerator>();
+
+if (!string.IsNullOrWhiteSpace(options.PublishedExperience.StorageEndpoint))
+{
+    builder.Services.AddSingleton(new BlobServiceClient(
+        new Uri(options.PublishedExperience.StorageEndpoint),
+        new DefaultAzureCredential()));
+    builder.Services.AddSingleton(services => services.GetRequiredService<BlobServiceClient>()
+        .GetBlobContainerClient(options.PublishedExperience.ContainerName));
+    builder.Services.AddSingleton<IPublishedExperienceStore>(services => new BlobPublishedExperienceStore(
+        services.GetRequiredService<Azure.Storage.Blobs.BlobContainerClient>(),
+        services.GetRequiredService<ILogger<BlobPublishedExperienceStore>>()));
+}
+else
+{
+    builder.Services.AddSingleton<IPublishedExperienceStore, UnavailablePublishedExperienceStore>();
+}
 
 if (string.Equals(options.Persistence.Provider, "Cosmos", StringComparison.OrdinalIgnoreCase))
 {
@@ -83,7 +101,11 @@ builder.Services.AddControllers().AddJsonOptions(json =>
 });
 builder.Services.AddProblemDetails();
 builder.Services.AddExceptionHandler<GlobalExceptionHandler>();
-builder.Services.AddHealthChecks();
+var healthChecks = builder.Services.AddHealthChecks();
+if (!string.IsNullOrWhiteSpace(options.PublishedExperience.StorageEndpoint))
+{
+    healthChecks.AddCheck<PublishedExperienceHealthCheck>("published_experience_storage");
+}
 builder.Services.AddCors(cors => cors.AddDefaultPolicy(policy =>
     policy.WithOrigins("http://localhost:5173", "http://localhost:5174")
         .AllowAnyHeader()

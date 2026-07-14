@@ -9,9 +9,9 @@ Foundry) read/write through service APIs via tools. Agents never touch storage d
 |---|---|---|
 | **Biller Onboarding Experience** | — (web app) | Initial form, chat UI, live preview pane, buy button, dashboard (test payer experience, edit configuration) |
 | **Biller Configuration Service** | BillerAccount, BillerConfiguration | Config CRUD (merge-patch), versioning, publish; the single write target for onboarding agents |
-| **Deployment Service** | Deployment | Preview + go-live publishing. Shared tier: builds the biller's static PWA bundle and uploads it to Blob Storage keyed by `biller_id` — no per-biller compute. Isolated tier: dedicated instance. |
-| **Payer Site Router** | — (shared workload) | Serves the correct biller's static bundle from Blob Storage based on the incoming request; one shared workload for all shared-tier billers, since these pods only serve static content |
-| **Payer Experience** | — (web app, per biller) | Branded portal rendered from published config; PWA (manifest, service worker, notifications); one codebase, static build served per biller from Blob Storage via the shared Payer Site Router (isolated tier gets its own deployment instead) |
+| **Deployment Service** | Deployment | Preview + go-live publishing; shared multi-tenant render vs isolated dedicated instance |
+| **Payer Experience** | — (shared web app) | Branded portal rendered from versioned Blob artifacts; PWA (manifest, service worker, notifications); one codebase, horizontally scaled shared deployment |
+| **Payer Experience API** | — (shared service) | Privately reads each biller's active versioned Blob artifact and exposes only the public-safe definition and manifest to the renderer |
 | **Invoice Service** | Invoice | Seed fake invoices at onboarding; lookup by biller + account number |
 | **Payment Service** | Payment, Purchase | Mock authorization, fee calculation from config, confirmations; also processes the biller's platform purchase (dogfood) |
 | **Payer Account Service** | PayerAccount | Registration, preferences, linked accounts, AutoPay enrollment |

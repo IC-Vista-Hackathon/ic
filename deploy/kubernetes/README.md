@@ -35,13 +35,12 @@ The publication-plane and platform objects below are static enough to stay as ra
 |---|---|
 | `base/service-account.yaml` | `ic-workload` service account, federated to `uami-ic-hack-workload` via workload identity (see `infra/bicep`); namespace set per overlay |
 | `overlays/{nonprod,prod}/namespace.yaml` | the `ic-nonprod` / `ic` namespaces |
-| `biller-experience.template.yaml` | API, worker, Studio, demo PWA, services, probes, resource controls, and Gateway API routes |
-| `biller-sites-namespace.yaml` | the `biller-sites` namespace — where all `biller-{slug}` workloads (Deployment, Service, ConfigMap, HTTPRoute) are published |
-| `biller-publisher-service-account.yaml` | `biller-publisher` service account in the `ic` namespace, dedicated to `IC.BillerExperience.Worker` |
-| `biller-publisher-role.yaml` | a `Role` + `RoleBinding` in `biller-sites` granting `biller-publisher` get/list/watch/create/update/patch/delete on Deployments (apps), Services/ConfigMaps (core), and HTTPRoutes (gateway.networking.k8s.io) only |
+| `biller-experience.template.yaml` | API, worker, Studio, shared PWA renderer, services, probes, resource controls, and Gateway API routes |
+| `biller-publisher-service-account.yaml` | dedicated Azure workload identity for the artifact publisher |
 
 The Biller Experience template is rendered at deploy time. Replace `ACR_LOGIN_SERVER`,
-`IMAGE_TAG`, `COSMOS_ENDPOINT`, `AI_FOUNDRY_ENDPOINT`, and
+`IMAGE_TAG`, `COSMOS_ENDPOINT`, `AI_FOUNDRY_ENDPOINT`, `PAYER_EXPERIENCE_BLOB_ENDPOINT`,
+`PUBLIC_BASE_URL`, and
 `APPLICATIONINSIGHTS_CONNECTION_STRING` from the `ic-hack` subscription deployment outputs before
 passing it to `kubectl apply`. A single immutable image tag identifies the release.
 
@@ -61,31 +60,26 @@ Workloads that need Cosmos/AI Foundry access should run under the `ic-workload` 
 (`serviceAccountName: ic-workload` in the pod spec) to pick up the federated identity — no
 connection strings or API keys.
 
-`biller-publisher` is intentionally separate from `ic-workload`: the publishing worker needs to
-mutate Kubernetes resources in `biller-sites`, and nothing else in the `ic` namespace should
-inherit that ability. The `RoleBinding` subject references the `ic`-namespace service account from
-a `Role`/`RoleBinding` that live in `biller-sites` — a pod's `serviceAccountName` must be in its
-own namespace, but a `RoleBinding`'s subject may name a `ServiceAccount` from any namespace, while
-the permissions it grants stay confined to the `RoleBinding`'s own namespace. This keeps the
-worker's access scoped to exactly the resource types the AKS publication model requires, with no
-cluster-admin and no access outside `biller-sites`.
+`biller-publisher` is intentionally separate from `ic-workload`. It can claim deployment records
+in Cosmos and write to the private biller-artifacts container, but has no AI Foundry or Kubernetes
+mutation permissions. The API uses `ic-workload` to read active artifacts for the public renderer.
 
 Apply via `az aks command invoke` (this sandbox can't reach the AKS API server directly — see
 infra/bicep's README):
 
 ```sh
 az aks command invoke -g rg-ic-hack -n aks-ic-hack \
-  --command "kubectl apply -f namespace.yaml -f service-account.yaml -f biller-sites-namespace.yaml -f biller-publisher-service-account.yaml -f biller-publisher-role.yaml" \
+  --command "kubectl apply -f namespace.yaml -f service-account.yaml -f biller-publisher-service-account.yaml" \
   --file namespace.yaml --file service-account.yaml \
-  --file biller-sites-namespace.yaml --file biller-publisher-service-account.yaml --file biller-publisher-role.yaml
+  --file biller-publisher-service-account.yaml
 ```
 
 ## Gateway API / kgateway ingress
 
 The cluster's public entry point is [kgateway](https://kgateway.dev) (formerly Gloo Gateway), the
-CNCF Gateway API implementation. This repo's `HTTPRoute/biller-{slug}` publication step (see the
-root `README.md` architecture diagram) assumes a Gateway API `Gateway` is already running in the
-cluster — kgateway is what provisions and reconciles it. Manifests live under
+CNCF Gateway API implementation. The shared `/pay` route (see the root `README.md` architecture
+diagram) assumes a Gateway API `Gateway` is already running in the cluster — kgateway is what
+provisions and reconciles it. Manifests live under
 [`gateway/`](gateway/).
 
 ### What's installed
@@ -160,31 +154,9 @@ The `500` (not a connection failure, and `server: envoy`) is expected: the place
 `HTTPRoute` points at a `Service` that doesn't exist. It proves the Gateway is up, its hostname is
 publicly resolvable, and it's serving real HTTP traffic.
 
-### Adding a real HTTPRoute later
+### Shared payer route
 
-Once a biller Deployment/Service is published into the `biller-sites` namespace (per the root
-`README.md` AKS publication model), point an `HTTPRoute` at `Gateway/ic-gateway` from that
-namespace:
-
-```yaml
-apiVersion: gateway.networking.k8s.io/v1
-kind: HTTPRoute
-metadata:
-  name: biller-{slug}
-  namespace: biller-sites
-spec:
-  parentRefs:
-    - name: ic-gateway
-      namespace: kgateway-system
-  hostnames:
-    - "ic-hack.eastus2.cloudapp.azure.com"   # or a future custom domain
-  rules:
-    - backendRefs:
-        - name: biller-{slug}
-          port: 8080
-```
-
-`allowedRoutes.namespaces.from: All` on the Gateway's listener already permits `HTTPRoute`s from
-any namespace to attach, so no `ReferenceGrant` is needed for same-cluster Services. Delete
-`gateway/httproute-placeholder.yaml` (or leave it — it only matches unclaimed paths) once real
-routes exist.
+`biller-experience.template.yaml` attaches one `/pay` path-prefix route to the shared
+`ic-biller-payments-pwa` service. The renderer extracts the biller slug from `/pay/{slug}/` and
+loads the corresponding active artifact through the Biller Experience API. Publishing a biller
+does not create or mutate Kubernetes resources.

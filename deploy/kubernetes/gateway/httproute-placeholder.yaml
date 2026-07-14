@@ -4,7 +4,7 @@
 # server: envoy, since the backend Service can't be resolved) instead of a
 # connection failure. That's sufficient to prove the Gateway itself is up, its
 # hostname resolves publicly, and it is serving HTTP. Delete or replace this once
-# a real HTTPRoute/biller-{slug} exists (see README.md at the repo root for that
+# the shared Biller Experience HTTPRoute exists (see README.md at the repo root for that
 # shape).
 apiVersion: gateway.networking.k8s.io/v1
 kind: HTTPRoute
