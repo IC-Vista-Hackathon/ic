@@ -1,6 +1,10 @@
 # Contracts
 
 REST, JSON, integer cents. Errors: `{"error": {"code", "message"}}` with conventional HTTP status.
+Wire casing is **snake_case** with **lowercase string enums**, exactly as the JSON examples below
+show — implemented by `IC.Invoice.Api`'s JSON options and by `libraries/IC.ServiceDefaults`
+(`SnakeCaseLower` naming policy + `JsonStringEnumConverter`) for every other host. Query-string
+parameters are snake_case too (`?biller_id=`, `?account_number=`).
 IDs on the wire are Cosmos-generated GUID strings (`b_1a2b`, `i_77` etc. below are illustrative
 shorthand, not the literal format). Per entities.md's Cosmos conventions, most containers
 partition on `/biller_id` — endpoints below pass `biller_id` alongside a resource id wherever a
@@ -43,7 +47,9 @@ POST /billers/b_1a2b/deployments   {"isolation": "shared"}
 | Method | Path | Purpose |
 |---|---|---|
 | GET | `/billers/{id}/invoices?account_number=` | Lookup open invoices |
+| GET | `/billers/{id}/invoices/{invoice_id}` | Point read (Payment Service amount lookup) |
 | POST | `/billers/{id}/invoices/seed` | (Internal) seed fake data at onboarding |
+| POST | `/billers/{id}/invoices/{invoice_id}/status` | (Internal) Payment Service asserts `due→paid`, `due→scheduled`, `scheduled→paid`: `{status, payment_id}` — idempotent per `payment_id`; invalid transitions 409 (`already_paid` / `invalid_transition`) |
 
 ## Payment Service
 

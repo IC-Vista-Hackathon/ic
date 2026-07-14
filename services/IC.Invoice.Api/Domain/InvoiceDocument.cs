@@ -29,4 +29,7 @@ public sealed class InvoiceDocument
     public required DateOnly DueDate { get; init; }
 
     public required InvoiceStatus Status { get; init; }
+
+    /// <summary>Id of the payment that produced the current status; null while due.</summary>
+    public string? LastPaymentId { get; init; }
 }

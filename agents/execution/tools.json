@@ -18,9 +18,13 @@
             "payer_account_id": {
               "type": ["string", "null"],
               "description": "The PayerAccount id if the payer has an account in session; null for guest pay."
+            },
+            "scheduled_for": {
+              "type": ["string", "null"],
+              "description": "ISO date (YYYY-MM-DD) to schedule the payment for, from the confirmed plan's 'when'; null to pay immediately. Future-dated plans MUST pass this — omitting it executes the payment now."
             }
           },
-          "required": ["biller_id", "invoice_id", "method", "payer_account_id"]
+          "required": ["biller_id", "invoice_id", "method", "payer_account_id", "scheduled_for"]
         }
       }
     }

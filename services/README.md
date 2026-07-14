@@ -12,9 +12,9 @@ to [`IC.slnx`](../IC.slnx).
 | --- | --- | --- |
 | Biller Configuration Service | `IC.BillerExperience.Api` | BillerAccount and BillerConfiguration |
 | Deployment Service | `IC.BillerExperience.Worker` | Deployment publication and reconciliation |
-| Invoice Service | future `IC.Invoice.Api` | Invoice |
-| Payment Service | future `IC.Payment.Api` | Payment and Purchase |
-| Payer Account Service | future `IC.PayerAccount.Api` | PayerAccount |
+| Invoice Service | `IC.Invoice.Api` | Invoice |
+| Payment Service | `IC.Payment.Api` | Payment and Purchase |
+| Payer Account Service | `IC.PayerAccount.Api` | PayerAccount |
 | Notification Service | future `IC.Notification.Worker` | Notification (stretch) |
 
 Web applications live in `frontends/`, not `services/`:

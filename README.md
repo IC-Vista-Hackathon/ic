@@ -85,9 +85,9 @@ an immutable PWA image.
 | Deployment Service | `services/IC.BillerExperience.Worker` | Biller Experience |
 | Biller Onboarding Experience | `frontends/IC.BillerExperience.Studio` | Biller Experience |
 | Payer Experience | `frontends/IC.BillerPayments.Pwa` | Biller Experience |
-| Invoice Service | future `services/IC.Invoice.Api` | Supporting service; follow `design/` |
-| Payment Service | future `services/IC.Payment.Api` | Supporting service; follow `design/` |
-| Payer Account Service | future `services/IC.PayerAccount.Api` | Supporting service; follow `design/` |
+| Invoice Service | `services/IC.Invoice.Api` | Supporting service; follow `design/` |
+| Payment Service | `services/IC.Payment.Api` | Supporting service; follow `design/` |
+| Payer Account Service | `services/IC.PayerAccount.Api` | Supporting service; follow `design/` |
 | Notification Service | future `services/IC.Notification.Worker` | Stretch; follow `design/` |
 | AI Foundry agent definitions | `agents/` | Follow `design/services.md` |
 
