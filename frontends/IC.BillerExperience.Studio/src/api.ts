@@ -2,6 +2,7 @@ import type { Bootstrap, ChatResponse, Deployment, ExperienceRevision } from './
 import { logError, logEvent, newTrace } from './telemetry';
 
 const baseUrl = import.meta.env.VITE_API_URL ?? (import.meta.env.PROD ? '/api' : 'http://localhost:5000');
+export const activityUrl = (billerId: string) => `${baseUrl}/billers/${billerId}/events`;
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const trace = newTrace();

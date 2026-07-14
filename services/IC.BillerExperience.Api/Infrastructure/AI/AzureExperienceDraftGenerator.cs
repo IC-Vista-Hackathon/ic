@@ -82,6 +82,9 @@ public sealed partial class AzureExperienceDraftGenerator(
         credentials, executable code, legal conclusions, or Kubernetes content. Compliance output
         is reviewable guidance only. AutoPay and paperless enrollment must remain separate,
         optional payer choices. Use only the supported payment capabilities already present.
+        Use the vetted UI section and action types to create a polished composition. User-facing
+        action labels are customizable. "Pay later" means schedule_payment and must never execute
+        an immediate payment.
         """;
 
     private const string JsonSchema = """
@@ -93,12 +96,13 @@ public sealed partial class AzureExperienceDraftGenerator(
             "reply":{"type":"string"},
             "missingFields":{"type":"array","items":{"type":"string"}},
             "findings":{"type":"array","items":{"type":"object","additionalProperties":false,"required":["code","message","severity","requiresReview"],"properties":{"code":{"type":"string"},"message":{"type":"string"},"severity":{"type":"integer","minimum":0,"maximum":2},"requiresReview":{"type":"boolean"}}}},
-            "definition":{"type":"object","additionalProperties":false,"required":["schemaVersion","billerId","brand","content","pwa","enabledPaymentCapabilities"],"properties":{
+            "definition":{"type":"object","additionalProperties":false,"required":["schemaVersion","billerId","brand","content","pwa","enabledPaymentCapabilities","ui"],"properties":{
               "schemaVersion":{"type":"string"},"billerId":{"type":"string"},
               "enabledPaymentCapabilities":{"type":"array","items":{"type":"string"}},
               "brand":{"type":"object","additionalProperties":false,"required":["displayName","primaryColor","secondaryColor","logoAssetId","fontFamily"],"properties":{"displayName":{"type":"string"},"primaryColor":{"type":"string"},"secondaryColor":{"type":"string"},"logoAssetId":{"type":["string","null"]},"fontFamily":{"type":["string","null"]}}},
               "content":{"type":"object","additionalProperties":false,"required":["heading","introduction","supportText","privacyPolicyUrl","termsOfServiceUrl"],"properties":{"heading":{"type":"string"},"introduction":{"type":"string"},"supportText":{"type":"string"},"privacyPolicyUrl":{"type":"string"},"termsOfServiceUrl":{"type":"string"}}},
-              "pwa":{"type":"object","additionalProperties":false,"required":["name","shortName","themeColor","backgroundColor","iconAssetId"],"properties":{"name":{"type":"string"},"shortName":{"type":"string"},"themeColor":{"type":"string"},"backgroundColor":{"type":"string"},"iconAssetId":{"type":["string","null"]}}}
+              "pwa":{"type":"object","additionalProperties":false,"required":["name","shortName","themeColor","backgroundColor","iconAssetId"],"properties":{"name":{"type":"string"},"shortName":{"type":"string"},"themeColor":{"type":"string"},"backgroundColor":{"type":"string"},"iconAssetId":{"type":["string","null"]}}},
+              "ui":{"type":"object","additionalProperties":false,"required":["layout","theme","sections","actions"],"properties":{"layout":{"type":"string","enum":["centered-card","split-hero","compact-portal"]},"theme":{"type":"object","additionalProperties":false,"required":["density","radius","surface"],"properties":{"density":{"type":"string"},"radius":{"type":"string"},"surface":{"type":"string"}}},"sections":{"type":"array","items":{"type":"object","additionalProperties":false,"required":["id","type","variant","visible"],"properties":{"id":{"type":"string"},"type":{"type":"string","enum":["account-summary","amount-due","payment-methods","notice","support"]},"variant":{"type":"string"},"visible":{"type":"boolean"}}}},"actions":{"type":"array","items":{"type":"object","additionalProperties":false,"required":["id","label","action","variant"],"properties":{"id":{"type":"string"},"label":{"type":"string","maxLength":48},"action":{"type":"integer","minimum":0,"maximum":3},"variant":{"type":"string"}}}}}}
             }}
           }
         }

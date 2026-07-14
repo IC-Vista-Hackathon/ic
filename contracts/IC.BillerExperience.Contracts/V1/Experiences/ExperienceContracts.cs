@@ -6,7 +6,32 @@ public sealed record BillerExperienceDefinition(
     ExperienceBrand Brand,
     ExperienceContent Content,
     PwaConfiguration Pwa,
-    IReadOnlyList<string> EnabledPaymentCapabilities);
+    IReadOnlyList<string> EnabledPaymentCapabilities,
+    ExperienceUi? Ui = null);
+
+public sealed record ExperienceUi(
+    string Layout,
+    ExperienceTheme Theme,
+    IReadOnlyList<ExperienceSection> Sections,
+    IReadOnlyList<ExperienceAction> Actions);
+
+public sealed record ExperienceTheme(string Density, string Radius, string Surface);
+
+public sealed record ExperienceSection(string Id, string Type, string Variant = "default", bool Visible = true);
+
+public sealed record ExperienceAction(
+    string Id,
+    string Label,
+    ExperienceActionType Action,
+    string Variant = "primary");
+
+public enum ExperienceActionType
+{
+    StartPayment,
+    SchedulePayment,
+    ViewBill,
+    ContactSupport
+}
 
 public sealed record UpdateExperienceRequest(BillerExperienceDefinition Definition, string? ExpectedETag);
 

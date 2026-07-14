@@ -38,7 +38,8 @@ public sealed partial class DeterministicExperienceDraftGenerator(
                     Introduction = string.IsNullOrWhiteSpace(lastMessage)
                         ? current.Definition.Content.Introduction
                         : $"A simple, secure payment experience for {biller.Name}."
-                }
+                },
+                Ui = ApplyUiRequest(current.Definition.Ui, lastMessage)
             };
             var findings = new[]
             {
@@ -72,6 +73,14 @@ public sealed partial class DeterministicExperienceDraftGenerator(
 
     [GeneratedRegex("#[0-9a-fA-F]{6}", RegexOptions.CultureInvariant)]
     private static partial Regex HexColorRegex();
+
+    private static ExperienceUi ApplyUiRequest(ExperienceUi? current, string message)
+    {
+        var ui = current ?? new ExperienceUi("centered-card", new("comfortable", "rounded", "subtle"), [], []);
+        if (!message.Contains("pay later", StringComparison.OrdinalIgnoreCase)) return ui;
+        var action = new ExperienceAction("primary-payment-action", "Pay later", ExperienceActionType.SchedulePayment);
+        return ui with { Actions = ui.Actions.Where(item => item.Id != action.Id).Append(action).ToArray() };
+    }
 
     [LoggerMessage(2200, LogLevel.Error, "Deterministic draft generation failed for biller {BillerId}; trace {TraceId}")]
     private static partial void LogGenerationError(ILogger logger, string billerId, string? traceId, Exception exception);

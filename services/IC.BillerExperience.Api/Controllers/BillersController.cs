@@ -7,6 +7,7 @@ using IC.BillerExperience.Contracts.V1.Deployments;
 using IC.BillerExperience.Contracts.V1.Experiences;
 using IC.BillerExperience.Contracts.V1.Onboarding;
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.Extensions.Options;
 
 namespace IC.BillerExperience.Api.Controllers;
 
@@ -14,7 +15,8 @@ namespace IC.BillerExperience.Api.Controllers;
 [Route("billers")]
 public sealed partial class BillersController(
     BillerOnboardingService onboarding,
-    ILogger<BillersController> logger) : ControllerBase
+    ILogger<BillersController> logger,
+    IOptions<JsonOptions> jsonOptions) : ControllerBase
 {
     [HttpPost]
     [ProducesResponseType<OnboardingBootstrapResponse>(StatusCodes.Status201Created)]
@@ -94,20 +96,27 @@ public sealed partial class BillersController(
         Response.ContentType = "text/event-stream";
         Response.Headers.CacheControl = "no-cache";
         var previousState = string.Empty;
+        var sentActivityIds = new HashSet<string>(StringComparer.Ordinal);
         try
         {
-            for (var index = 0; index < 20 && !cancellationToken.IsCancellationRequested; index++)
+            for (var index = 0; index < 240 && !cancellationToken.IsCancellationRequested; index++)
             {
-                var session = await onboarding.GetSessionAsync(billerId, cancellationToken);
+                var (session, activity) = await onboarding.GetSessionActivityAsync(billerId, cancellationToken);
                 var state = session.State.ToString();
                 if (!string.Equals(previousState, state, StringComparison.Ordinal))
                 {
-                    var payload = JsonSerializer.Serialize(session, JsonSerializerOptions.Web);
+                    var payload = JsonSerializer.Serialize(session, jsonOptions.Value.JsonSerializerOptions);
                     await Response.WriteAsync($"event: workflow\ndata: {payload}\n\n", cancellationToken);
                     await Response.Body.FlushAsync(cancellationToken);
                     previousState = state;
                 }
-                await Task.Delay(TimeSpan.FromSeconds(1), cancellationToken);
+                foreach (var item in activity.Where(item => sentActivityIds.Add(item.EventId)))
+                {
+                    var payload = JsonSerializer.Serialize(item, jsonOptions.Value.JsonSerializerOptions);
+                    await Response.WriteAsync($"event: agent_activity\ndata: {payload}\n\n", cancellationToken);
+                    await Response.Body.FlushAsync(cancellationToken);
+                }
+                await Task.Delay(TimeSpan.FromMilliseconds(500), cancellationToken);
             }
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)

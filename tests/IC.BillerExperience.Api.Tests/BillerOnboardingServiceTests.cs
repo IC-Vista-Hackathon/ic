@@ -44,7 +44,7 @@ public sealed class BillerOnboardingServiceTests
         var created = await service.CreateAsync(CreateRequest(), CancellationToken.None);
         var chat = await service.SendMessageAsync(
             created.Biller.BillerId,
-            new SendOnboardingMessageRequest("Use #174A5B and keep the language concise."),
+            new SendOnboardingMessageRequest("Use #174A5B, keep the language concise, and change the primary action to Pay later."),
             CancellationToken.None);
         var approved = await service.ApproveAsync(
             created.Biller.BillerId,
@@ -57,10 +57,14 @@ public sealed class BillerOnboardingServiceTests
 
         Assert.Equal(OnboardingSessionState.DraftReady, chat.Session.State);
         Assert.Equal("#174A5B", chat.Draft.Definition.Brand.PrimaryColor);
+        Assert.Equal(ExperienceActionType.SchedulePayment, chat.Draft.Definition.Ui!.Actions.Single().Action);
+        Assert.Equal("Pay later", chat.Draft.Definition.Ui.Actions.Single().Label);
         Assert.Equal(ExperienceRevisionState.Approved, approved.State);
         Assert.Equal(DeploymentState.Requested, deployment.State);
         Assert.Contains(activities, activity => activity.OperationName == "onboarding.chat");
         Assert.Contains(activities, activity => activity.OperationName == "experience.approve");
+        var (_, agentActivity) = await service.GetSessionActivityAsync(created.Biller.BillerId, CancellationToken.None);
+        Assert.Contains(agentActivity, item => item.AgentId == "experience-designer" && item.Status == AgentActivityStatus.Completed);
     }
 
     [Fact]

@@ -38,6 +38,7 @@ public sealed record OnboardingRunRecord(
     [property: JsonProperty("messages")] IReadOnlyList<OnboardingChatMessage> Messages,
     [property: JsonProperty("missing_fields")] IReadOnlyList<string> MissingFields,
     [property: JsonProperty("updated_at")] DateTimeOffset UpdatedAt,
+    [property: JsonProperty("agent_activity")] IReadOnlyList<AgentActivityEvent>? AgentActivity = null,
     [property: JsonIgnore] string? ETag = null);
 
 public sealed record DeploymentRecord(

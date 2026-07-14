@@ -11,6 +11,7 @@ using IC.BillerExperience.Api.Infrastructure;
 using IC.BillerExperience.Api.Infrastructure.AI;
 using IC.BillerExperience.Api.Infrastructure.Persistence;
 using IC.BillerExperience.Api.Infrastructure.Publication;
+using IC.BillerExperience.Api.Infrastructure.SupportingServices;
 using IC.Agentic.Orchestration.Abstractions;
 using IC.Agentic.Orchestration.Execution;
 using IC.Agentic.Orchestration.Telemetry;
@@ -36,6 +37,16 @@ builder.Services.Configure<BillerExperienceOptions>(builder.Configuration.GetSec
 builder.Services.AddSingleton<IOrchestrationRunner, OrchestrationRunner>();
 builder.Services.AddSingleton<BillerOnboardingService>();
 builder.Services.AddSingleton<DeterministicExperienceDraftGenerator>();
+if (Uri.TryCreate(options.SupportingServices.InvoiceBaseUrl, UriKind.Absolute, out var invoiceBaseUri))
+{
+    builder.Services.AddSingleton<IInvoiceSeeder>(services => new HttpInvoiceSeeder(
+        new HttpClient { BaseAddress = invoiceBaseUri },
+        services.GetRequiredService<ILogger<HttpInvoiceSeeder>>()));
+}
+else
+{
+    builder.Services.AddSingleton<IInvoiceSeeder, NullInvoiceSeeder>();
+}
 
 if (!string.IsNullOrWhiteSpace(options.PublishedExperience.StorageEndpoint))
 {
