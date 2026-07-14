@@ -1,10 +1,12 @@
 # Keep build contexts small and reproducible. Applies to every image built from
 # the repo root. Nothing here should end up inside an image — it's all restored
 # or compiled fresh in the build stage.
-**/bin/
-**/obj/
-**/out/
-**/publish/
+**/bin
+**/obj
+**/out
+**/publish
+**/dist
+**/node_modules
 
 .git/
 .gitignore
