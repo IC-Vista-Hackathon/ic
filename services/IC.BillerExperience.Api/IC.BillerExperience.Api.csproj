@@ -1,0 +1,9 @@
+<Project Sdk="Microsoft.NET.Sdk.Web">
+  <PropertyGroup>
+    <Description>HTTP API for IC Biller Studio onboarding and publication.</Description>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\..\contracts\IC.BillerExperience.Contracts\IC.BillerExperience.Contracts.csproj" />
+    <ProjectReference Include="..\..\libraries\IC.Agentic.Orchestration\IC.Agentic.Orchestration.csproj" />
+  </ItemGroup>
+</Project>

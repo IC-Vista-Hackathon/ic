@@ -1,0 +1,9 @@
+<Project Sdk="Microsoft.NET.Sdk.Web">
+  <PropertyGroup>
+    <Description>Background worker for durable biller experience publication to AKS.</Description>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\..\contracts\IC.BillerExperience.Contracts\IC.BillerExperience.Contracts.csproj" />
+    <ProjectReference Include="..\..\libraries\IC.Agentic.Orchestration\IC.Agentic.Orchestration.csproj" />
+  </ItemGroup>
+</Project>
