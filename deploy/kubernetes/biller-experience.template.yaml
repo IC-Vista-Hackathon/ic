@@ -27,6 +27,8 @@ spec:
             - { name: BillerExperience__Model__Provider, value: AzureAI }
             - { name: BillerExperience__Model__Endpoint, value: "${AI_FOUNDRY_ENDPOINT}" }
             - { name: BillerExperience__Model__Deployment, value: gpt-5.4-mini }
+            - { name: BillerExperience__PublishedExperience__StorageEndpoint, value: "${PAYER_EXPERIENCE_BLOB_ENDPOINT}" }
+            - { name: BillerExperience__PublishedExperience__ContainerName, value: payer-experiences }
             - { name: APPLICATIONINSIGHTS_CONNECTION_STRING, value: "${APPLICATIONINSIGHTS_CONNECTION_STRING}" }
           readinessProbe: { httpGet: { path: /health/ready, port: http }, initialDelaySeconds: 5, periodSeconds: 5 }
           livenessProbe: { httpGet: { path: /health/live, port: http }, initialDelaySeconds: 10, periodSeconds: 10 }
@@ -54,7 +56,7 @@ spec:
     matchLabels: { app.kubernetes.io/name: ic-biller-experience-worker }
   template:
     metadata:
-      labels: { app.kubernetes.io/name: ic-biller-experience-worker, app.kubernetes.io/part-of: ic-biller-experience }
+      labels: { app.kubernetes.io/name: ic-biller-experience-worker, app.kubernetes.io/part-of: ic-biller-experience, azure.workload.identity/use: "true" }
     spec:
       serviceAccountName: biller-publisher
       securityContext: { runAsNonRoot: true, seccompProfile: { type: RuntimeDefault } }
@@ -65,6 +67,11 @@ spec:
           ports: [{ name: http, containerPort: 8080 }]
           env:
             - { name: ASPNETCORE_URLS, value: "http://+:8080" }
+            - { name: Publication__CosmosEndpoint, value: "${COSMOS_ENDPOINT}" }
+            - { name: Publication__DatabaseName, value: ic }
+            - { name: Publication__StorageEndpoint, value: "${PAYER_EXPERIENCE_BLOB_ENDPOINT}" }
+            - { name: Publication__ContainerName, value: payer-experiences }
+            - { name: Publication__PublicBaseUrl, value: "${PUBLIC_BASE_URL}" }
             - { name: APPLICATIONINSIGHTS_CONNECTION_STRING, value: "${APPLICATIONINSIGHTS_CONNECTION_STRING}" }
           readinessProbe: { httpGet: { path: /health/ready, port: http }, initialDelaySeconds: 5, periodSeconds: 5 }
           livenessProbe: { httpGet: { path: /health/live, port: http }, initialDelaySeconds: 10, periodSeconds: 10 }
@@ -127,20 +134,25 @@ spec:
         - type: URLRewrite
           urlRewrite: { path: { type: ReplacePrefixMatch, replacePrefixMatch: / } }
       backendRefs: [{ name: ic-biller-experience-studio, port: 8080 }]
+    - matches: [{ path: { type: PathPrefix, value: /pay } }]
+      filters:
+        - type: URLRewrite
+          urlRewrite: { path: { type: ReplacePrefixMatch, replacePrefixMatch: / } }
+      backendRefs: [{ name: ic-biller-payments-pwa, port: 8080 }]
 ---
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: biller-city-of-vista
-  namespace: biller-sites
-  labels: { app.kubernetes.io/name: biller-city-of-vista, app.kubernetes.io/part-of: ic-biller-experience }
+  name: ic-biller-payments-pwa
+  namespace: ic
+  labels: { app.kubernetes.io/name: ic-biller-payments-pwa, app.kubernetes.io/part-of: ic-biller-experience }
 spec:
-  replicas: 1
+  replicas: 2
   selector:
-    matchLabels: { app.kubernetes.io/name: biller-city-of-vista }
+    matchLabels: { app.kubernetes.io/name: ic-biller-payments-pwa }
   template:
     metadata:
-      labels: { app.kubernetes.io/name: biller-city-of-vista, app.kubernetes.io/part-of: ic-biller-experience }
+      labels: { app.kubernetes.io/name: ic-biller-payments-pwa, app.kubernetes.io/part-of: ic-biller-experience }
     spec:
       securityContext: { runAsNonRoot: true, seccompProfile: { type: RuntimeDefault } }
       containers:
@@ -157,19 +169,7 @@ spec:
 ---
 apiVersion: v1
 kind: Service
-metadata: { name: biller-city-of-vista, namespace: biller-sites }
+metadata: { name: ic-biller-payments-pwa, namespace: ic }
 spec:
-  selector: { app.kubernetes.io/name: biller-city-of-vista }
+  selector: { app.kubernetes.io/name: ic-biller-payments-pwa }
   ports: [{ name: http, port: 8080, targetPort: http }]
----
-apiVersion: gateway.networking.k8s.io/v1
-kind: HTTPRoute
-metadata: { name: biller-city-of-vista, namespace: biller-sites }
-spec:
-  parentRefs: [{ name: ic-gateway, namespace: kgateway-system, sectionName: http }]
-  rules:
-    - matches: [{ path: { type: PathPrefix, value: /pay } }]
-      filters:
-        - type: URLRewrite
-          urlRewrite: { path: { type: ReplacePrefixMatch, replacePrefixMatch: / } }
-      backendRefs: [{ name: biller-city-of-vista, port: 8080 }]

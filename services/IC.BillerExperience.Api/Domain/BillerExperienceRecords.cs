@@ -46,4 +46,8 @@ public sealed record DeploymentRecord(
     [property: JsonProperty("config_version")] int ConfigVersion,
     [property: JsonProperty("status")] string Status,
     [property: JsonProperty("requested_at")] DateTimeOffset RequestedAt,
+    [property: JsonProperty("updated_at")] DateTimeOffset? UpdatedAt = null,
+    [property: JsonProperty("published_url")] Uri? PublishedUrl = null,
+    [property: JsonProperty("failure_code")] string? FailureCode = null,
+    [property: JsonProperty("failure_message")] string? FailureMessage = null,
     [property: JsonIgnore] string? ETag = null);

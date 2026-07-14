@@ -33,11 +33,11 @@ Re-run the same command to apply changes; Bicep is idempotent (ARM incremental d
 | Resource group `rg-ic-hack` | Everything below lives here |
 | Log Analytics workspace | AKS Container Insights |
 | ACR (Basic) | Single registry, no promotion tiers |
-| Storage account (Standard_LRS, StorageV2) + `payer-experiences` blob container | Holds every biller's published Payer Experience SPA (static assets). One shared account instead of per-biller compute — a single router workload reads a biller's SPA by prefix and serves it. Workload identity gets `Storage Blob Data Contributor`; keys/anonymous access disabled |
+| Storage account (Standard_LRS, StorageV2) + `payer-experiences` blob container | Holds every biller's immutable experience artifacts and active pointer. The publisher identity gets `Storage Blob Data Contributor`; the API workload identity gets `Storage Blob Data Reader`; keys and anonymous access are disabled |
 | Cosmos DB (serverless) | Containers per entities.md, partitioned `/biller_id` (`/id` for `billers`) |
 | AI Foundry account + project | Hosts agents (services.md's "AI Foundry" plane) |
 | AKS (2-4 node autoscale, kubenet) | Runs services + agents |
-| User-assigned managed identity | Federated to AKS via workload identity — pods authenticate to Cosmos (Data Contributor) and AI Foundry (Cognitive Services User) with no secrets |
+| User-assigned managed identities | `ic-workload` authenticates to Cosmos, AI Foundry, and Blob read; `biller-publisher` authenticates to Cosmos and Blob write with no secrets |
 | Application Insights (workspace-based, on `log-ic-hack`) | Correlated traces/logs for services using the Azure Monitor OpenTelemetry Distro — just needs the `appInsightsConnectionString` output, no in-cluster OTEL collector |
 | Azure Monitor workspace | Metrics backend for Azure Monitor managed Prometheus |
 | AKS managed Prometheus (`azureMonitorProfile.metrics` + DCE/DCR/DCRA) | Scrapes Kubernetes + `kube-state-metrics`; app metrics can be added later by exposing a Prometheus-format `/metrics` endpoint (OTEL's Prometheus exporter) — no scrape-config wiring included yet |
@@ -50,6 +50,9 @@ Re-run the same command to apply changes; Bicep is idempotent (ARM incremental d
   different values via `-p workloadNamespace=... workloadServiceAccountName=...`) to pick up the
   federated identity — annotate that service account with the workload identity's client ID
   (`workloadIdentityClientId` output) per [AKS Workload Identity](https://learn.microsoft.com/azure/aks/workload-identity-overview).
+- The publication worker runs as `biller-publisher`; annotate it with the
+  `publisherIdentityClientId` output. It intentionally receives no AI Foundry or Kubernetes
+  mutation permissions.
 - Push images to the `acrLoginServer` output; AKS already has `AcrPull` on it.
 - Point services' Azure Monitor OpenTelemetry Distro at the `appInsightsConnectionString` output.
 - Open the `grafanaEndpoint` output to view dashboards (sign in with Entra ID; grant yourself the

@@ -6,6 +6,7 @@ param prefix string = 'ic-hack'
 param location string = 'eastus2'
 param workloadNamespace string = 'ic'
 param workloadServiceAccountName string = 'ic-workload'
+param publisherServiceAccountName string = 'biller-publisher'
 param aksNodeCountMin int = 2
 param aksNodeCountMax int = 4
 param aksVmSize string = 'Standard_D2s_v3'
@@ -45,6 +46,15 @@ module workloadIdentity 'modules/workloadIdentity.bicep' = {
   }
 }
 
+module publisherIdentity 'modules/workloadIdentity.bicep' = {
+  name: 'publisherIdentity'
+  scope: rg
+  params: {
+    name: 'uami-${prefix}-publisher'
+    location: location
+  }
+}
+
 module storage 'modules/storage.bicep' = {
   name: 'storage'
   scope: rg
@@ -52,7 +62,8 @@ module storage 'modules/storage.bicep' = {
     // Storage account names must be globally unique, 3-24 chars, lowercase alphanumeric, no hyphens.
     name: 'st${replace(prefix, '-', '')}${suffix}'
     location: location
-    workloadIdentityPrincipalId: workloadIdentity.outputs.principalId
+    writerPrincipalId: publisherIdentity.outputs.principalId
+    readerPrincipalId: workloadIdentity.outputs.principalId
   }
 }
 
@@ -62,7 +73,10 @@ module cosmos 'modules/cosmos.bicep' = {
   params: {
     name: 'cosmos-${prefix}-${suffix}'
     location: location
-    workloadIdentityPrincipalId: workloadIdentity.outputs.principalId
+    dataContributorPrincipalIds: [
+      workloadIdentity.outputs.principalId
+      publisherIdentity.outputs.principalId
+    ]
   }
 }
 
@@ -112,6 +126,9 @@ module aks 'modules/aks.bicep' = {
     uamiName: workloadIdentity.outputs.name
     workloadNamespace: workloadNamespace
     workloadServiceAccountName: workloadServiceAccountName
+    publisherUamiName: publisherIdentity.outputs.name
+    publisherNamespace: workloadNamespace
+    publisherServiceAccountName: publisherServiceAccountName
     monitorWorkspaceId: monitorWorkspace.outputs.id
     monitorWorkspaceLocation: location
   }
@@ -135,6 +152,7 @@ output payerExperienceBlobEndpoint string = storage.outputs.blobEndpoint
 output payerExperienceContainer string = storage.outputs.containerName
 output aksClusterName string = aks.outputs.name
 output workloadIdentityClientId string = workloadIdentity.outputs.clientId
+output publisherIdentityClientId string = publisherIdentity.outputs.clientId
 output appInsightsConnectionString string = appInsights.outputs.connectionString
 output monitorWorkspaceId string = monitorWorkspace.outputs.id
 output grafanaEndpoint string = grafana.outputs.endpoint

@@ -2,7 +2,7 @@
 
 IC Biller Studio is an agent-assisted onboarding and experience-publishing platform for billers.
 A biller describes its brand and payment experience through chat, previews and approves the result,
-and receives an installable, fully branded PWA running in its own Kubernetes Deployment. Customers
+and receives an installable, fully branded PWA rendered by a shared Kubernetes deployment. Customers
 remain inside the biller's branded experience and existing InvoiceCloud payment rails remain
 unchanged.
 
@@ -13,7 +13,8 @@ The disruption is onboarding speed and customization, not money movement.
 Phases 2 through 4 now provide a runnable local vertical slice: versioned controller contracts,
 agent-assisted onboarding with a deterministic fallback, Cosmos and in-memory repositories,
 approval and idempotent publication requests, the Biller Studio, and a configuration-driven payer
-PWA. Phase 5 will turn an accepted publication request into a healthy AKS deployment.
+PWA. Phase 5 publishes immutable per-biller artifacts to Azure Blob Storage and activates them in
+the shared payer renderer.
 
 The documents under [`design/`](design/README.md) came from the original `main` branch and remain
 the source of truth for supporting service responsibilities, entities, REST behavior, and agent
@@ -30,7 +31,7 @@ defines the concrete .NET project that implements that capability.
 | Publishing worker | `IC.BillerExperience.Worker` | `ic-biller-experience-worker` |
 | Orchestration library | `IC.Agentic.Orchestration` | — |
 | Public contracts | `IC.BillerExperience.Contracts` | — |
-| Customer application | `IC.BillerPayments.Pwa` | `biller-{slug}` |
+| Customer application | `IC.BillerPayments.Pwa` | `ic-biller-payments-pwa` |
 | Operational database | `ic-biller-experience` | — |
 
 The service is named after the business capability rather than the implementation. Agentic
@@ -56,14 +57,16 @@ IC.BillerExperience.Api
   └── durable publication request
           ▼
 IC.BillerExperience.Worker
-  │ fixed, validated Kubernetes operations
+  │ immutable revision + atomic active pointer
   ▼
-AKS / biller-sites namespace
-  │
-  ├── Deployment/biller-{slug}
-  ├── ConfigMap/biller-{slug}-r{revision}
-  ├── Service/biller-{slug}
-  └── HTTPRoute/biller-{slug}
+Private Azure Blob Storage
+  │ versioned public-safe biller artifacts
+  ▼
+IC.BillerExperience.Api
+  │ private artifact reader
+  ▼
+Shared IC.BillerPayments.Pwa deployment
+  │ /pay/{slug}/
           │
           ▼
 Branded installable PWA
@@ -74,8 +77,8 @@ Existing InvoiceCloud payment APIs and rails
 
 The generated artifact is a typed, versioned `BillerExperienceDefinition`. Agents may generate
 content and configuration, but they may not generate executable application code, container build
-instructions, shell commands, or raw Kubernetes manifests. Publication uses vetted templates and
-an immutable PWA image.
+instructions, shell commands, or raw Kubernetes manifests. Publication writes validated JSON and
+manifest artifacts; every biller uses the same reviewed PWA image.
 
 ### Capability ownership
 
@@ -149,8 +152,8 @@ The production workflow is typed, checkpointed, resumable, and observable:
 7. Wait for explicit biller approval.
 8. persist an immutable experience revision.
 9. Request publication idempotently using biller ID and revision.
-10. Apply fixed Kubernetes resources and wait for pod readiness.
-11. Smoke-test the published route and mark the revision active.
+10. Write immutable versioned artifacts to private Blob Storage.
+11. Verify the artifact, atomically replace the active pointer, and mark the revision published.
 
 An API or worker restart must not lose a workflow. Every step records its checkpoint and can be
 retried without duplicating the deployment.
@@ -236,30 +239,19 @@ Two deliberately small frontends are planned:
 - integration only with existing InvoiceCloud payment APIs
 - no InvoiceCloud customer-facing branding
 
-Every published biller initially receives its own Kubernetes Deployment while sharing the same
-vetted image. A revision-specific ConfigMap or API-delivered definition supplies branding and
-content. A configuration hash on the pod template triggers safe rollouts.
+Every biller uses the same vetted, horizontally replicated renderer. The URL slug selects a
+private, API-delivered active artifact, while immutable revisions remain available for audit and
+rollback. Generated content is data only and cannot introduce executable JavaScript.
 
-## AKS publication model
+## Publication model
 
-All biller workloads initially live in a restricted `biller-sites` namespace. The publishing
-worker receives a dedicated Kubernetes service account that can manage only the required resource
-types in that namespace. It must never receive cluster-admin access.
+The publishing worker has a dedicated Azure workload identity with Cosmos data-plane and Blob
+write access, but no AI Foundry or Kubernetes mutation permissions. The API identity can read the
+private artifact container. Publication is idempotent on `billerId + revision`: immutable revision
+objects are uploaded first, verified, and followed by one atomic `active.json` overwrite.
 
-Publication requires:
-
-- validated DNS-safe resource names derived from a stable biller slug
-- server-side apply using fixed resource templates
-- immutable image digests rather than `latest`
-- startup, readiness, and liveness probes
-- resource requests and limits
-- default-deny network policy and restricted pod security
-- rollout timeout, smoke test, and failure recording
-- idempotency on `billerId + revision`
-- retention of the preceding revision for rollback
-
-The first release uses one replica per published biller. We will measure pod count, utilization,
-and operational cost before choosing scale-to-zero or a shared multi-tenant data plane.
+The shared PWA deployment runs at least two replicas behind `/pay/{slug}/`. Dedicated deployments
+remain a future exception for custom executable code, unusual scaling, or regulatory isolation.
 
 ## Azure observability
 
