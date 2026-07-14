@@ -8,9 +8,9 @@
 # functional flow against the Invoice API: seed a biller's invoices and read them
 # back.
 #
-# Scope is the stateless control-plane APIs. The Biller Experience Worker is not
-# included: it's a background publisher deployed via biller-experience.template.yaml
-# and its readiness depends on live Cosmos/blob + workload identity.
+# Scope is the deterministic backend APIs (Invoice, Payment, PayerAccount). The
+# Biller Experience components (API, Worker, Studio, PWA) are deployed via
+# biller-experience.template.yaml and are not covered here.
 #
 # Usage: scripts/smoke-test.sh <namespace>
 set -euo pipefail
@@ -19,9 +19,8 @@ NAMESPACE="${1:?usage: smoke-test.sh <namespace>}"
 LOCAL_PORT="${LOCAL_PORT:-18080}"
 CURL="curl -fsS --max-time 10"
 
-API_SERVICES=(ic-biller-experience-api ic-invoice-api ic-payment-api ic-payer-account-api)
+API_SERVICES=(ic-invoice-api ic-payment-api ic-payer-account-api)
 ALL_TARGETS=(
-  "svc/ic-biller-experience-api"
   "svc/ic-invoice-api"
   "svc/ic-payment-api"
   "svc/ic-payer-account-api"

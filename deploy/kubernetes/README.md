@@ -6,11 +6,12 @@ Shared namespace, RBAC, network policy, and workload manifests live here.
 
 The control-plane service workloads are managed with Kustomize:
 
-- `base/` — namespace-agnostic Deployment/Service manifests for the four stateless API
-  services (`ic-biller-experience-api`, `ic-invoice-api`, `ic-payment-api`,
-  `ic-payer-account-api`) plus the `ic-workload` service account. The Biller Experience
-  Worker is deployed via `biller-experience.template.yaml` (it needs live Cosmos/blob +
-  `ic`-namespace workload identity), so it is not part of these overlays.
+- `base/` — namespace-agnostic Deployment/Service manifests for the deterministic
+  backend APIs (`ic-invoice-api`, `ic-payment-api`, `ic-payer-account-api`) plus the
+  `ic-workload` service account. The Biller Experience components (API, Worker, Studio,
+  PWA) are deployed via `biller-experience.template.yaml` — it wires their Cosmos/AI
+  Foundry/blob config + `ic`-namespace workload identity and owns their routes — so they
+  are not part of these overlays.
 - `overlays/nonprod/` — the `ic-nonprod` namespace with its own dedicated public
   kgateway `Gateway` (`ic-hack-nonprod.eastus2.cloudapp.azure.com`, a separate Azure
   LoadBalancer from prod's). Deployed on every PR; smoke tests still use

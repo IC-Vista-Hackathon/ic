@@ -17,8 +17,6 @@ resources:
 # `kustomize edit set image <name>=<name>:<sha>` in the deploy workflow pins every
 # image to the PR head commit's immutable tag. `latest` here is only a placeholder.
 images:
-  - name: acrichackjk4zmntatjem4.azurecr.io/ic-biller-experience-api
-    newTag: latest
   - name: acrichackjk4zmntatjem4.azurecr.io/ic-invoice-api
     newTag: latest
   - name: acrichackjk4zmntatjem4.azurecr.io/ic-payment-api
