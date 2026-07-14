@@ -1,0 +1,19 @@
+{
+  "tools": [
+    {
+      "type": "function",
+      "function": {
+        "name": "get_invoices",
+        "description": "Look up a payer's open invoices for a biller by account number. Backed by GET /billers/{id}/invoices?account_number=. Scoped to the current biller tenant.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "biller_id": { "type": "string", "description": "The biller tenant for the current portal session (partition key)." },
+            "account_number": { "type": "string", "description": "The payer's external biller account number." }
+          },
+          "required": ["biller_id", "account_number"]
+        }
+      }
+    }
+  ]
+}
