@@ -8,12 +8,26 @@ using IC.BillerExperience.Contracts.V1.Deployments;
 using IC.BillerExperience.Contracts.V1.Experiences;
 using IC.BillerExperience.Contracts.V1.Onboarding;
 using Microsoft.Extensions.Logging.Abstractions;
+using Newtonsoft.Json;
 using Xunit;
 
 namespace IC.BillerExperience.Api.Tests;
 
 public sealed class BillerOnboardingServiceTests
 {
+    [Fact]
+    public void CosmosRecordsUseRequiredWirePropertyNames()
+    {
+        var record = new IC.BillerExperience.Api.Domain.BillerRecord(
+            "biller-1", "City", "city", "Utility", "02110", null, null, null, [], BillerStatus.Prospect, DateTimeOffset.UtcNow);
+
+        var json = JsonConvert.SerializeObject(record);
+
+        Assert.Contains("\"id\":\"biller-1\"", json, StringComparison.Ordinal);
+        Assert.Contains("\"postal_code\":\"02110\"", json, StringComparison.Ordinal);
+        Assert.DoesNotContain("\"Id\"", json, StringComparison.Ordinal);
+    }
+
     [Fact]
     public async Task CompleteWorkflowProducesPublicationRequestAndTelemetry()
     {
