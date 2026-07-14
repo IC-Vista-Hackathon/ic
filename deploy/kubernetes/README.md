@@ -56,7 +56,7 @@ from Azure at deploy time (`az monitor app-insights component show`) and substit
 by the deploy workflow.
 
 **Pivot in progress:** published payer sites only serve static content, so the target is one
-shared **Payer Site Router** workload instead of one Deployment per biller. `IC.BillerExperience.Worker`
+shared **Payer Site Router** workload instead of one Deployment per biller. `Pronto.BillerExperience.Worker`
 uploads each biller's artifacts into the `payer-experiences` blob container
 (`infra/bicep/modules/storage.bicep`, already provisioned), keyed by biller_id/slug prefix, and the
 API serves the active artifact to the shared PWA. Per-biller Deployment/Service/HTTPRoute RBAC then

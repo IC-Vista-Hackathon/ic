@@ -1,4 +1,4 @@
-# IC — Design
+# Pronto — Design
 
 Agent-native EBPP: a biller self-onboards through a chat agent, previews their own branded payer
 portal on fake data, "buys" the platform, and publishes it live. A payer then uses the live site,

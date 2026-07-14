@@ -1,9 +1,0 @@
-<Project Sdk="Microsoft.NET.Sdk.Web">
-  <PropertyGroup>
-    <Description>HTTP API for the IC Invoice Service (fake-seed and lookup).</Description>
-  </PropertyGroup>
-  <ItemGroup>
-    <ProjectReference Include="..\..\contracts\IC.Invoice.Contracts\IC.Invoice.Contracts.csproj" />
-    <ProjectReference Include="..\..\libraries\IC.Persistence.Cosmos\IC.Persistence.Cosmos.csproj" />
-  </ItemGroup>
-</Project>

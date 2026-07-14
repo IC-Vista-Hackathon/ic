@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #
-# Smoke tests for the IC service deployments.
+# Smoke tests for the Pronto service deployments.
 #
 # Three layers:
 #   1. Deployment readiness  (kubectl) — every expected Deployment has all replicas available
@@ -117,7 +117,7 @@ done
 # Intentionally a READ, not the seed POST: a smoke test that may run on a cron must
 # not accumulate data. Looking up a nonexistent account still exercises the full path
 # (controller -> repository query -> serialization) and returns an empty list. The
-# write/seed path is covered by the IC.Invoice.Api unit tests.
+# write/seed path is covered by the Pronto.Invoice.Api unit tests.
 section "3. Functional — Invoice lookup (read-only)"
 lookup_url="$BASE_URL/invoices/billers/smoke-test/invoices?account_number=smoke-none"
 resp="$(curl -s -m "$HTTP_TIMEOUT" -w $'\n%{http_code}' "$lookup_url" 2>/dev/null)"

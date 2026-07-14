@@ -34,17 +34,17 @@ Core principles (from `design/README.md`):
 
 ```text
 ic/
-├── IC.slnx                          solution file — new projects must be added here
+├── Pronto.slnx                          solution file — new projects must be added here
 ├── contracts/                       versioned wire contracts (transport DTOs only)
-│   └── IC.BillerExperience.Contracts/
-├── libraries/                       shared .NET libraries, IC.<Capability> naming
-│   └── IC.Agentic.Orchestration/    framework-neutral orchestration abstractions
+│   └── Pronto.BillerExperience.Contracts/
+├── libraries/                       shared .NET libraries, Pronto.<Capability> naming
+│   └── Pronto.Agentic.Orchestration/    framework-neutral orchestration abstractions
 ├── services/                        independently deployable .NET 10 workloads
-│   ├── IC.BillerExperience.Api/     Biller Configuration Service (BillerAccount, BillerConfiguration)
-│   └── IC.BillerExperience.Worker/  Deployment Service (publish/reconcile to AKS)
+│   ├── Pronto.BillerExperience.Api/     Biller Configuration Service (BillerAccount, BillerConfiguration)
+│   └── Pronto.BillerExperience.Worker/  Deployment Service (publish/reconcile to AKS)
 ├── frontends/                       web apps (not under services/)
-│   ├── IC.BillerExperience.Studio/  Biller Onboarding Experience (chat, checklist, preview, publish)
-│   └── IC.BillerPayments.Pwa/       Payer Experience — config-driven, one codebase, N deployments
+│   ├── Pronto.BillerExperience.Studio/  Biller Onboarding Experience (chat, checklist, preview, publish)
+│   └── Pronto.BillerPayments.Pwa/       Payer Experience — config-driven, one codebase, N deployments
 ├── deploy/
 │   ├── helm/                        charts for control plane + generated biller workloads (not yet populated)
 │   └── kubernetes/                  namespace, RBAC, gateway, and workload manifests (populated, see below)
@@ -64,9 +64,9 @@ Docs to read before making non-trivial changes:
 - `README.md` — repo layout, product/component name mapping, architecture, delivery plan.
 - `design/README.md`, `design/entities.md`, `design/services.md`, `design/contracts.md` — the
   original design; still the source of truth for entities, service/agent boundaries, and REST
-  behavior, even though `README.md`/`IC.slnx` now own repo/solution structure.
+  behavior, even though `README.md`/`Pronto.slnx` now own repo/solution structure.
 - `agents/README.md`, `services/README.md`, `libraries/README.md` — how documented capabilities
-  in `design/` map onto concrete `IC.<Capability>.*` projects.
+  in `design/` map onto concrete `Pronto.<Capability>.*` projects.
 - `infra/bicep/README.md` — what the hackathon sandbox infra actually provisions.
 
 ## Key architectural decisions
@@ -93,13 +93,13 @@ Docs to read before making non-trivial changes:
   Execution Agent may call the Payment Service, and only after explicit payer confirmation.
   Publish requires a passing Compliance Agent check, enforced server-side by the publish
   endpoint — `compliance` is not agent-writable via `update_config`.
-- **Contracts vs. design docs.** `contracts/IC.BillerExperience.Contracts` holds versioned
+- **Contracts vs. design docs.** `contracts/Pronto.BillerExperience.Contracts` holds versioned
   transport DTOs for the Biller Experience capability only. Persistence entities, Kubernetes SDK
   types, and Microsoft Agent Framework types must never leak into those contracts. Invoice,
   Payment, and PayerAccount now have versioned contract projects under `contracts/` and hosts
   under `services/`; Notification keeps its wire behavior defined in `design/contracts.md` until
   it gets its own versioned project. Wire format is snake_case with lowercase string enums —
-  non-Invoice hosts get it from `libraries/IC.ServiceDefaults`.
+  non-Invoice hosts get it from `libraries/Pronto.ServiceDefaults`.
 - **Payer Experience hosting pivot: shared router + Blob Storage, not one Deployment per biller.**
   The original AKS publication model gave every published biller its own Kubernetes
   Deployment/Service/HTTPRoute running the same PWA image. We're moving off that: the
@@ -131,7 +131,7 @@ against `main`. Do not commit or push straight to `main`.
   merged before assuming it's present.
 - Target subscription for this sandbox is `poc-vista-hackathon`
   (`ca64adec-b195-49fd-a782-15553708c07c`), resource group `rg-ic-hack`, region `eastus2`. This
-  is a standalone hackathon sandbox subscription, not InvoiceCloud's landing zone — no ADO
+  is a standalone hackathon sandbox subscription, not Pronto's landing zone — no ADO
   pipeline, no Terraform, plain Bicep deployed via `az`.
 
 ## Current state
@@ -140,19 +140,19 @@ All 5 services and both frontends have Dockerfiles. `deploy/kubernetes/` is popu
 RBAC, kgateway/Gateway API routing, and the unified biller-experience template) — `deploy/helm/`
 is still just a placeholder README.
 
-- `IC.BillerExperience.Api` is the most complete piece: real onboarding orchestration
+- `Pronto.BillerExperience.Api` is the most complete piece: real onboarding orchestration
   (Discover → Draft → Validate → Preview → Approve), Cosmos + in-memory persistence, deterministic
   and Azure OpenAI draft generation. Phases 1-4 of the delivery plan are done.
-- `IC.Invoice.Api`, `IC.Payment.Api`, `IC.PayerAccount.Api` have real controllers/domain logic.
-  `IC.Payment.Api`'s `IBillerAccountClient` is an intentional no-op stub (Biller Experience API has
+- `Pronto.Invoice.Api`, `Pronto.Payment.Api`, `Pronto.PayerAccount.Api` have real controllers/domain logic.
+  `Pronto.Payment.Api`'s `IBillerAccountClient` is an intentional no-op stub (Biller Experience API has
   no account-status endpoint yet).
-- **`IC.BillerExperience.Worker` is implemented** — `PublicationWorker.cs` polls Cosmos
+- **`Pronto.BillerExperience.Worker` is implemented** — `PublicationWorker.cs` polls Cosmos
   (`ClaimNextAsync`), and `PublicationProcessor`/`BlobExperienceArtifactPublisher` upload the
   versioned `config.json`/`manifest.webmanifest` + an atomic `active.json` to the
   `payer-experiences` blob container and mark the deployment ready. It uploads JSON config
   artifacts, not yet a built static PWA bundle. It's deployed to prod via
   `deploy/kubernetes/overlays/prod/biller-experience.yaml`.
-- `IC.BillerExperience.Studio` and `IC.BillerPayments.Pwa` are small but functional React apps.
+- `Pronto.BillerExperience.Studio` and `Pronto.BillerPayments.Pwa` are small but functional React apps.
   The PWA currently runs against a local `DemoPaymentExperienceProvider`, not the real
   Payment/Invoice/PayerAccount services.
 - Test coverage is thin outside Invoice/Payment. `BillerExperience.IntegrationTests` now has

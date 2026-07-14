@@ -1,0 +1,9 @@
+<Project Sdk="Microsoft.NET.Sdk.Web">
+  <PropertyGroup>
+    <Description>HTTP API for the Pronto Invoice Service (fake-seed and lookup).</Description>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\..\contracts\Pronto.Invoice.Contracts\Pronto.Invoice.Contracts.csproj" />
+    <ProjectReference Include="..\..\libraries\Pronto.Persistence.Cosmos\Pronto.Persistence.Cosmos.csproj" />
+  </ItemGroup>
+</Project>

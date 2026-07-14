@@ -1,0 +1,6 @@
+<Solution>
+  <Project Path="Pronto.BillerExperience.Contracts/Pronto.BillerExperience.Contracts.csproj" />
+  <Project Path="Pronto.Invoice.Contracts/Pronto.Invoice.Contracts.csproj" />
+  <Project Path="Pronto.Payment.Contracts/Pronto.Payment.Contracts.csproj" />
+  <Project Path="Pronto.PayerAccount.Contracts/Pronto.PayerAccount.Contracts.csproj" />
+</Solution>
