@@ -1,3 +1,4 @@
+using System.Text.Json;
 using IC.ServiceDefaults.Errors;
 using Microsoft.AspNetCore.Http;
 using Microsoft.Extensions.Logging;
@@ -7,6 +8,12 @@ namespace IC.ServiceDefaults;
 /// <summary>Converts ServiceException (and anything else) into the standard error envelope.</summary>
 public sealed partial class ErrorEnvelopeMiddleware
 {
+    // Match the MVC wire policy (snake_case); WriteAsJsonAsync would otherwise use web defaults.
+    private static readonly JsonSerializerOptions Wire = new(JsonSerializerDefaults.Web)
+    {
+        PropertyNamingPolicy = JsonNamingPolicy.SnakeCaseLower,
+    };
+
     private readonly RequestDelegate next;
     private readonly ILogger<ErrorEnvelopeMiddleware> logger;
 
@@ -26,7 +33,7 @@ public sealed partial class ErrorEnvelopeMiddleware
         {
             context.Response.StatusCode = exception.StatusCode;
             await context.Response
-                .WriteAsJsonAsync(new ErrorEnvelope(new ErrorDetail(exception.Code, exception.Message)))
+                .WriteAsJsonAsync(new ErrorEnvelope(new ErrorDetail(exception.Code, exception.Message)), Wire)
                 .ConfigureAwait(false);
         }
         catch (Exception exception) when (!context.Response.HasStarted)
@@ -34,7 +41,7 @@ public sealed partial class ErrorEnvelopeMiddleware
             LogUnhandledException(logger, exception, context.Request.Path);
             context.Response.StatusCode = StatusCodes.Status500InternalServerError;
             await context.Response
-                .WriteAsJsonAsync(new ErrorEnvelope(new ErrorDetail("internal_error", "An unexpected error occurred.")))
+                .WriteAsJsonAsync(new ErrorEnvelope(new ErrorDetail("internal_error", "An unexpected error occurred.")), Wire)
                 .ConfigureAwait(false);
         }
     }

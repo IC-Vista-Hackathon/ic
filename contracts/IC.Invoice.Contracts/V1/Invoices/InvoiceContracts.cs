@@ -6,8 +6,9 @@ namespace IC.Invoice.Contracts.V1.Invoices;
 /// Invoice lifecycle status. Wire tokens are the lowercase strings shown in
 /// design/entities.md (<c>due</c> | <c>scheduled</c> | <c>paid</c>) — the converter is attached
 /// at the type level, so every host serializes them identically regardless of its JSON options.
+/// Integer tokens are rejected on the wire.
 /// </summary>
-[JsonConverter(typeof(JsonStringEnumConverter<InvoiceStatus>))]
+[JsonConverter(typeof(InvoiceStatusJsonConverter))]
 public enum InvoiceStatus
 {
     [JsonStringEnumMemberName("due")]
@@ -18,6 +19,15 @@ public enum InvoiceStatus
 
     [JsonStringEnumMemberName("paid")]
     Paid,
+}
+
+/// <summary>String-only converter for <see cref="InvoiceStatus"/> (rejects integer tokens).</summary>
+public sealed class InvoiceStatusJsonConverter : JsonStringEnumConverter<InvoiceStatus>
+{
+    public InvoiceStatusJsonConverter()
+        : base(namingPolicy: null, allowIntegerValues: false)
+    {
+    }
 }
 
 /// <summary>

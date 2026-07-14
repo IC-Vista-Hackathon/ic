@@ -47,7 +47,9 @@ POST /billers/b_1a2b/deployments   {"isolation": "shared"}
 | Method | Path | Purpose |
 |---|---|---|
 | GET | `/billers/{id}/invoices?account_number=` | Lookup open invoices |
+| GET | `/billers/{id}/invoices/{invoice_id}` | Point read (Payment Service amount lookup) |
 | POST | `/billers/{id}/invoices/seed` | (Internal) seed fake data at onboarding |
+| POST | `/billers/{id}/invoices/{invoice_id}/status` | (Internal) Payment Service asserts `due→paid`, `due→scheduled`, `scheduled→paid`: `{status, payment_id}` — idempotent per `payment_id`; invalid transitions 409 (`already_paid` / `invalid_transition`) |
 
 ## Payment Service
 

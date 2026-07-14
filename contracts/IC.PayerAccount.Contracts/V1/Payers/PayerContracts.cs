@@ -5,7 +5,8 @@ public sealed record RegisterPayerRequest(
     string Name,
     string Email,
     string? Phone,
-    IReadOnlyList<string> AccountNumbers);
+    IReadOnlyList<string> AccountNumbers,
+    PayerPreferences? Preferences = null);
 
 public sealed record PayerResponse(
     string PayerId,

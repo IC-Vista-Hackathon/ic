@@ -24,6 +24,12 @@ public sealed class PayersController : ControllerBase
             throw ServiceException.BadRequest("validation_failed", "name and email are required");
         }
 
+        // Preferences are optional at registration (Policy Agent may send them with opt-in);
+        // the same autopay/payment-day rules apply as on PATCH.
+        var preferences = request.Preferences
+            ?? new PayerPreferences(Autopay: false, Paperless: false, Channels: [], PaymentDay: null);
+        ValidatePreferences(preferences);
+
         var payer = new PayerResponse(
             PayerId: Guid.NewGuid().ToString(),
             BillerId: request.BillerId,
@@ -31,11 +37,7 @@ public sealed class PayersController : ControllerBase
             Email: request.Email,
             Phone: request.Phone,
             AccountNumbers: request.AccountNumbers,
-            Preferences: new PayerPreferences(
-                Autopay: false,
-                Paperless: false,
-                Channels: [],
-                PaymentDay: null));
+            Preferences: preferences);
         store.Add(payer);
 
         return Created($"/payers/{payer.PayerId}?biller_id={payer.BillerId}", payer);
@@ -57,26 +59,30 @@ public sealed class PayersController : ControllerBase
         var payer = store.Find(billerId, payerId)
             ?? throw ServiceException.NotFound("not_found", $"payer {payerId} not found");
 
-        if (request.PaymentDay is < 1 or > 28)
-        {
-            throw ServiceException.BadRequest("invalid_payment_day", "paymentDay must be between 1 and 28");
-        }
-
         var preferences = payer.Preferences;
         var updated = new PayerPreferences(
             Autopay: request.Autopay ?? preferences.Autopay,
             Paperless: request.Paperless ?? preferences.Paperless,
             Channels: request.Channels ?? preferences.Channels,
             PaymentDay: request.PaymentDay ?? preferences.PaymentDay);
-
-        if (updated.Autopay && updated.PaymentDay is null)
-        {
-            throw ServiceException.BadRequest(
-                "autopay_requires_payment_day",
-                "enabling autopay requires a paymentDay (1-28) already set or supplied in this request");
-        }
+        ValidatePreferences(updated);
 
         store.Update(payer with { Preferences = updated });
         return updated;
+    }
+
+    private static void ValidatePreferences(PayerPreferences preferences)
+    {
+        if (preferences.PaymentDay is < 1 or > 28)
+        {
+            throw ServiceException.BadRequest("invalid_payment_day", "payment_day must be between 1 and 28");
+        }
+
+        if (preferences.Autopay && preferences.PaymentDay is null)
+        {
+            throw ServiceException.BadRequest(
+                "autopay_requires_payment_day",
+                "enabling autopay requires a payment_day (1-28) already set or supplied in this request");
+        }
     }
 }

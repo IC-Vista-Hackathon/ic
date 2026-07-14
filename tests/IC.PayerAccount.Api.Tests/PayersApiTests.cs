@@ -106,6 +106,42 @@ public sealed class PayersApiTests : IClassFixture<WebApplicationFactory<Program
     }
 
     [Fact]
+    public async Task RegisterWithPreferencesAppliesThem()
+    {
+        var billerId = Guid.NewGuid().ToString();
+
+        var response = await client.PostAsJsonAsync(
+            "payers",
+            new RegisterPayerRequest(
+                billerId, "Pref Payer", $"{Guid.NewGuid()}@example.com", null, [],
+                new PayerPreferences(
+                    Autopay: true, Paperless: true, Channels: [NotificationChannel.Email], PaymentDay: 15)),
+            Wire);
+
+        Assert.Equal(HttpStatusCode.Created, response.StatusCode);
+        var payer = await response.Content.ReadFromJsonAsync<PayerResponse>(Wire);
+        Assert.True(payer!.Preferences.Autopay);
+        Assert.Equal(15, payer.Preferences.PaymentDay);
+    }
+
+    [Fact]
+    public async Task RegisterWithAutopayButNoDayRejected()
+    {
+        var response = await client.PostAsJsonAsync(
+            "payers",
+            new RegisterPayerRequest(
+                Guid.NewGuid().ToString(), "Pref Payer", $"{Guid.NewGuid()}@example.com", null, [],
+                new PayerPreferences(Autopay: true, Paperless: false, Channels: [], PaymentDay: null)),
+            Wire);
+
+        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+        Assert.Contains(
+            "autopay_requires_payment_day",
+            await response.Content.ReadAsStringAsync(),
+            StringComparison.Ordinal);
+    }
+
+    [Fact]
     public async Task PaymentDayOutOfRangeRejected()
     {
         var payer = await RegisterPayerAsync();
