@@ -136,6 +136,42 @@ public sealed partial class CosmosBillerExperienceRepository(
             }
         });
 
+    public async ValueTask PurgeByBillerAsync(string billerId, CancellationToken cancellationToken)
+    {
+        var partition = new PartitionKey(billerId);
+        await DeletePartitionAsync(Configs, partition, cancellationToken);
+        await DeletePartitionAsync(Runs, partition, cancellationToken);
+        await DeletePartitionAsync(Deployments, partition, cancellationToken);
+
+        // The billers container is partitioned by /id (which equals the biller id).
+        try
+        {
+            using var _ = await Billers.DeleteItemStreamAsync(billerId, partition, cancellationToken: cancellationToken);
+        }
+        catch (CosmosException exception) when (exception.StatusCode == HttpStatusCode.NotFound)
+        {
+        }
+    }
+
+    private static async Task DeletePartitionAsync(
+        Container container, PartitionKey partition, CancellationToken cancellationToken)
+    {
+        using var iterator = container.GetItemQueryIterator<IdOnly>(
+            new QueryDefinition("SELECT c.id FROM c"),
+            requestOptions: new QueryRequestOptions { PartitionKey = partition });
+
+        while (iterator.HasMoreResults)
+        {
+            var page = await iterator.ReadNextAsync(cancellationToken);
+            foreach (var item in page)
+            {
+                using var _ = await container.DeleteItemStreamAsync(item.Id, partition, cancellationToken: cancellationToken);
+            }
+        }
+    }
+
+    private sealed record IdOnly(string Id);
+
     private async ValueTask<T> ObserveAsync<T>(string operation, string container, string billerId, Func<Task<T>> action)
     {
         var startedAt = Stopwatch.GetTimestamp();

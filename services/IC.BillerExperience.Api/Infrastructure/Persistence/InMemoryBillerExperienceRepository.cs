@@ -97,4 +97,22 @@ public sealed class InMemoryBillerExperienceRepository : IBillerExperienceReposi
         _deployments.TryGetValue($"{billerId}:{deploymentId}", out var deployment);
         return ValueTask.FromResult(deployment);
     }
+
+    public ValueTask PurgeByBillerAsync(string billerId, CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        _billers.TryRemove(billerId, out _);
+        RemoveWhere(_experiences, item => item.BillerId == billerId);
+        RemoveWhere(_runs, item => item.BillerId == billerId);
+        RemoveWhere(_deployments, item => item.BillerId == billerId);
+        return ValueTask.CompletedTask;
+    }
+
+    private static void RemoveWhere<T>(ConcurrentDictionary<string, T> map, Func<T, bool> predicate)
+    {
+        foreach (var pair in map.Where(pair => predicate(pair.Value)).ToList())
+        {
+            map.TryRemove(pair.Key, out _);
+        }
+    }
 }

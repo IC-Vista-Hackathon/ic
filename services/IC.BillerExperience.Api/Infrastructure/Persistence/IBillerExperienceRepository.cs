@@ -13,6 +13,12 @@ public interface IBillerExperienceRepository
     ValueTask<OnboardingRunRecord> SaveRunAsync(OnboardingRunRecord run, string? expectedETag, CancellationToken cancellationToken);
     ValueTask<DeploymentRecord?> GetDeploymentAsync(string billerId, string deploymentId, CancellationToken cancellationToken);
     ValueTask<DeploymentRecord> CreateDeploymentAsync(DeploymentRecord deployment, CancellationToken cancellationToken);
+
+    /// <summary>
+    /// Delete a biller and all of its experiences, runs, and deployments. Test-cleanup support
+    /// for functional tests; exposed only through the nonprod-gated maintenance endpoint.
+    /// </summary>
+    ValueTask PurgeByBillerAsync(string billerId, CancellationToken cancellationToken);
 }
 
 public sealed class ConcurrencyException(string message) : Exception(message);

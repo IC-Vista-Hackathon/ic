@@ -34,6 +34,7 @@ var options = builder.Configuration
     .Get<BillerExperienceOptions>() ?? new BillerExperienceOptions();
 
 builder.Services.Configure<BillerExperienceOptions>(builder.Configuration.GetSection(BillerExperienceOptions.SectionName));
+builder.Services.Configure<MaintenanceOptions>(builder.Configuration.GetSection(MaintenanceOptions.SectionName));
 builder.Services.AddSingleton<IOrchestrationRunner, OrchestrationRunner>();
 builder.Services.AddSingleton<BillerOnboardingService>();
 builder.Services.AddSingleton<DeterministicExperienceDraftGenerator>();
