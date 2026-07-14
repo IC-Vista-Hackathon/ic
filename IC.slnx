@@ -27,5 +27,6 @@
     <Project Path="tests/IC.Payment.Contracts.Tests/IC.Payment.Contracts.Tests.csproj" />
     <Project Path="tests/IC.PayerAccount.Api.Tests/IC.PayerAccount.Api.Tests.csproj" />
     <Project Path="tests/IC.PayerAccount.Contracts.Tests/IC.PayerAccount.Contracts.Tests.csproj" />
+    <Project Path="tests/IC.Persistence.Cosmos.Tests/IC.Persistence.Cosmos.Tests.csproj" />
   </Folder>
 </Solution>
