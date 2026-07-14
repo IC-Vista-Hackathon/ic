@@ -82,6 +82,26 @@ public sealed class CosmosPayerStore : IPayerStore
         => await container.UpsertItemAsync(
             ToDocument(payer), new PartitionKey(payer.BillerId), cancellationToken: cancellationToken);
 
+    public async Task PurgeByBillerAsync(string billerId, CancellationToken cancellationToken = default)
+    {
+        var partition = new PartitionKey(billerId);
+        using var iterator = container.GetItemQueryIterator<IdOnly>(
+            new QueryDefinition("SELECT c.id FROM c"),
+            requestOptions: new QueryRequestOptions { PartitionKey = partition });
+
+        while (iterator.HasMoreResults)
+        {
+            var page = await iterator.ReadNextAsync(cancellationToken);
+            foreach (var item in page)
+            {
+                await container.DeleteItemAsync<PayerDocument>(
+                    item.Id, partition, cancellationToken: cancellationToken);
+            }
+        }
+    }
+
+    private sealed record IdOnly([property: JsonPropertyName("id")] string Id);
+
     private static PayerDocument ToDocument(PayerResponse payer) => new()
     {
         Id = payer.PayerId,

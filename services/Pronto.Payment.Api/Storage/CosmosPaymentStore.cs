@@ -71,6 +71,26 @@ public sealed class CosmosPaymentStore : IPaymentStore
         return results;
     }
 
+    public async Task PurgeByBillerAsync(string billerId, CancellationToken cancellationToken = default)
+    {
+        var partition = new PartitionKey(billerId);
+        using var iterator = container.GetItemQueryIterator<IdOnly>(
+            new QueryDefinition("SELECT c.id FROM c"),
+            requestOptions: new QueryRequestOptions { PartitionKey = partition });
+
+        while (iterator.HasMoreResults)
+        {
+            var page = await iterator.ReadNextAsync(cancellationToken);
+            foreach (var item in page)
+            {
+                await container.DeleteItemAsync<PaymentDocument>(
+                    item.Id, partition, cancellationToken: cancellationToken);
+            }
+        }
+    }
+
+    private sealed record IdOnly([property: JsonPropertyName("id")] string Id);
+
     private sealed record PaymentDocument
     {
         [JsonPropertyName("id")]

@@ -1,3 +1,4 @@
+using Pronto.PayerAccount.Api;
 using Pronto.PayerAccount.Api.Storage;
 using Pronto.Persistence.Cosmos;
 using Pronto.ServiceDefaults;
@@ -6,6 +7,8 @@ using Microsoft.Azure.Cosmos;
 var builder = WebApplication.CreateBuilder(args);
 
 builder.AddServiceDefaults("Pronto.PayerAccount.Api");
+builder.Services.Configure<MaintenanceOptions>(
+    builder.Configuration.GetSection(MaintenanceOptions.SectionName));
 
 var persistence = builder.Configuration
     .GetSection(CosmosPersistenceOptions.SectionName)

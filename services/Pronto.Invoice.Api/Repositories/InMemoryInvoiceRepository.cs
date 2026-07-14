@@ -25,6 +25,12 @@ public sealed class InMemoryInvoiceRepository : IInvoiceRepository
         return Task.CompletedTask;
     }
 
+    public Task PurgeByBillerAsync(string billerId, CancellationToken cancellationToken = default)
+    {
+        _byBiller.TryRemove(billerId, out _);
+        return Task.CompletedTask;
+    }
+
     public Task<IReadOnlyList<InvoiceDocument>> GetOpenAsync(
         string billerId,
         string accountNumber,

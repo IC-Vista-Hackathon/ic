@@ -1,0 +1,55 @@
+# Enable the test-data purge endpoint on nonprod (`ic-nonprod`) only. Functional tests
+# gating each PR create data in the shared nonprod Cosmos and delete it afterwards through
+# each service's DELETE /internal/test-data endpoint, which is a 404 unless this flag is set.
+# Strategic-merge appends the env var (merge key: name) to each container.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: ic-invoice-api
+spec:
+  template:
+    spec:
+      containers:
+        - name: invoice-api
+          env:
+            - name: Maintenance__PurgeEnabled
+              value: "true"
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: ic-payment-api
+spec:
+  template:
+    spec:
+      containers:
+        - name: payment-api
+          env:
+            - name: Maintenance__PurgeEnabled
+              value: "true"
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: ic-payer-account-api
+spec:
+  template:
+    spec:
+      containers:
+        - name: payer-account-api
+          env:
+            - name: Maintenance__PurgeEnabled
+              value: "true"
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: ic-biller-experience-api
+spec:
+  template:
+    spec:
+      containers:
+        - name: biller-experience-api
+          env:
+            - name: Maintenance__PurgeEnabled
+              value: "true"

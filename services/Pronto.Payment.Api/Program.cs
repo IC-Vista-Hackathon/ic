@@ -1,3 +1,4 @@
+using Pronto.Payment.Api;
 using Pronto.Payment.Api.Clients;
 using Pronto.Payment.Api.Storage;
 using Pronto.Persistence.Cosmos;
@@ -7,6 +8,8 @@ using Microsoft.Azure.Cosmos;
 var builder = WebApplication.CreateBuilder(args);
 
 builder.AddServiceDefaults("Pronto.Payment.Api");
+builder.Services.Configure<MaintenanceOptions>(
+    builder.Configuration.GetSection(MaintenanceOptions.SectionName));
 
 var persistence = builder.Configuration
     .GetSection(CosmosPersistenceOptions.SectionName)
