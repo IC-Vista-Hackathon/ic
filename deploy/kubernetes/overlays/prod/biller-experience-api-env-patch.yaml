@@ -1,0 +1,32 @@
+# Prod-only patch: turn the base in-memory ic-biller-experience-api into the live,
+# Azure-backed deployment. The base keeps the plain in-memory variant (used by
+# ic-nonprod, which has no federated workload identity). This patch adds:
+#   * Cosmos persistence + AI Foundry model + published-experience blob storage
+#     (all non-secret sandbox endpoints, same values documented in .env.example)
+#   * the workload-identity pod label so the AKS webhook injects a federated token
+#     for the ic-workload service account
+#   * the Application Insights connection string, resolved from Azure and substituted
+#     by the deploy workflow (envsubst); empty otherwise, which just disables export.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: ic-biller-experience-api
+spec:
+  template:
+    metadata:
+      labels:
+        azure.workload.identity/use: "true"
+    spec:
+      containers:
+        - name: biller-experience-api
+          env:
+            - { name: BillerExperience__Persistence__Provider, value: Cosmos }
+            - { name: BillerExperience__Persistence__CosmosEndpoint, value: "https://cosmos-ic-hack-jk4zmntatjem4.documents.azure.com:443/" }
+            - { name: BillerExperience__Persistence__DatabaseName, value: ic }
+            - { name: BillerExperience__Model__Provider, value: AzureAI }
+            - { name: BillerExperience__Model__Endpoint, value: "https://aif-ic-hack-jk4zmntatjem4.cognitiveservices.azure.com/" }
+            - { name: BillerExperience__Model__Deployment, value: gpt-5.4-mini }
+            - { name: BillerExperience__PublishedExperience__StorageEndpoint, value: "https://stichackjk4zmntatjem4.blob.core.windows.net/" }
+            - { name: BillerExperience__PublishedExperience__ContainerName, value: payer-experiences }
+            - { name: BillerExperience__SupportingServices__InvoiceBaseUrl, value: "http://ic-invoice-api.ic.svc.cluster.local:8080/" }
+            - { name: APPLICATIONINSIGHTS_CONNECTION_STRING, value: "${APPLICATIONINSIGHTS_CONNECTION_STRING}" }

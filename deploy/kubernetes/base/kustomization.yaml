@@ -4,10 +4,11 @@ kind: Kustomization
 # Shared, namespace-agnostic definitions for the IC control-plane API services.
 # Namespace and image tags are set by the overlays under ../overlays.
 #
-# The Biller Experience Worker is intentionally NOT here: it's a stateful publisher
-# that hard-requires live Cosmos/blob access via workload identity (federated only
-# to system:serviceaccount:ic:ic-workload) and is deployed through its own rendered
-# manifest, biller-experience.template.yaml. CI still builds and pushes its image.
+# base ships the in-memory ic-biller-experience-api (no Azure dependencies); the prod
+# overlay patches it onto Cosmos/AI/blob/App Insights. The Biller Experience Worker and
+# frontends are intentionally NOT here: they hard-require live Cosmos/blob access via
+# workload identity, federated only to service accounts in the `ic` namespace, so they
+# live in overlays/prod/biller-experience.yaml (prod only). CI builds all images.
 resources:
   - service-account.yaml
   - biller-experience-api/deployment.yaml

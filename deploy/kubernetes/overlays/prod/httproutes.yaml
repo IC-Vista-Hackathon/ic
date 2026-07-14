@@ -120,3 +120,79 @@ spec:
           kind: Service
           name: ic-biller-experience-api
           port: 8080
+---
+# Biller Studio (onboarding UI). `/` redirects to `/studio/`; `/studio` is stripped
+# so the SPA receives its normal paths. Mirrors the routes previously carried by the
+# hand-applied biller-experience.template.yaml.
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: ic-biller-experience-studio
+  labels:
+    app: ic-biller-experience-studio
+spec:
+  parentRefs:
+    - group: gateway.networking.k8s.io
+      kind: Gateway
+      name: ic-gateway
+      namespace: kgateway-system
+      sectionName: http
+  rules:
+    - matches:
+        - path:
+            type: Exact
+            value: /
+      filters:
+        - type: RequestRedirect
+          requestRedirect:
+            path:
+              type: ReplaceFullPath
+              replaceFullPath: /studio/
+            statusCode: 302
+    - matches:
+        - path:
+            type: PathPrefix
+            value: /studio
+      filters:
+        - type: URLRewrite
+          urlRewrite:
+            path:
+              type: ReplacePrefixMatch
+              replacePrefixMatch: /
+      backendRefs:
+        - group: ""
+          kind: Service
+          name: ic-biller-experience-studio
+          port: 8080
+---
+# Payer PWA. `/pay/{slug}` selects the biller; the prefix is stripped so the shared
+# renderer serves its own paths and fetches the active experience from the API.
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: ic-biller-payments-pwa
+  labels:
+    app: ic-biller-payments-pwa
+spec:
+  parentRefs:
+    - group: gateway.networking.k8s.io
+      kind: Gateway
+      name: ic-gateway
+      namespace: kgateway-system
+      sectionName: http
+  rules:
+    - matches:
+        - path:
+            type: PathPrefix
+            value: /pay
+      filters:
+        - type: URLRewrite
+          urlRewrite:
+            path:
+              type: ReplacePrefixMatch
+              replacePrefixMatch: /
+      backendRefs:
+        - group: ""
+          kind: Service
+          name: ic-biller-payments-pwa
+          port: 8080
