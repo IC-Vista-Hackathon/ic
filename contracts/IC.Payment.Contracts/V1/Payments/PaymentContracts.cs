@@ -15,6 +15,7 @@ public sealed record PaymentResponse(
     string Method,
     int AmountCents,
     int FeeCents,
+    int TotalCents,
     string Confirmation,
     PaymentStatus Status,
     DateOnly? ScheduledFor,

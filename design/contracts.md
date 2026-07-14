@@ -1,6 +1,9 @@
 # Contracts
 
 REST, JSON, integer cents. Errors: `{"error": {"code", "message"}}` with conventional HTTP status.
+Wire casing is **camelCase** with **enums as strings** (System.Text.Json web defaults +
+`JsonStringEnumConverter`, applied by `libraries/IC.ServiceDefaults`) — snake_case in the JSON
+examples below is historical; field names on the wire are the camelCase forms of the same names.
 IDs on the wire are Cosmos-generated GUID strings (`b_1a2b`, `i_77` etc. below are illustrative
 shorthand, not the literal format). Per entities.md's Cosmos conventions, most containers
 partition on `/biller_id` — endpoints below pass `biller_id` alongside a resource id wherever a

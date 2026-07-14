@@ -1,4 +1,5 @@
 using System.Text.Json;
+using System.Text.Json.Serialization;
 using IC.PayerAccount.Contracts.V1.Payers;
 using Xunit;
 
@@ -6,7 +7,11 @@ namespace IC.PayerAccount.Contracts.Tests;
 
 public sealed class PayerContractsTests
 {
-    private static readonly JsonSerializerOptions CaseInsensitive = new(JsonSerializerDefaults.Web);
+    // Wire policy: camelCase + enums as strings (design/contracts.md).
+    private static readonly JsonSerializerOptions CaseInsensitive = new(JsonSerializerDefaults.Web)
+    {
+        Converters = { new JsonStringEnumConverter() },
+    };
 
     [Fact]
     public void PayerResponseRoundTripsThroughJson()
@@ -62,7 +67,7 @@ public sealed class PayerContractsTests
     [Fact]
     public void UpdateRequestPreservesPartialChanges()
     {
-        const string json = """{"autopay":true,"channels":[0]}""";
+        const string json = """{"autopay":true,"channels":["email"]}""";
 
         var request = JsonSerializer.Deserialize<UpdatePayerPreferencesRequest>(json, CaseInsensitive);
 

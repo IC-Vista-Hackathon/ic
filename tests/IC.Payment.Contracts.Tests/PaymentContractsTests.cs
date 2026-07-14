@@ -1,4 +1,5 @@
 using System.Text.Json;
+using System.Text.Json.Serialization;
 using IC.Payment.Contracts.V1.Payments;
 using Xunit;
 
@@ -6,7 +7,11 @@ namespace IC.Payment.Contracts.Tests;
 
 public sealed class PaymentContractsTests
 {
-    private static readonly JsonSerializerOptions CaseInsensitive = new(JsonSerializerDefaults.Web);
+    // Wire policy: camelCase + enums as strings (design/contracts.md).
+    private static readonly JsonSerializerOptions CaseInsensitive = new(JsonSerializerDefaults.Web)
+    {
+        Converters = { new JsonStringEnumConverter() },
+    };
 
     [Fact]
     public void PaymentResponseRoundTripsThroughJson()
@@ -19,6 +24,7 @@ public sealed class PaymentContractsTests
             Method: "card",
             AmountCents: 8420,
             FeeCents: 211,
+            TotalCents: 8631,
             Confirmation: "IC-4F2A9B",
             Status: PaymentStatus.Succeeded,
             ScheduledFor: null,
