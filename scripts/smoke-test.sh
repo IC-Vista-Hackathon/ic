@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Functional smoke tests against a deployed IC environment.
+# Functional smoke tests against a deployed Pronto environment.
 #
 # Reaches the services in the target namespace via `kubectl port-forward` (no public
 # ingress required), so it works identically for nonprod (ic-nonprod) and prod (ic).

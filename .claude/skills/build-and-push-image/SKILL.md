@@ -1,6 +1,6 @@
 ---
 name: build-and-push-image
-description: Build a container image for an IC service/frontend and push it to the hackathon ACR (acrichackjk4zmntatjem4.azurecr.io). Use when asked to build, containerize, or push an image for one of this repo's services, or to get an image into the registry the AKS cluster pulls from.
+description: Build a container image for an Pronto service/frontend and push it to the hackathon ACR (acrichackjk4zmntatjem4.azurecr.io). Use when asked to build, containerize, or push an image for one of this repo's services, or to get an image into the registry the AKS cluster pulls from.
 ---
 
 # Build and push image
@@ -12,8 +12,8 @@ Builds a container image and pushes it to the hackathon sandbox's ACR: registry
 ## Prerequisite check — do this first
 
 **This repo does not have a `Dockerfile` for any service yet** (checked
-`services/IC.BillerExperience.Api`, `services/IC.BillerExperience.Worker`,
-`frontends/IC.BillerExperience.Studio`, `frontends/IC.BillerPayments.Pwa` as of this writing —
+`services/Pronto.BillerExperience.Api`, `services/Pronto.BillerExperience.Worker`,
+`frontends/Pronto.BillerExperience.Studio`, `frontends/Pronto.BillerPayments.Pwa` as of this writing —
 none exist). Before attempting a build:
 
 ```sh

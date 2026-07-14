@@ -1,6 +1,0 @@
-<Solution>
-  <Project Path="IC.BillerExperience.Contracts/IC.BillerExperience.Contracts.csproj" />
-  <Project Path="IC.Invoice.Contracts/IC.Invoice.Contracts.csproj" />
-  <Project Path="IC.Payment.Contracts/IC.Payment.Contracts.csproj" />
-  <Project Path="IC.PayerAccount.Contracts/IC.PayerAccount.Contracts.csproj" />
-</Solution>

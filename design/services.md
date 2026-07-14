@@ -45,9 +45,9 @@ structured artifact to the next (bill summary → payment plan → approved plan
 ## Implementation conventions
 
 - **API hosts use ASP.NET Core controllers, not minimal APIs.** All service hosts
-  (`IC.BillerExperience.Api` and future `IC.Payment.Api`, `IC.PayerAccount.Api`,
-  `IC.Invoice.Api`, …) expose their endpoints via `[ApiController]` controller classes.
-  The current minimal-API placeholder endpoints in `IC.BillerExperience.Api/Program.cs`
+  (`Pronto.BillerExperience.Api` and future `Pronto.Payment.Api`, `Pronto.PayerAccount.Api`,
+  `Pronto.Invoice.Api`, …) expose their endpoints via `[ApiController]` controller classes.
+  The current minimal-API placeholder endpoints in `Pronto.BillerExperience.Api/Program.cs`
   get converted when real endpoints land. Health checks (`MapHealthChecks`) stay as-is.
 
 ## Boundaries

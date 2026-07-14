@@ -1,0 +1,5 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <Description>Versioned public contracts for Pronto Biller Experience.</Description>
+  </PropertyGroup>
+</Project>
