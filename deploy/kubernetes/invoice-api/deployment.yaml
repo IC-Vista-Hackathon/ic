@@ -1,0 +1,56 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: ic-invoice-api
+  namespace: ic
+  labels:
+    app: ic-invoice-api
+    app.kubernetes.io/part-of: ic
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: ic-invoice-api
+  template:
+    metadata:
+      labels:
+        app: ic-invoice-api
+    spec:
+      # Platform-provisioned SA (federated to the workload UAMI). No Azure
+      # dependency yet, so the workload-identity pod label is intentionally
+      # omitted until the service talks to Cosmos.
+      serviceAccountName: ic-workload
+      containers:
+        - name: invoice-api
+          image: acrichackjk4zmntatjem4.azurecr.io/ic-invoice-api:v1
+          ports:
+            - name: http
+              containerPort: 8080
+          # Endpoints added in IC.Invoice.Api specifically for k8s probing.
+          readinessProbe:
+            httpGet:
+              path: /health/ready
+              port: http
+            initialDelaySeconds: 3
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /health/live
+              port: http
+            initialDelaySeconds: 5
+            periodSeconds: 15
+          resources:
+            requests:
+              cpu: 50m
+              memory: 128Mi
+            limits:
+              cpu: 500m
+              memory: 256Mi
+          securityContext:
+            runAsNonRoot: true
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop:
+                - ALL
+            seccompProfile:
+              type: RuntimeDefault

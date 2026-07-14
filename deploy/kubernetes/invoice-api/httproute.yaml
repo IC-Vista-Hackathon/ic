@@ -1,0 +1,30 @@
+# Exposure via the existing kgateway Gateway API controller (not classic Ingress).
+# Attaches to the shared ic-gateway (public LB 20.96.210.8) on its :80 HTTP listener.
+# Hostname uses nip.io so it resolves to the gateway IP without any DNS setup:
+#   http://ic-invoice.20.96.210.8.nip.io/
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: ic-invoice-api
+  namespace: ic
+  labels:
+    app: ic-invoice-api
+spec:
+  parentRefs:
+    - group: gateway.networking.k8s.io
+      kind: Gateway
+      name: ic-gateway
+      namespace: kgateway-system
+      sectionName: http
+  hostnames:
+    - ic-invoice.20.96.210.8.nip.io
+  rules:
+    - matches:
+        - path:
+            type: PathPrefix
+            value: /
+      backendRefs:
+        - group: ""
+          kind: Service
+          name: ic-invoice-api
+          port: 8080
