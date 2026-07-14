@@ -1,29 +1,26 @@
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: ic-payer-account-api
-  namespace: ic
+  name: ic-biller-experience-api
   labels:
-    app: ic-payer-account-api
+    app: ic-biller-experience-api
     app.kubernetes.io/part-of: ic
 spec:
-  # In-memory stores: replicas MUST stay 1 until Cosmos lands — with 2+, seeds
-  # land on one pod and lookups hit the other (verified live 2026-07-14).
+  # In-memory stores: replicas MUST stay 1 until Cosmos lands — with 2+, writes
+  # land on one pod and reads hit the other.
   replicas: 1
   selector:
     matchLabels:
-      app: ic-payer-account-api
+      app: ic-biller-experience-api
   template:
     metadata:
       labels:
-        app: ic-payer-account-api
+        app: ic-biller-experience-api
     spec:
-      # Platform-provisioned SA (federated to the workload UAMI). No Azure
-      # dependency yet — in-memory store; Cosmos comes later.
       serviceAccountName: ic-workload
       containers:
-        - name: payer-account-api
-          image: acrichackjk4zmntatjem4.azurecr.io/ic-payer-account-api:v1
+        - name: biller-experience-api
+          image: acrichackjk4zmntatjem4.azurecr.io/ic-biller-experience-api:latest
           ports:
             - name: http
               containerPort: 8080

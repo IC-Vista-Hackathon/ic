@@ -1,0 +1,122 @@
+# Public exposure for the production control-plane APIs via the shared kgateway
+# Gateway (ic-gateway in kgateway-system, public LB / DNS
+# ic-hack.eastus2.cloudapp.azure.com). Each API gets a path prefix that is
+# stripped via URLRewrite so the backend receives its normal paths.
+#
+# Nonprod does NOT define HTTPRoutes: functional tests reach the ic-nonprod
+# services directly via `kubectl port-forward`, so the two environments never
+# contend for the same public path on the shared gateway.
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: ic-invoice-api
+  labels:
+    app: ic-invoice-api
+spec:
+  parentRefs:
+    - group: gateway.networking.k8s.io
+      kind: Gateway
+      name: ic-gateway
+      namespace: kgateway-system
+      sectionName: http
+  rules:
+    - matches:
+        - path:
+            type: PathPrefix
+            value: /invoices
+      filters:
+        - type: URLRewrite
+          urlRewrite:
+            path:
+              type: ReplacePrefixMatch
+              replacePrefixMatch: /
+      backendRefs:
+        - group: ""
+          kind: Service
+          name: ic-invoice-api
+          port: 8080
+---
+# The Payment Service's own routes ARE /payments and /purchases
+# (design/contracts.md), so both prefixes route through with no URLRewrite.
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: ic-payment-api
+  labels:
+    app: ic-payment-api
+spec:
+  parentRefs:
+    - group: gateway.networking.k8s.io
+      kind: Gateway
+      name: ic-gateway
+      namespace: kgateway-system
+      sectionName: http
+  rules:
+    - matches:
+        - path:
+            type: PathPrefix
+            value: /payments
+        - path:
+            type: PathPrefix
+            value: /purchases
+      backendRefs:
+        - group: ""
+          kind: Service
+          name: ic-payment-api
+          port: 8080
+---
+# The Payer Account Service's own route IS /payers (design/contracts.md), so the
+# prefix routes through with no URLRewrite.
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: ic-payer-account-api
+  labels:
+    app: ic-payer-account-api
+spec:
+  parentRefs:
+    - group: gateway.networking.k8s.io
+      kind: Gateway
+      name: ic-gateway
+      namespace: kgateway-system
+      sectionName: http
+  rules:
+    - matches:
+        - path:
+            type: PathPrefix
+            value: /payers
+      backendRefs:
+        - group: ""
+          kind: Service
+          name: ic-payer-account-api
+          port: 8080
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: ic-biller-experience-api
+  labels:
+    app: ic-biller-experience-api
+spec:
+  parentRefs:
+    - group: gateway.networking.k8s.io
+      kind: Gateway
+      name: ic-gateway
+      namespace: kgateway-system
+      sectionName: http
+  rules:
+    - matches:
+        - path:
+            type: PathPrefix
+            value: /api
+      filters:
+        - type: URLRewrite
+          urlRewrite:
+            path:
+              type: ReplacePrefixMatch
+              replacePrefixMatch: /
+      backendRefs:
+        - group: ""
+          kind: Service
+          name: ic-biller-experience-api
+          port: 8080

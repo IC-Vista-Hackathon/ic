@@ -1,0 +1,64 @@
+name: Build images
+
+# Reusable workflow: builds every service image server-side with ACR Tasks
+# (`az acr build`, no Docker daemon needed) and pushes it tagged with the caller's
+# immutable image tag (typically the git SHA). AKS already has AcrPull on the
+# registry, so no pull secrets are needed.
+
+on:
+  workflow_call:
+    inputs:
+      image_tag:
+        description: Immutable tag to push (e.g. the git SHA).
+        required: true
+        type: string
+      registry:
+        description: ACR login server.
+        required: false
+        default: acrichackjk4zmntatjem4.azurecr.io
+        type: string
+      acr_name:
+        description: ACR resource name.
+        required: false
+        default: acrichackjk4zmntatjem4
+        type: string
+    secrets:
+      AZURE_CREDENTIALS:
+        required: true
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Build ${{ matrix.image }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - image: ic-biller-experience-api
+            dockerfile: services/IC.BillerExperience.Api/Dockerfile
+          - image: ic-biller-experience-worker
+            dockerfile: services/IC.BillerExperience.Worker/Dockerfile
+          - image: ic-invoice-api
+            dockerfile: services/IC.Invoice.Api/Dockerfile
+          - image: ic-payment-api
+            dockerfile: services/IC.Payment.Api/Dockerfile
+          - image: ic-payer-account-api
+            dockerfile: services/IC.PayerAccount.Api/Dockerfile
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Azure login
+        uses: azure/login@v2
+        with:
+          creds: ${{ secrets.AZURE_CREDENTIALS }}
+
+      - name: Build & push ${{ matrix.image }}
+        run: |
+          az acr build \
+            --registry "${{ inputs.acr_name }}" \
+            --image "${{ matrix.image }}:${{ inputs.image_tag }}" \
+            --file "${{ matrix.dockerfile }}" \
+            .

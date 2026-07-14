@@ -1,0 +1,24 @@
+name: Dependency review
+
+on:
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  dependency-review:
+    name: Dependency review
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Review dependencies
+        uses: actions/dependency-review-action@v4
+        # Requires the Dependency graph + GitHub Advanced Security. Non-blocking
+        # until those are enabled on the repo; remove once GHAS is on to make it a
+        # hard gate.
+        continue-on-error: true
+        with:
+          fail-on-severity: high
+          comment-summary-in-pr: on-failure

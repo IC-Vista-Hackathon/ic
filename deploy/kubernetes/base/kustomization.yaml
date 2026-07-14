@@ -1,0 +1,20 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+# Shared, namespace-agnostic definitions for the IC control-plane API services.
+# Namespace and image tags are set by the overlays under ../overlays.
+#
+# The Biller Experience Worker is intentionally NOT here: it's a stateful publisher
+# that hard-requires live Cosmos/blob access via workload identity (federated only
+# to system:serviceaccount:ic:ic-workload) and is deployed through its own rendered
+# manifest, biller-experience.template.yaml. CI still builds and pushes its image.
+resources:
+  - service-account.yaml
+  - biller-experience-api/deployment.yaml
+  - biller-experience-api/service.yaml
+  - invoice-api/deployment.yaml
+  - invoice-api/service.yaml
+  - payment-api/deployment.yaml
+  - payment-api/service.yaml
+  - payer-account-api/deployment.yaml
+  - payer-account-api/service.yaml
