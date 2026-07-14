@@ -180,6 +180,19 @@ public sealed class InvoiceStatusTransitionTests
     }
 
     [Fact]
+    public async Task ControllerListRejectsBlankBillerId()
+    {
+        var controller = NewController(out _);
+
+        // billerId is validated before account_number — a blank biller must 400
+        // with invalid_biller even when a valid account_number is supplied.
+        var result = await controller.List("  ", "ACCT-1", CancellationToken.None);
+
+        var badRequest = Assert.IsType<BadRequestObjectResult>(result);
+        Assert.Equal("invalid_biller", ((ApiError)badRequest.Value!).Error.Code);
+    }
+
+    [Fact]
     public async Task ControllerGetRejectsBlankBillerId()
     {
         var controller = NewController(out _);
