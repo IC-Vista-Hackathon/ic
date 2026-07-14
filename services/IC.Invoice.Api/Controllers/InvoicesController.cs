@@ -85,12 +85,18 @@ public sealed class InvoicesController : ControllerBase
     /// <summary>Point read. <c>GET /billers/{billerId}/invoices/{invoiceId}</c>.</summary>
     [HttpGet("{invoiceId}")]
     [ProducesResponseType<InvoiceResponse>(StatusCodes.Status200OK)]
+    [ProducesResponseType<ApiError>(StatusCodes.Status400BadRequest)]
     [ProducesResponseType<ApiError>(StatusCodes.Status404NotFound)]
     public async Task<IActionResult> Get(
         string billerId,
         string invoiceId,
         CancellationToken cancellationToken)
     {
+        if (string.IsNullOrWhiteSpace(billerId))
+        {
+            return BadRequest(ApiError.Of("invalid_biller", "biller_id is required."));
+        }
+
         var invoice = await _repository.FindAsync(billerId, invoiceId, cancellationToken);
         return invoice is null
             ? NotFound(ApiError.Of("not_found", $"invoice {invoiceId} not found."))
@@ -113,6 +119,11 @@ public sealed class InvoicesController : ControllerBase
         [FromBody] UpdateInvoiceStatusRequest request,
         CancellationToken cancellationToken)
     {
+        if (string.IsNullOrWhiteSpace(billerId))
+        {
+            return BadRequest(ApiError.Of("invalid_biller", "biller_id is required."));
+        }
+
         if (request.Status == Contracts.V1.Invoices.InvoiceStatus.Due)
         {
             return BadRequest(ApiError.Of(
