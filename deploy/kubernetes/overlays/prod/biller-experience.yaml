@@ -24,17 +24,18 @@ kind: Deployment
 metadata:
   name: ic-biller-experience-worker
   labels:
-    app: ic-biller-experience-worker
-    app.kubernetes.io/part-of: ic
+    app.kubernetes.io/name: ic-biller-experience-worker
+    app.kubernetes.io/part-of: ic-biller-experience
 spec:
   replicas: 1
   selector:
     matchLabels:
-      app: ic-biller-experience-worker
+      app.kubernetes.io/name: ic-biller-experience-worker
   template:
     metadata:
       labels:
-        app: ic-biller-experience-worker
+        app.kubernetes.io/name: ic-biller-experience-worker
+        app.kubernetes.io/part-of: ic-biller-experience
         azure.workload.identity/use: "true"
     spec:
       serviceAccountName: biller-publisher
@@ -78,17 +79,18 @@ kind: Deployment
 metadata:
   name: ic-biller-experience-studio
   labels:
-    app: ic-biller-experience-studio
-    app.kubernetes.io/part-of: ic
+    app.kubernetes.io/name: ic-biller-experience-studio
+    app.kubernetes.io/part-of: ic-biller-experience
 spec:
   replicas: 1
   selector:
     matchLabels:
-      app: ic-biller-experience-studio
+      app.kubernetes.io/name: ic-biller-experience-studio
   template:
     metadata:
       labels:
-        app: ic-biller-experience-studio
+        app.kubernetes.io/name: ic-biller-experience-studio
+        app.kubernetes.io/part-of: ic-biller-experience
     spec:
       containers:
         - name: studio
@@ -121,7 +123,7 @@ metadata:
   name: ic-biller-experience-studio
 spec:
   selector:
-    app: ic-biller-experience-studio
+    app.kubernetes.io/name: ic-biller-experience-studio
   ports:
     - name: http
       port: 8080
@@ -132,18 +134,19 @@ kind: Deployment
 metadata:
   name: ic-biller-payments-pwa
   labels:
-    app: ic-biller-payments-pwa
-    app.kubernetes.io/part-of: ic
+    app.kubernetes.io/name: ic-biller-payments-pwa
+    app.kubernetes.io/part-of: ic-biller-experience
 spec:
   # Stateless static renderer — safe to run multiple replicas.
   replicas: 2
   selector:
     matchLabels:
-      app: ic-biller-payments-pwa
+      app.kubernetes.io/name: ic-biller-payments-pwa
   template:
     metadata:
       labels:
-        app: ic-biller-payments-pwa
+        app.kubernetes.io/name: ic-biller-payments-pwa
+        app.kubernetes.io/part-of: ic-biller-experience
     spec:
       containers:
         - name: pwa
@@ -176,7 +179,7 @@ metadata:
   name: ic-biller-payments-pwa
 spec:
   selector:
-    app: ic-biller-payments-pwa
+    app.kubernetes.io/name: ic-biller-payments-pwa
   ports:
     - name: http
       port: 8080

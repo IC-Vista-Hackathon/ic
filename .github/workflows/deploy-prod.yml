@@ -66,11 +66,20 @@ jobs:
             --query connectionString -o tsv)"
           export APPLICATIONINSIGHTS_CONNECTION_STRING
           for f in "${OVERLAY}/biller-experience.yaml" "${OVERLAY}/biller-experience-api-env-patch.yaml"; do
+            # shellcheck disable=SC2016
             envsubst '${APPLICATIONINSIGHTS_CONNECTION_STRING}' < "$f" > "$f.tmp" && mv "$f.tmp" "$f"
           done
 
       - name: Deploy
         run: kubectl apply -k "${OVERLAY}"
+
+      - name: Remove superseded Biller Experience routes
+        run: |
+          kubectl delete httproute -n ic \
+            ic-biller-experience-api \
+            ic-biller-experience-studio \
+            ic-biller-payments-pwa \
+            --ignore-not-found
 
       - name: Functional smoke tests
         run: ./scripts/smoke-test.sh ic

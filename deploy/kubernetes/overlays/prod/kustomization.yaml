@@ -18,11 +18,11 @@ resources:
 # App Insights); the base ships the in-memory variant that nonprod keeps.
 patches:
   - path: biller-experience-api-env-patch.yaml
+  - path: biller-experience-api-service-patch.yaml
 
 # Cosmos-backed persistence + workload-identity opt-in for the foundation services.
 # Prod-only: the workload identity is federated to system:serviceaccount:ic:ic-workload,
 # so only this namespace can authenticate to Cosmos. nonprod uses the base InMemory default.
-patches:
   - path: cosmos-persistence.yaml
 
 # `kustomize edit set image <name>=<name>:<sha>` in the deploy workflow pins every
