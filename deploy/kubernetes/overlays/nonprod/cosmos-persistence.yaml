@@ -1,0 +1,64 @@
+# Cosmos-backed persistence for the foundation services — nonprod (`ic-nonprod`) only.
+# Points at the dedicated nonprod Cosmos account (infra/bicep) so per-PR smoke tests exercise
+# real Cosmos persistence without touching prod data. The workload identity is federated to
+# system:serviceaccount:ic-nonprod:ic-workload, so these pods can obtain a token here too.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: ic-invoice-api
+spec:
+  template:
+    metadata:
+      labels:
+        # Opt this pod into the AKS workload-identity webhook (federated token for Cosmos).
+        azure.workload.identity/use: "true"
+    spec:
+      containers:
+        - name: invoice-api
+          env:
+            - name: Persistence__Provider
+              value: Cosmos
+            - name: Persistence__CosmosEndpoint
+              value: https://cosmos-ic-hack-nonprod-jk4zmntatjem4.documents.azure.com:443/
+            - name: Persistence__DatabaseName
+              value: ic
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: ic-payment-api
+spec:
+  template:
+    metadata:
+      labels:
+        azure.workload.identity/use: "true"
+    spec:
+      containers:
+        - name: payment-api
+          env:
+            - name: Persistence__Provider
+              value: Cosmos
+            - name: Persistence__CosmosEndpoint
+              value: https://cosmos-ic-hack-nonprod-jk4zmntatjem4.documents.azure.com:443/
+            - name: Persistence__DatabaseName
+              value: ic
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: ic-payer-account-api
+spec:
+  template:
+    metadata:
+      labels:
+        azure.workload.identity/use: "true"
+    spec:
+      containers:
+        - name: payer-account-api
+          env:
+            - name: Persistence__Provider
+              value: Cosmos
+            - name: Persistence__CosmosEndpoint
+              value: https://cosmos-ic-hack-nonprod-jk4zmntatjem4.documents.azure.com:443/
+            - name: Persistence__DatabaseName
+              value: ic

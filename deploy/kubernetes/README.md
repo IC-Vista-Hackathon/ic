@@ -78,6 +78,20 @@ az aks command invoke -g rg-ic-hack -n aks-ic-hack \
   --file biller-publisher-service-account.yaml
 ```
 
+The foundation API services (`ic-invoice-api`, `ic-payment-api`, `ic-payer-account-api`) persist
+to Cosmos DB (database `ic`, one container per entity, partition key `/biller_id`) via
+`DefaultAzureCredential` — no connection strings or keys. Persistence is selected at runtime
+through the `Persistence__Provider` env; the base defaults to `InMemory`, and **each overlay**
+patches in `Provider=Cosmos`, the endpoint, and the `azure.workload.identity/use: "true"` pod
+label (`overlays/{prod,nonprod}/cosmos-persistence.yaml`). The two environments point at
+**separate Cosmos accounts** — prod at `cosmos-ic-hack-<suffix>`, nonprod at
+`cosmos-ic-hack-nonprod-<suffix>` — so per-PR smoke tests exercise real Cosmos without touching
+prod data. The shared `ic-workload` identity is federated to both `system:serviceaccount:ic:ic-workload`
+and `system:serviceaccount:ic-nonprod:ic-workload` (`infra/bicep/modules/aks.bicep`) so pods in
+either namespace can obtain a Cosmos token. With shared Cosmos state each env is safe to scale
+(kept at 1 for the sandbox). Manifests live under `base/` and deploy through the Kustomize
+overlays above.
+
 ## Gateway API / kgateway ingress
 
 The cluster's public entry point is [kgateway](https://kgateway.dev) (formerly Gloo Gateway), the

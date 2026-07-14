@@ -7,6 +7,7 @@
   </Folder>
   <Folder Name="/libraries/">
     <Project Path="libraries/IC.Agentic.Orchestration/IC.Agentic.Orchestration.csproj" />
+    <Project Path="libraries/IC.Persistence.Cosmos/IC.Persistence.Cosmos.csproj" />
     <Project Path="libraries/IC.ServiceDefaults/IC.ServiceDefaults.csproj" />
   </Folder>
   <Folder Name="/services/">

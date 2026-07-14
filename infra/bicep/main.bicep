@@ -5,6 +5,9 @@ targetScope = 'subscription'
 param prefix string = 'ic-hack'
 param location string = 'eastus2'
 param workloadNamespace string = 'ic'
+// Nonprod runs the same service account name in an isolated namespace on the same cluster; the
+// workload identity is federated to both so PR (nonprod) pods can reach their own Cosmos account.
+param nonprodWorkloadNamespace string = 'ic-nonprod'
 param workloadServiceAccountName string = 'ic-workload'
 param publisherServiceAccountName string = 'biller-publisher'
 param aksNodeCountMin int = 2
@@ -87,6 +90,21 @@ module cosmos 'modules/cosmos.bicep' = {
   }
 }
 
+// Separate Cosmos account for the nonprod (per-PR) environment so smoke tests exercise real
+// Cosmos persistence without touching prod data. Same schema; only the workload API reader
+// identity needs data access here (the publisher/worker runs in prod only).
+module cosmosNonprod 'modules/cosmos.bicep' = {
+  name: 'cosmosNonprod'
+  scope: rg
+  params: {
+    name: 'cosmos-${prefix}-nonprod-${suffix}'
+    location: location
+    dataContributorPrincipalIds: [
+      workloadIdentity.outputs.principalId
+    ]
+  }
+}
+
 module aiFoundry 'modules/aiFoundry.bicep' = {
   name: 'aiFoundry'
   scope: rg
@@ -132,6 +150,7 @@ module aks 'modules/aks.bicep' = {
     vmSize: aksVmSize
     uamiName: workloadIdentity.outputs.name
     workloadNamespace: workloadNamespace
+    nonprodWorkloadNamespace: nonprodWorkloadNamespace
     workloadServiceAccountName: workloadServiceAccountName
     publisherUamiName: publisherIdentity.outputs.name
     publisherNamespace: workloadNamespace
@@ -153,6 +172,7 @@ module grafana 'modules/grafana.bicep' = {
 
 output resourceGroup string = rg.name
 output cosmosEndpoint string = cosmos.outputs.endpoint
+output cosmosNonprodEndpoint string = cosmosNonprod.outputs.endpoint
 output aiFoundryEndpoint string = aiFoundry.outputs.endpoint
 output acrLoginServer string = acr.outputs.loginServer
 output payerExperienceBlobEndpoint string = storage.outputs.blobEndpoint
