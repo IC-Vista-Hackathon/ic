@@ -21,6 +21,9 @@ jobs:
   analyze:
     name: Analyze C#
     runs-on: ubuntu-latest
+    # Code scanning upload requires GitHub Advanced Security. Until it's enabled on
+    # this repo the init/analyze steps are non-blocking (continue-on-error); once
+    # GHAS is on, remove those flags to make CodeQL a hard gate.
     steps:
       - uses: actions/checkout@v4
 
@@ -31,6 +34,7 @@ jobs:
 
       - name: Initialize CodeQL
         uses: github/codeql-action/init@v3
+        continue-on-error: true
         with:
           languages: csharp
           build-mode: manual
@@ -40,5 +44,6 @@ jobs:
 
       - name: Perform CodeQL analysis
         uses: github/codeql-action/analyze@v3
+        continue-on-error: true
         with:
           category: "/language:csharp"
