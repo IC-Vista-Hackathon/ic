@@ -44,6 +44,11 @@ structured artifact to the next (bill summary → payment plan → approved plan
 ## Boundaries
 
 - Only Execution Agent calls the Payment Service, and only after explicit payer confirmation.
-- Publish requires a passing Compliance Agent check on the config version.
+- Publish requires a passing Compliance Agent check on the config version — enforced by the
+  publish endpoint calling `run_compliance_check` itself; `compliance` is not a field agents can
+  set via `update_config` (see entities.md `BillerConfiguration`).
 - Isolated-tier deployments get their own instance + data partition; shared tier is row-scoped
-  by `biller_id`.
+  by `biller_id` (Cosmos partition key across all containers — see entities.md's Cosmos
+  conventions).
+- Completing a Purchase is a cross-service write: Payment Service marks its own Purchase `paid`,
+  then calls Biller Configuration Service to advance `BillerAccount.status` to `purchased`.

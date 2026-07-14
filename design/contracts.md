@@ -1,6 +1,10 @@
 # Contracts
 
 REST, JSON, integer cents. Errors: `{"error": {"code", "message"}}` with conventional HTTP status.
+IDs on the wire are Cosmos-generated GUID strings (`b_1a2b`, `i_77` etc. below are illustrative
+shorthand, not the literal format). Per entities.md's Cosmos conventions, most containers
+partition on `/biller_id` — endpoints below pass `biller_id` alongside a resource id wherever a
+point read needs it, to avoid a cross-partition fan-out.
 
 ## Biller Configuration Service
 
@@ -27,7 +31,7 @@ PATCH /billers/b_1a2b/config
 | Method | Path | Purpose |
 |---|---|---|
 | POST | `/billers/{id}/deployments` | Go live: `{isolation}` → published site |
-| GET | `/deployments/{id}` | Status |
+| GET | `/billers/{id}/deployments/{deployment_id}` | Status (nested under biller — single-partition read) |
 
 ```json
 POST /billers/b_1a2b/deployments   {"isolation": "shared"}
@@ -46,22 +50,25 @@ POST /billers/b_1a2b/deployments   {"isolation": "shared"}
 | Method | Path | Purpose |
 |---|---|---|
 | POST | `/payments` | Pay an invoice (mock auth) |
-| GET | `/payments/{id}` | Receipt |
-| POST | `/purchases` | Biller buys the platform: `{biller_id, plan}` → status `purchased` |
+| GET | `/payments/{id}?biller_id=` | Receipt (single-partition read) |
+| POST | `/purchases` | Biller buys the platform: `{biller_id, plan}` → Purchase status `paid`, then triggers BillerAccount status → `purchased` (see entities.md Purchase) |
 
 ```json
-POST /payments           {"invoice_id": "i_77", "method": "card", "payer_account_id": null}
+POST /payments           {"biller_id": "b_1a2b", "invoice_id": "i_77", "method": "card", "payer_account_id": null}
 → 201                    {"payment_id": "p_3c", "confirmation": "IC-4F2A9B", "amount_cents": 8420,
                           "fee_cents": 211, "receipt_message": "Thanks from the City of Plano!"}
 ```
+
+`biller_id` is required so Payment Service can write to the correct partition without first
+looking up the Invoice cross-partition.
 
 ## Payer Account Service
 
 | Method | Path | Purpose |
 |---|---|---|
-| POST | `/payers` | Register (offered by Policy Agent) |
-| GET | `/payers/{id}` | Profile + preferences |
-| PATCH | `/payers/{id}/preferences` | AutoPay, paperless, channels |
+| POST | `/payers` | Register (offered by Policy Agent): `{biller_id, ...}` |
+| GET | `/payers/{id}?biller_id=` | Profile + preferences (single-partition read) |
+| PATCH | `/payers/{id}/preferences?biller_id=` | AutoPay, paperless, channels |
 
 ## Payer chat (AI Foundry)
 
@@ -83,18 +90,18 @@ Execution only proceeds after the client posts back `{confirm: true}` for a pend
 
 | Tool | Backed by | Used by |
 |---|---|---|
-| `update_config(patch)` | PATCH config | Onboarding, Research, Aesthetics agents |
+| `update_config(patch)` | PATCH config | Onboarding, Research, Aesthetics agents; rejects patches touching `compliance` — that field is server-written only, by the publish gate |
 | `research_website(url)` | crawler | Biller Research Agent |
 | `run_compliance_check(config)` | rules engine | Compliance Agent; publish gate |
-| `get_invoices(account_number)` | Invoice Service | Bill Intelligence Agent |
-| `get_preferences(payer_id)` | Payer Account Service | Policy Agent |
-| `create_payer_account(...)` | Payer Account Service | Policy Agent (payer opt-in) |
-| `pay_invoice(invoice_id, method)` | Payment Service | Execution Agent only, post-confirmation |
-| `send_notification(channel, template, to, payload)` | Notification Service | stretch |
+| `get_invoices(biller_id, account_number)` | Invoice Service | Bill Intelligence Agent |
+| `get_preferences(biller_id, payer_id)` | Payer Account Service | Policy Agent |
+| `create_payer_account(biller_id, ...)` | Payer Account Service | Policy Agent (payer opt-in) |
+| `pay_invoice(biller_id, invoice_id, method, payer_account_id)` | Payment Service | Execution Agent only, post-confirmation |
+| `send_notification(biller_id, channel, template, to, payload, payer_id?)` | Notification Service | stretch |
 
 ## Notification Service (stretch)
 
 | Method | Path | Purpose |
 |---|---|---|
-| POST | `/notifications` | Queue email/SMS |
-| GET | `/notifications?payer_id=` | History |
+| POST | `/notifications` | Queue email/SMS: `{biller_id, channel, template, to, payload, payer_id?}` |
+| GET | `/notifications?biller_id=&payer_id=` | History (single-partition read; `payer_id` optional — guest-pay notifications have none) |
