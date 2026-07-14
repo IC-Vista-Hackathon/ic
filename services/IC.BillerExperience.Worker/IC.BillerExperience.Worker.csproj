@@ -3,6 +3,10 @@
     <Description>Background worker for durable biller experience publication to AKS.</Description>
   </PropertyGroup>
   <ItemGroup>
+    <PackageReference Include="Azure.Monitor.OpenTelemetry.AspNetCore" />
+    <PackageReference Include="OpenTelemetry.Extensions.Hosting" />
+  </ItemGroup>
+  <ItemGroup>
     <ProjectReference Include="..\..\contracts\IC.BillerExperience.Contracts\IC.BillerExperience.Contracts.csproj" />
     <ProjectReference Include="..\..\libraries\IC.Agentic.Orchestration\IC.Agentic.Orchestration.csproj" />
   </ItemGroup>

@@ -8,6 +8,8 @@ public sealed record BillerExperienceDefinition(
     PwaConfiguration Pwa,
     IReadOnlyList<string> EnabledPaymentCapabilities);
 
+public sealed record UpdateExperienceRequest(BillerExperienceDefinition Definition, string? ExpectedETag);
+
 public sealed record ExperienceBrand(
     string DisplayName,
     string PrimaryColor,
@@ -31,13 +33,28 @@ public sealed record PwaConfiguration(
 
 public sealed record ApproveExperienceRequest(string Revision, string ApprovedBy);
 
+public sealed record ComplianceFinding(
+    string Code,
+    string Message,
+    ComplianceFindingSeverity Severity,
+    bool RequiresReview = true);
+
+public enum ComplianceFindingSeverity
+{
+    Information,
+    Warning,
+    Blocking
+}
+
 public sealed record ExperienceRevisionResponse(
     string BillerId,
     string Revision,
     BillerExperienceDefinition Definition,
     ExperienceRevisionState State,
     DateTimeOffset CreatedAt,
-    DateTimeOffset? ApprovedAt);
+    DateTimeOffset? ApprovedAt,
+    string? ETag = null,
+    IReadOnlyList<ComplianceFinding>? Findings = null);
 
 public enum ExperienceRevisionState
 {

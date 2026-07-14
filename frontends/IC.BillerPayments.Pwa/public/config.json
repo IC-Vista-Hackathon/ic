@@ -1,0 +1,8 @@
+{
+  "schema_version": "1.0",
+  "biller_id": "demo",
+  "brand": { "display_name": "City of Vista", "primary_color": "#085368", "secondary_color": "#18B4E9", "logo_asset_id": null, "font_family": "Inter" },
+  "content": { "heading": "Pay your utility bill", "introduction": "A simple, secure way to pay your bill.", "support_text": "Questions? Contact customer service.", "privacy_policy_url": "/privacy", "terms_of_service_url": "/terms" },
+  "pwa": { "name": "City of Vista Payments", "short_name": "Vista Pay", "theme_color": "#085368", "background_color": "#FFFFFF", "icon_asset_id": null },
+  "enabled_payment_capabilities": ["card", "ach"]
+}

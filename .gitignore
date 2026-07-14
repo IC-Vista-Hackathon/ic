@@ -6,6 +6,7 @@
 .dotnet/
 node_modules/
 dist/
+*.tsbuildinfo
 coverage/
 TestResults/
 *.user
