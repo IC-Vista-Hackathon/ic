@@ -101,9 +101,8 @@ Docs to read before making non-trivial changes:
   it gets its own versioned project. Wire format is snake_case with lowercase string enums —
   non-Invoice hosts get it from `libraries/IC.ServiceDefaults`.
 - **Payer Experience hosting pivot: shared router + Blob Storage, not one Deployment per biller.**
-  The original AKS publication model (still what's implemented today — see `biller-city-of-vista`
-  in `deploy/kubernetes/biller-experience.template.yaml`) gives every published biller its own
-  Kubernetes Deployment/Service/HTTPRoute running the same PWA image. We're moving off that: the
+  The original AKS publication model gave every published biller its own Kubernetes
+  Deployment/Service/HTTPRoute running the same PWA image. We're moving off that: the
   Worker instead uploads each biller's built static PWA bundle into the shared `payer-experiences`
   blob container (keyed by biller_id/slug prefix), and a single shared router workload resolves
   the biller from the request and serves the matching prefix — because these pods only ever serve
@@ -147,10 +146,12 @@ is still just a placeholder README.
 - `IC.Invoice.Api`, `IC.Payment.Api`, `IC.PayerAccount.Api` have real controllers/domain logic.
   `IC.Payment.Api`'s `IBillerAccountClient` is an intentional no-op stub (Biller Experience API has
   no account-status endpoint yet).
-- **`IC.BillerExperience.Worker` is still a scaffold** — `PublicationWorker.cs` logs "ready" and
-  does `Task.Delay(Infinite)`; it does not yet watch for publication requests or do anything.
-  Phase 5 ("AKS publication") is entirely unimplemented, and is being replaced by the storage +
-  router pivot described above rather than the original per-biller-Deployment design.
+- **`IC.BillerExperience.Worker` is implemented** — `PublicationWorker.cs` polls Cosmos
+  (`ClaimNextAsync`), and `PublicationProcessor`/`BlobExperienceArtifactPublisher` upload the
+  versioned `config.json`/`manifest.webmanifest` + an atomic `active.json` to the
+  `payer-experiences` blob container and mark the deployment ready. It uploads JSON config
+  artifacts, not yet a built static PWA bundle. It's deployed to prod via
+  `deploy/kubernetes/overlays/prod/biller-experience.yaml`.
 - `IC.BillerExperience.Studio` and `IC.BillerPayments.Pwa` are small but functional React apps.
   The PWA currently runs against a local `DemoPaymentExperienceProvider`, not the real
   Payment/Invoice/PayerAccount services.

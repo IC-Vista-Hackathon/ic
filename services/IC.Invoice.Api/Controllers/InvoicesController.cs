@@ -78,6 +78,11 @@ public sealed partial class InvoicesController : ControllerBase
         CancellationToken cancellationToken,
         [FromQuery(Name = "include_closed")] bool includeClosed = false)
     {
+        if (string.IsNullOrWhiteSpace(billerId))
+        {
+            return BadRequest(ApiError.Of("invalid_biller", "biller_id is required."));
+        }
+
         if (string.IsNullOrWhiteSpace(accountNumber))
         {
             return BadRequest(ApiError.Of("invalid_account_number", "account_number is required."));
@@ -93,12 +98,18 @@ public sealed partial class InvoicesController : ControllerBase
     /// <summary>Point read. <c>GET /billers/{billerId}/invoices/{invoiceId}</c>.</summary>
     [HttpGet("{invoiceId}")]
     [ProducesResponseType<InvoiceResponse>(StatusCodes.Status200OK)]
+    [ProducesResponseType<ApiError>(StatusCodes.Status400BadRequest)]
     [ProducesResponseType<ApiError>(StatusCodes.Status404NotFound)]
     public async Task<IActionResult> Get(
         string billerId,
         string invoiceId,
         CancellationToken cancellationToken)
     {
+        if (string.IsNullOrWhiteSpace(billerId))
+        {
+            return BadRequest(ApiError.Of("invalid_biller", "biller_id is required."));
+        }
+
         var invoice = await _repository.FindAsync(billerId, invoiceId, cancellationToken);
         return invoice is null
             ? NotFound(ApiError.Of("not_found", $"invoice {invoiceId} not found."))
@@ -121,6 +132,11 @@ public sealed partial class InvoicesController : ControllerBase
         [FromBody] UpdateInvoiceStatusRequest request,
         CancellationToken cancellationToken)
     {
+        if (string.IsNullOrWhiteSpace(billerId))
+        {
+            return BadRequest(ApiError.Of("invalid_biller", "biller_id is required."));
+        }
+
         if (request.Status == Contracts.V1.Invoices.InvoiceStatus.Due)
         {
             return BadRequest(ApiError.Of(

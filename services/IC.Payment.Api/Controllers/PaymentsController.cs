@@ -77,24 +77,26 @@ public sealed partial class PaymentsController : ControllerBase
             ScheduledFor: request.ScheduledFor,
             ReceiptMessage: config.ReceiptMessage,
             CreatedAt: DateTimeOffset.UtcNow);
-        store.Add(payment);
+        await store.AddAsync(payment, cancellationToken).ConfigureAwait(false);
         LogPaymentCreated(logger, payment.PaymentId, payment.BillerId, payment.InvoiceId, payment.Status, payment.TotalCents, Activity.Current?.TraceId.ToString());
 
         return Created($"/payments/{payment.PaymentId}?biller_id={payment.BillerId}", payment);
     }
 
     [HttpGet("{paymentId}")]
-    public ActionResult<PaymentResponse> Get(string paymentId, [FromQuery(Name = "biller_id")] string billerId)
-        => store.Find(billerId, paymentId)
+    public async Task<ActionResult<PaymentResponse>> Get(
+        string paymentId, [FromQuery(Name = "biller_id")] string billerId, CancellationToken cancellationToken)
+        => await store.FindAsync(billerId, paymentId, cancellationToken).ConfigureAwait(false)
             ?? throw ServiceException.NotFound("not_found", $"payment {paymentId} not found");
 
     [HttpGet]
-    public ActionResult<IReadOnlyList<PaymentResponse>> List(
+    public async Task<ActionResult<IReadOnlyList<PaymentResponse>>> List(
         [FromQuery(Name = "biller_id")] string billerId,
         [FromQuery(Name = "payer_account_id")] string? payerAccountId,
-        [FromQuery(Name = "invoice_id")] string? invoiceId)
+        [FromQuery(Name = "invoice_id")] string? invoiceId,
+        CancellationToken cancellationToken)
     {
-        var results = store.List(billerId, payerAccountId, invoiceId);
+        var results = await store.ListAsync(billerId, payerAccountId, invoiceId, cancellationToken).ConfigureAwait(false);
         LogPaymentsListed(logger, billerId, payerAccountId, invoiceId, results.Count, Activity.Current?.TraceId.ToString());
         return Ok(results);
     }

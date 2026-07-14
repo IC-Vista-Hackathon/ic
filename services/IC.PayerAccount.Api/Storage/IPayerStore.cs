@@ -6,12 +6,12 @@ namespace IC.PayerAccount.Api.Storage;
 public interface IPayerStore
 {
     /// <summary>Adds the payer; throws 409 already_registered on duplicate email per biller.</summary>
-    void Add(PayerResponse payer);
+    Task AddAsync(PayerResponse payer, CancellationToken cancellationToken = default);
 
-    PayerResponse? Find(string billerId, string payerId);
-    PayerResponse? FindByAccount(string billerId, string accountNumber);
+    Task<PayerResponse?> FindAsync(string billerId, string payerId, CancellationToken cancellationToken = default);
+    Task<PayerResponse?> FindByAccountAsync(string billerId, string accountNumber, CancellationToken cancellationToken = default);
 
-    void Update(PayerResponse payer);
+    Task UpdateAsync(PayerResponse payer, CancellationToken cancellationToken = default);
 }
 
 public sealed class InMemoryPayerStore : IPayerStore
@@ -19,7 +19,7 @@ public sealed class InMemoryPayerStore : IPayerStore
     private readonly object gate = new();
     private readonly Dictionary<(string BillerId, string PayerId), PayerResponse> payers = [];
 
-    public void Add(PayerResponse payer)
+    public Task AddAsync(PayerResponse payer, CancellationToken cancellationToken = default)
     {
         lock (gate)
         {
@@ -33,31 +33,37 @@ public sealed class InMemoryPayerStore : IPayerStore
 
             payers[(payer.BillerId, payer.PayerId)] = payer;
         }
+
+        return Task.CompletedTask;
     }
 
-    public PayerResponse? Find(string billerId, string payerId)
+    public Task<PayerResponse?> FindAsync(
+        string billerId, string payerId, CancellationToken cancellationToken = default)
     {
         lock (gate)
         {
-            return payers.GetValueOrDefault((billerId, payerId));
+            return Task.FromResult(payers.GetValueOrDefault((billerId, payerId)));
         }
     }
 
-    public PayerResponse? FindByAccount(string billerId, string accountNumber)
+    public Task<PayerResponse?> FindByAccountAsync(
+        string billerId, string accountNumber, CancellationToken cancellationToken = default)
     {
         lock (gate)
         {
-            return payers.Values.FirstOrDefault(payer => payer.BillerId == billerId
-                && payer.AccountNumbers.Contains(accountNumber, StringComparer.Ordinal));
+            return Task.FromResult(payers.Values.FirstOrDefault(payer => payer.BillerId == billerId
+                && payer.AccountNumbers.Contains(accountNumber, StringComparer.Ordinal)));
         }
     }
 
-    public void Update(PayerResponse payer)
+    public Task UpdateAsync(PayerResponse payer, CancellationToken cancellationToken = default)
     {
         lock (gate)
         {
             payers[(payer.BillerId, payer.PayerId)] = payer;
         }
+
+        return Task.CompletedTask;
     }
 
     private static string Normalize(string email) => email.Trim().ToUpperInvariant();

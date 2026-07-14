@@ -1,0 +1,103 @@
+using System.Net;
+using System.Text.Json.Serialization;
+using IC.PayerAccount.Contracts.V1.Payers;
+using IC.ServiceDefaults.Errors;
+using Microsoft.Azure.Cosmos;
+
+namespace IC.PayerAccount.Api.Storage;
+
+/// <summary>
+/// Cosmos-backed payer store. Container <c>payer_accounts</c>, partition key <c>/biller_id</c>.
+/// Duplicate registration (same email per biller) is rejected with a partition-scoped,
+/// case-insensitive query before insert.
+/// </summary>
+public sealed class CosmosPayerStore : IPayerStore
+{
+    private readonly Container container;
+
+    public CosmosPayerStore(CosmosClient client, string databaseName)
+        => container = client.GetContainer(databaseName, "payer_accounts");
+
+    public async Task AddAsync(PayerResponse payer, CancellationToken cancellationToken = default)
+    {
+        var partitionKey = new PartitionKey(payer.BillerId);
+
+        var query = new QueryDefinition(
+                "SELECT VALUE COUNT(1) FROM c WHERE STRINGEQUALS(TRIM(c.payer.email), @email, true)")
+            .WithParameter("@email", payer.Email.Trim());
+
+        using var iterator = container.GetItemQueryIterator<int>(
+            query, requestOptions: new QueryRequestOptions { PartitionKey = partitionKey });
+
+        var existing = 0;
+        while (iterator.HasMoreResults)
+        {
+            var page = await iterator.ReadNextAsync(cancellationToken);
+            existing += page.Sum();
+        }
+
+        if (existing > 0)
+        {
+            throw ServiceException.Conflict(
+                "already_registered", "email already registered for this biller");
+        }
+
+        await container.CreateItemAsync(ToDocument(payer), partitionKey, cancellationToken: cancellationToken);
+    }
+
+    public async Task<PayerResponse?> FindAsync(
+        string billerId, string payerId, CancellationToken cancellationToken = default)
+    {
+        try
+        {
+            var response = await container.ReadItemAsync<PayerDocument>(
+                payerId, new PartitionKey(billerId), cancellationToken: cancellationToken);
+            return response.Resource.Payer;
+        }
+        catch (CosmosException exception) when (exception.StatusCode == HttpStatusCode.NotFound)
+        {
+            return null;
+        }
+    }
+
+    public async Task<PayerResponse?> FindByAccountAsync(
+        string billerId, string accountNumber, CancellationToken cancellationToken = default)
+    {
+        var query = new QueryDefinition(
+                "SELECT TOP 1 VALUE c.payer FROM c WHERE ARRAY_CONTAINS(c.payer.account_numbers, @accountNumber)")
+            .WithParameter("@accountNumber", accountNumber);
+        using var iterator = container.GetItemQueryIterator<PayerResponse>(
+            query, requestOptions: new QueryRequestOptions { PartitionKey = new PartitionKey(billerId) });
+        while (iterator.HasMoreResults)
+        {
+            var page = await iterator.ReadNextAsync(cancellationToken);
+            var payer = page.FirstOrDefault();
+            if (payer is not null) return payer;
+        }
+
+        return null;
+    }
+
+    public async Task UpdateAsync(PayerResponse payer, CancellationToken cancellationToken = default)
+        => await container.UpsertItemAsync(
+            ToDocument(payer), new PartitionKey(payer.BillerId), cancellationToken: cancellationToken);
+
+    private static PayerDocument ToDocument(PayerResponse payer) => new()
+    {
+        Id = payer.PayerId,
+        BillerId = payer.BillerId,
+        Payer = payer,
+    };
+
+    private sealed record PayerDocument
+    {
+        [JsonPropertyName("id")]
+        public required string Id { get; init; }
+
+        [JsonPropertyName("biller_id")]
+        public required string BillerId { get; init; }
+
+        [JsonPropertyName("payer")]
+        public required PayerResponse Payer { get; init; }
+    }
+}

@@ -468,4 +468,7 @@ public sealed partial class BillerOnboardingService(
 
     [LoggerMessage(1901, LogLevel.Error, "Experience validation failed for biller {BillerId} with {FindingCount} findings")]
     private static partial void LogDefinitionValidationFailed(ILogger logger, string billerId, int findingCount);
+
+    [LoggerMessage(1902, LogLevel.Error, "Invoice seeding failed for biller {BillerId}; continuing with biller creation")]
+    private static partial void LogInvoiceSeedingFailed(ILogger logger, string billerId, Exception exception);
 }

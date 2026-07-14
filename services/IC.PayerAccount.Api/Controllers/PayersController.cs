@@ -20,7 +20,8 @@ public sealed partial class PayersController : ControllerBase
     }
 
     [HttpPost]
-    public ActionResult<PayerResponse> Register(RegisterPayerRequest request)
+    public async Task<ActionResult<PayerResponse>> Register(
+        RegisterPayerRequest request, CancellationToken cancellationToken)
     {
         if (string.IsNullOrWhiteSpace(request.Name) || string.IsNullOrWhiteSpace(request.Email))
         {
@@ -41,23 +42,25 @@ public sealed partial class PayersController : ControllerBase
             Phone: request.Phone,
             AccountNumbers: request.AccountNumbers,
             Preferences: preferences);
-        store.Add(payer);
+        await store.AddAsync(payer, cancellationToken).ConfigureAwait(false);
         LogPayerRegistered(logger, payer.PayerId, payer.BillerId, payer.AccountNumbers.Count, Activity.Current?.TraceId.ToString());
 
         return Created($"/payers/{payer.PayerId}?biller_id={payer.BillerId}", payer);
     }
 
     [HttpGet("{payerId}")]
-    public ActionResult<PayerResponse> Get(string payerId, [FromQuery(Name = "biller_id")] string billerId)
-        => store.Find(billerId, payerId)
+    public async Task<ActionResult<PayerResponse>> Get(
+        string payerId, [FromQuery(Name = "biller_id")] string billerId, CancellationToken cancellationToken)
+        => await store.FindAsync(billerId, payerId, cancellationToken).ConfigureAwait(false)
             ?? throw ServiceException.NotFound("not_found", $"payer {payerId} not found");
 
     [HttpGet]
-    public ActionResult<PayerResponse> FindByAccount(
+    public async Task<ActionResult<PayerResponse>> FindByAccount(
         [FromQuery(Name = "biller_id")] string billerId,
-        [FromQuery(Name = "account_number")] string accountNumber)
+        [FromQuery(Name = "account_number")] string accountNumber,
+        CancellationToken cancellationToken)
     {
-        var payer = store.FindByAccount(billerId, accountNumber)
+        var payer = await store.FindByAccountAsync(billerId, accountNumber, cancellationToken).ConfigureAwait(false)
             ?? throw ServiceException.NotFound("not_found", $"no payer is registered for account {accountNumber}");
         return Ok(payer);
     }
@@ -67,10 +70,13 @@ public sealed partial class PayersController : ControllerBase
     /// enabling autopay requires a payment day already set or supplied here.
     /// </summary>
     [HttpPatch("{payerId}/preferences")]
-    public ActionResult<PayerPreferences> UpdatePreferences(
-        string payerId, [FromQuery(Name = "biller_id")] string billerId, UpdatePayerPreferencesRequest request)
+    public async Task<ActionResult<PayerPreferences>> UpdatePreferences(
+        string payerId,
+        [FromQuery(Name = "biller_id")] string billerId,
+        UpdatePayerPreferencesRequest request,
+        CancellationToken cancellationToken)
     {
-        var payer = store.Find(billerId, payerId)
+        var payer = await store.FindAsync(billerId, payerId, cancellationToken).ConfigureAwait(false)
             ?? throw ServiceException.NotFound("not_found", $"payer {payerId} not found");
 
         var preferences = payer.Preferences;
@@ -81,7 +87,7 @@ public sealed partial class PayersController : ControllerBase
             PaymentDay: request.PaymentDay ?? preferences.PaymentDay);
         ValidatePreferences(updated);
 
-        store.Update(payer with { Preferences = updated });
+        await store.UpdateAsync(payer with { Preferences = updated }, cancellationToken).ConfigureAwait(false);
         LogPreferencesUpdated(logger, payerId, billerId, updated.Autopay, updated.Paperless, Activity.Current?.TraceId.ToString());
         return updated;
     }

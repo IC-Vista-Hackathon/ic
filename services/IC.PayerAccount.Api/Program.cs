@@ -1,10 +1,26 @@
 using IC.PayerAccount.Api.Storage;
+using IC.Persistence.Cosmos;
 using IC.ServiceDefaults;
+using Microsoft.Azure.Cosmos;
 
 var builder = WebApplication.CreateBuilder(args);
 
 builder.AddServiceDefaults("IC.PayerAccount.Api");
-builder.Services.AddSingleton<IPayerStore, InMemoryPayerStore>();
+
+var persistence = builder.Configuration
+    .GetSection(CosmosPersistenceOptions.SectionName)
+    .Get<CosmosPersistenceOptions>() ?? new CosmosPersistenceOptions();
+
+if (persistence.UseCosmos)
+{
+    builder.Services.AddSingleton(CosmosClientFactory.Create(persistence, "IC.PayerAccount.Api"));
+    builder.Services.AddSingleton<IPayerStore>(services =>
+        new CosmosPayerStore(services.GetRequiredService<CosmosClient>(), persistence.DatabaseName));
+}
+else
+{
+    builder.Services.AddSingleton<IPayerStore, InMemoryPayerStore>();
+}
 
 var app = builder.Build();
 

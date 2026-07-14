@@ -8,15 +8,22 @@ The control-plane service workloads are managed with Kustomize:
 
 - `base/` — namespace-agnostic Deployment/Service manifests for the four stateless API
   services (`ic-biller-experience-api`, `ic-invoice-api`, `ic-payment-api`,
-  `ic-payer-account-api`) plus the `ic-workload` service account. The Biller Experience
-  Worker is deployed via `biller-experience.template.yaml` (it needs live Cosmos/blob +
-  `ic`-namespace workload identity), so it is not part of these overlays.
+  `ic-payer-account-api`) plus the `ic-workload` service account. `base` ships the
+  in-memory `ic-biller-experience-api` (no Azure dependencies), which is what `ic-nonprod`
+  runs. The Biller Experience Worker and frontends are NOT in `base` — they need live
+  Cosmos/blob + `ic`-namespace workload identity, so they live only in the prod overlay.
 - `overlays/nonprod/` — the `ic-nonprod` namespace with its own dedicated public
   kgateway `Gateway` (`ic-hack-nonprod.eastus2.cloudapp.azure.com`, a separate Azure
   LoadBalancer from prod's). Deployed on every PR; smoke tests still use
   `kubectl port-forward` (deterministic, no wait on LB/DNS provisioning).
-- `overlays/prod/` — the `ic` namespace plus public kgateway `HTTPRoute`s. Deployed on
-  merge to `main`.
+- `overlays/prod/` — the `ic` namespace plus public kgateway `HTTPRoute`s. Adds the
+  Azure-backed biller-experience stack on top of `base`: an env patch that switches
+  `ic-biller-experience-api` to Cosmos + AI Foundry + blob + App Insights
+  (`biller-experience-api-env-patch.yaml`), and the Worker, `biller-publisher` service
+  account, Studio, and shared PWA (`biller-experience.yaml`) with their `/`, `/studio`,
+  and `/pay` routes. Deployed on merge to `main`. `kubectl apply -k overlays/prod` now
+  reproduces live prod; the App Insights connection string is the one value resolved from
+  Azure at deploy time (never committed) and substituted into the overlay.
 
 Deploys are automated by GitHub Actions (`.github/workflows/deploy-{nonprod,prod}.yml`):
 each pins every image to the commit SHA (`kustomize`/`newTag`) and runs
@@ -39,26 +46,21 @@ The publication-plane and platform objects below are static enough to stay as ra
 |---|---|
 | `base/service-account.yaml` | `ic-workload` service account, federated to `uami-ic-hack-workload` via workload identity (see `infra/bicep`); namespace set per overlay |
 | `overlays/{nonprod,prod}/namespace.yaml` | the `ic-nonprod` / `ic` namespaces |
-| `biller-experience.template.yaml` | API, worker, Studio, shared PWA renderer, services, probes, resource controls, and Gateway API routes |
-| `biller-publisher-service-account.yaml` | dedicated Azure workload identity for the artifact publisher |
+| `overlays/prod/biller-experience.yaml` | Worker, `biller-publisher` service account, Studio, shared PWA renderer, and their services (prod only) |
+| `overlays/prod/biller-experience-api-env-patch.yaml` | prod-only env patch: Cosmos + AI Foundry + blob + App Insights on `ic-biller-experience-api` |
 
-The Biller Experience template is rendered at deploy time. Replace `ACR_LOGIN_SERVER`,
-`IMAGE_TAG`, `COSMOS_ENDPOINT`, `AI_FOUNDRY_ENDPOINT`, `PAYER_EXPERIENCE_BLOB_ENDPOINT`,
-`PUBLIC_BASE_URL`, and
-`APPLICATIONINSIGHTS_CONNECTION_STRING` from the `ic-hack` subscription deployment outputs before
-passing it to `kubectl apply`. A single immutable image tag identifies the release.
+The non-secret sandbox endpoints (Cosmos, AI Foundry, blob) are literals in those files,
+matching `.env.example`. `APPLICATIONINSIGHTS_CONNECTION_STRING` is the one value resolved
+from Azure at deploy time (`az monitor app-insights component show`) and substituted with
+`envsubst`, so no connection string is committed. Image tags are pinned to the release SHA
+by the deploy workflow.
 
-**Pivot in progress:** the template's `biller-city-of-vista` Deployment/Service/HTTPRoute is a
-stand-in for what will become one shared **Payer Site Router** workload instead of one Deployment
-per biller — published payer sites only serve static content, so per-biller compute is wasted
-spend. The target: `IC.BillerExperience.Worker` uploads each biller's built static PWA bundle into
-the `payer-experiences` blob container (`infra/bicep/modules/storage.bicep`, already provisioned),
-keyed by biller_id/slug prefix, and the router resolves the biller per request and serves the
-matching prefix behind a single `HTTPRoute`. `biller-publisher-role.yaml`'s Deployment/Service/HTTPRoute
-RBAC then only applies to the isolated (paid) tier, which still gets dedicated per-biller compute.
-Not yet built: the router
-workload itself and the Worker's blob-publish logic — see root `README.md`'s "AKS publication
-model".
+**Pivot in progress:** published payer sites only serve static content, so the target is one
+shared **Payer Site Router** workload instead of one Deployment per biller. `IC.BillerExperience.Worker`
+uploads each biller's artifacts into the `payer-experiences` blob container
+(`infra/bicep/modules/storage.bicep`, already provisioned), keyed by biller_id/slug prefix, and the
+API serves the active artifact to the shared PWA. Per-biller Deployment/Service/HTTPRoute RBAC then
+only applies to the isolated (paid) tier. See root `README.md`'s "AKS publication model".
 
 Workloads that need Cosmos/AI Foundry access should run under the `ic-workload` service account
 (`serviceAccountName: ic-workload` in the pod spec) to pick up the federated identity — no
@@ -68,15 +70,23 @@ connection strings or API keys.
 in Cosmos and write to the private biller-artifacts container, but has no AI Foundry or Kubernetes
 mutation permissions. The API uses `ic-workload` to read active artifacts for the public renderer.
 
-Apply via `az aks command invoke` (this sandbox can't reach the AKS API server directly — see
-infra/bicep's README):
+The whole stack is applied by the deploy workflows with `kubectl apply -k overlays/<env>`.
+This Devin sandbox can't reach the AKS API server directly (see infra/bicep's README), so
+manual applies from here go through `az aks command invoke`.
 
-```sh
-az aks command invoke -g rg-ic-hack -n aks-ic-hack \
-  --command "kubectl apply -f namespace.yaml -f service-account.yaml -f biller-publisher-service-account.yaml" \
-  --file namespace.yaml --file service-account.yaml \
-  --file biller-publisher-service-account.yaml
-```
+The foundation API services (`ic-invoice-api`, `ic-payment-api`, `ic-payer-account-api`) persist
+to Cosmos DB (database `ic`, one container per entity, partition key `/biller_id`) via
+`DefaultAzureCredential` — no connection strings or keys. Persistence is selected at runtime
+through the `Persistence__Provider` env; the base defaults to `InMemory`, and **each overlay**
+patches in `Provider=Cosmos`, the endpoint, and the `azure.workload.identity/use: "true"` pod
+label (`overlays/{prod,nonprod}/cosmos-persistence.yaml`). The two environments point at
+**separate Cosmos accounts** — prod at `cosmos-ic-hack-<suffix>`, nonprod at
+`cosmos-ic-hack-nonprod-<suffix>` — so per-PR smoke tests exercise real Cosmos without touching
+prod data. The shared `ic-workload` identity is federated to both `system:serviceaccount:ic:ic-workload`
+and `system:serviceaccount:ic-nonprod:ic-workload` (`infra/bicep/modules/aks.bicep`) so pods in
+either namespace can obtain a Cosmos token. With shared Cosmos state each env is safe to scale
+(kept at 1 for the sandbox). Manifests live under `base/` and deploy through the Kustomize
+overlays above.
 
 ## Gateway API / kgateway ingress
 
@@ -160,7 +170,7 @@ publicly resolvable, and it's serving real HTTP traffic.
 
 ### Shared payer route
 
-`biller-experience.template.yaml` attaches one `/pay` path-prefix route to the shared
+`overlays/prod/httproutes.yaml` attaches one `/pay` path-prefix route to the shared
 `ic-biller-payments-pwa` service. The renderer extracts the biller slug from `/pay/{slug}/` and
 loads the corresponding active artifact through the Biller Experience API. Publishing a biller
 does not create or mutate Kubernetes resources.

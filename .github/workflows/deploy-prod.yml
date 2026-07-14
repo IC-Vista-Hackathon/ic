@@ -55,6 +55,20 @@ jobs:
           sed -i "s/newTag: latest/newTag: ${IMAGE_TAG}/" "${OVERLAY}/kustomization.yaml"
           grep 'newTag' "${OVERLAY}/kustomization.yaml"
 
+      # The biller-experience API/Worker export traces and metrics to Application
+      # Insights when APPLICATIONINSIGHTS_CONNECTION_STRING is set. Resolve it from
+      # Azure (not committed — it is a connection string) and substitute the single
+      # placeholder in the prod overlay so the deployed pods keep sending telemetry.
+      - name: Inject Application Insights connection string
+        run: |
+          APPLICATIONINSIGHTS_CONNECTION_STRING="$(az monitor app-insights component show \
+            --resource-group "$AKS_RG" --app appi-ic-hack \
+            --query connectionString -o tsv)"
+          export APPLICATIONINSIGHTS_CONNECTION_STRING
+          for f in "${OVERLAY}/biller-experience.yaml" "${OVERLAY}/biller-experience-api-env-patch.yaml"; do
+            envsubst '${APPLICATIONINSIGHTS_CONNECTION_STRING}' < "$f" > "$f.tmp" && mv "$f.tmp" "$f"
+          done
+
       - name: Deploy
         run: kubectl apply -k "${OVERLAY}"
 

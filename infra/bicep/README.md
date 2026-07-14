@@ -34,7 +34,7 @@ Re-run the same command to apply changes; Bicep is idempotent (ARM incremental d
 | Log Analytics workspace | AKS Container Insights |
 | ACR (Basic) | Single registry, no promotion tiers |
 | Storage account (Standard_LRS, StorageV2) + `payer-experiences` blob container | Holds every biller's immutable experience artifacts and active pointer. The publisher identity gets `Storage Blob Data Contributor`; the API workload identity gets `Storage Blob Data Reader`; optional service principals can receive contributor/reader access through `payerExperienceBlobContributorPrincipalIds`/`payerExperienceBlobReaderPrincipalIds`; keys and anonymous access are disabled |
-| Cosmos DB (serverless) | Containers per entities.md, partitioned `/biller_id` (`/id` for `billers`) |
+| Cosmos DB (serverless), two accounts | `cosmos-ic-hack-<suffix>` (prod) and `cosmos-ic-hack-nonprod-<suffix>` (per-PR nonprod) — same containers per entities.md, partitioned `/biller_id` (`/id` for `billers`), so nonprod smoke tests never touch prod data |
 | AI Foundry account + project | Hosts agents (services.md's "AI Foundry" plane) |
 | AKS (2-4 node autoscale, kubenet) | Runs services + agents |
 | User-assigned managed identities | `ic-workload` authenticates to Cosmos, AI Foundry, and Blob read; `biller-publisher` authenticates to Cosmos and Blob write with no secrets |

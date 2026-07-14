@@ -9,11 +9,32 @@ resources:
   - namespace.yaml
   - ../../base
   - httproutes.yaml
+  # Cosmos/AI-backed Worker + frontends. Prod-only: workload identity is federated
+  # to service accounts in the `ic` namespace only, so this does not belong in the
+  # shared base or in ic-nonprod.
+  - biller-experience.yaml
+
+# Prod runs the Azure-backed biller-experience-api (Cosmos + AI Foundry + blob +
+# App Insights); the base ships the in-memory variant that nonprod keeps.
+patches:
+  - path: biller-experience-api-env-patch.yaml
+
+# Cosmos-backed persistence + workload-identity opt-in for the foundation services.
+# Prod-only: the workload identity is federated to system:serviceaccount:ic:ic-workload,
+# so only this namespace can authenticate to Cosmos. nonprod uses the base InMemory default.
+patches:
+  - path: cosmos-persistence.yaml
 
 # `kustomize edit set image <name>=<name>:<sha>` in the deploy workflow pins every
 # image to the merged commit's immutable tag. `latest` here is only a placeholder.
 images:
   - name: acrichackjk4zmntatjem4.azurecr.io/ic-biller-experience-api
+    newTag: latest
+  - name: acrichackjk4zmntatjem4.azurecr.io/ic-biller-experience-worker
+    newTag: latest
+  - name: acrichackjk4zmntatjem4.azurecr.io/ic-biller-experience-studio
+    newTag: latest
+  - name: acrichackjk4zmntatjem4.azurecr.io/ic-biller-payments-pwa
     newTag: latest
   - name: acrichackjk4zmntatjem4.azurecr.io/ic-invoice-api
     newTag: latest
