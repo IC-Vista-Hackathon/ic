@@ -74,3 +74,33 @@ jobs:
 
       - name: Functional smoke tests
         run: ./scripts/smoke-test.sh ic-nonprod
+
+      - name: Set up .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          global-json-file: global.json
+
+      - name: Functional tests (dotnet, via gateway)
+        env:
+          # Drive the deployed APIs through the nonprod gateway (path-based routing),
+          # port-forwarded for determinism — no wait on LB/DNS.
+          IC_FUNCTIONAL_BASE_URL: http://localhost:8080
+        run: |
+          kubectl port-forward -n ic-nonprod svc/ic-nonprod-gateway 8080:80 >/dev/null 2>&1 &
+          trap 'kill %1 2>/dev/null || true' EXIT
+          for i in $(seq 1 30); do
+            curl -fsS -o /dev/null "http://localhost:8080/invoices/health/ready" && break
+            sleep 1
+          done
+          dotnet test tests/Pronto.FunctionalTests/Pronto.FunctionalTests.csproj \
+            -c Release --filter "Category=Functional" \
+            --logger "trx;LogFileName=functional-results.trx" \
+            --results-directory ./test-results
+
+      - name: Upload functional test results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: functional-test-results
+          path: ./test-results
+          if-no-files-found: ignore
