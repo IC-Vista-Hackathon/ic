@@ -47,9 +47,11 @@ ic/
 │   └── IC.BillerPayments.Pwa/       Payer Experience — config-driven, one codebase, N deployments
 ├── deploy/
 │   ├── helm/                        charts for control plane + generated biller workloads (not yet populated)
-│   └── kubernetes/                  shared namespace, RBAC, network policy, local dev manifests (not yet populated)
+│   └── kubernetes/                  namespace, RBAC, gateway, and workload manifests (populated, see below)
 ├── infra/
-│   └── bicep/                       hackathon sandbox infra: Cosmos, AI Foundry, AKS, ACR
+│   └── bicep/                       hackathon sandbox infra: Cosmos, AI Foundry, AKS, ACR, App Insights,
+│                                     managed Prometheus/Grafana, and a Storage Account for published
+│                                     Payer Experience SPAs (see "Payer Experience hosting pivot" below)
 ├── agents/                          AI Foundry agent definitions, one subdirectory per agent
 │                                    (instructions.md + tools.json each)
 ├── design/                          original system design — source of truth for entities,
@@ -98,6 +100,20 @@ Docs to read before making non-trivial changes:
   under `services/`; Notification keeps its wire behavior defined in `design/contracts.md` until
   it gets its own versioned project. Wire format is snake_case with lowercase string enums —
   non-Invoice hosts get it from `libraries/IC.ServiceDefaults`.
+- **Payer Experience hosting pivot: shared router + Blob Storage, not one Deployment per biller.**
+  The original AKS publication model (still what's implemented today — see `biller-city-of-vista`
+  in `deploy/kubernetes/biller-experience.template.yaml`) gives every published biller its own
+  Kubernetes Deployment/Service/HTTPRoute running the same PWA image. We're moving off that: the
+  Worker instead uploads each biller's built static PWA bundle into the shared `payer-experiences`
+  blob container (keyed by biller_id/slug prefix), and a single shared router workload resolves
+  the biller from the request and serves the matching prefix — because these pods only ever serve
+  static content, not per-biller logic, one router replaces N per-biller Deployments. The Storage
+  Account (`modules/storage.bicep`) is live: `ic-workload` — the same identity already used for
+  Cosmos/AI Foundry — has `Storage Blob Data Contributor` on it, covering both the Worker's writes
+  and the router's reads; no separate identity per role. Still to build: the router workload
+  itself and the Worker logic that builds/uploads a biller's bundle and updates publish status.
+  See `design/services.md`'s Deployment Service and Payer Experience rows, and `README.md`'s "AKS
+  publication model" section, both updated for this target.
 
 ## Git workflow
 
@@ -119,9 +135,28 @@ against `main`. Do not commit or push straight to `main`.
   is a standalone hackathon sandbox subscription, not InvoiceCloud's landing zone — no ADO
   pipeline, no Terraform, plain Bicep deployed via `az`.
 
-## Current state (foundation phase)
+## Current state
 
-`IC.Invoice.Api`, `IC.Payment.Api`, and `IC.PayerAccount.Api` each have a multi-stage Dockerfile
-(build context = repo root). `deploy/helm/` and `deploy/kubernetes/` remain mostly placeholder
-READMEs. Don't assume build/deploy tooling exists beyond what's described above — check before
-relying on it.
+All 5 services and both frontends have Dockerfiles. `deploy/kubernetes/` is populated (namespace,
+RBAC, kgateway/Gateway API routing, and the unified biller-experience template) — `deploy/helm/`
+is still just a placeholder README.
+
+- `IC.BillerExperience.Api` is the most complete piece: real onboarding orchestration
+  (Discover → Draft → Validate → Preview → Approve), Cosmos + in-memory persistence, deterministic
+  and Azure OpenAI draft generation. Phases 1-4 of the delivery plan are done.
+- `IC.Invoice.Api`, `IC.Payment.Api`, `IC.PayerAccount.Api` have real controllers/domain logic.
+  `IC.Payment.Api`'s `IBillerAccountClient` is an intentional no-op stub (Biller Experience API has
+  no account-status endpoint yet).
+- **`IC.BillerExperience.Worker` is still a scaffold** — `PublicationWorker.cs` logs "ready" and
+  does `Task.Delay(Infinite)`; it does not yet watch for publication requests or do anything.
+  Phase 5 ("AKS publication") is entirely unimplemented, and is being replaced by the storage +
+  router pivot described above rather than the original per-biller-Deployment design.
+- `IC.BillerExperience.Studio` and `IC.BillerPayments.Pwa` are small but functional React apps.
+  The PWA currently runs against a local `DemoPaymentExperienceProvider`, not the real
+  Payment/Invoice/PayerAccount services.
+- Test coverage is thin outside Invoice/Payment; `BillerExperience.IntegrationTests` and
+  `BillerExperience.Worker.Tests` have zero test files.
+- The public Gateway endpoint (`ic-hack.eastus2.cloudapp.azure.com`) is live and verified.
+
+Don't assume build/deploy tooling exists beyond what's described above — check before relying on
+it.

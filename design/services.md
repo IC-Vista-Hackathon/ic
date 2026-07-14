@@ -11,6 +11,7 @@ Foundry) read/write through service APIs via tools. Agents never touch storage d
 | **Biller Configuration Service** | BillerAccount, BillerConfiguration | Config CRUD (merge-patch), versioning, publish; the single write target for onboarding agents |
 | **Deployment Service** | Deployment | Preview + go-live publishing; shared multi-tenant render vs isolated dedicated instance |
 | **Payer Experience** | — (shared web app) | Branded portal rendered from versioned Blob artifacts; PWA (manifest, service worker, notifications); one codebase, horizontally scaled shared deployment |
+| **Payer Experience API** | — (shared service) | Privately reads each biller's active versioned Blob artifact and exposes only the public-safe definition and manifest to the renderer |
 | **Invoice Service** | Invoice | Seed fake invoices at onboarding; lookup by biller + account number |
 | **Payment Service** | Payment, Purchase | Mock authorization, fee calculation from config, confirmations; also processes the biller's platform purchase (dogfood) |
 | **Payer Account Service** | PayerAccount | Registration, preferences, linked accounts, AutoPay enrollment |

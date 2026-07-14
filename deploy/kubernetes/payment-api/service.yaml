@@ -1,0 +1,15 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: ic-payment-api
+  namespace: ic
+  labels:
+    app: ic-payment-api
+spec:
+  type: ClusterIP
+  selector:
+    app: ic-payment-api
+  ports:
+    - name: http
+      port: 8080
+      targetPort: http

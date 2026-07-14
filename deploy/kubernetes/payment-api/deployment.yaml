@@ -1,10 +1,10 @@
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: ic-invoice-api
+  name: ic-payment-api
   namespace: ic
   labels:
-    app: ic-invoice-api
+    app: ic-payment-api
     app.kubernetes.io/part-of: ic
 spec:
   # In-memory stores: replicas MUST stay 1 until Cosmos lands — with 2+, seeds
@@ -12,23 +12,25 @@ spec:
   replicas: 1
   selector:
     matchLabels:
-      app: ic-invoice-api
+      app: ic-payment-api
   template:
     metadata:
       labels:
-        app: ic-invoice-api
+        app: ic-payment-api
     spec:
       # Platform-provisioned SA (federated to the workload UAMI). No Azure
-      # dependency yet, so the workload-identity pod label is intentionally
-      # omitted until the service talks to Cosmos.
+      # dependency yet — in-memory stores; Cosmos comes later.
       serviceAccountName: ic-workload
       containers:
-        - name: invoice-api
-          image: acrichackjk4zmntatjem4.azurecr.io/ic-invoice-api:v1
+        - name: payment-api
+          image: acrichackjk4zmntatjem4.azurecr.io/ic-payment-api:v1
           ports:
             - name: http
               containerPort: 8080
-          # Endpoints added in IC.Invoice.Api specifically for k8s probing.
+          env:
+            # In-cluster Invoice Service (replaces the localhost dev default).
+            - name: Services__InvoiceApi
+              value: http://ic-invoice-api.ic.svc.cluster.local:8080
           readinessProbe:
             httpGet:
               path: /health/ready

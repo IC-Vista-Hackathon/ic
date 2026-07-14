@@ -14,7 +14,8 @@ Phases 2 through 4 now provide a runnable local vertical slice: versioned contro
 agent-assisted onboarding with a deterministic fallback, Cosmos and in-memory repositories,
 approval and idempotent publication requests, the Biller Studio, and a configuration-driven payer
 PWA. Phase 5 publishes immutable per-biller artifacts to Azure Blob Storage and activates them in
-the shared payer renderer.
+the shared payer renderer. The supporting payment experience is still backed by local demo
+providers until the existing InvoiceCloud payment APIs are connected.
 
 The documents under [`design/`](design/README.md) came from the original `main` branch and remain
 the source of truth for supporting service responsibilities, entities, REST behavior, and agent
@@ -201,7 +202,7 @@ the existing entity-container model and adds a separate container only for orche
 | --- | --- | --- |
 | `billers` | `/id` | tenant-root `BillerAccount` documents |
 | `configs` | `/biller_id` | versioned biller experience configuration |
-| `deployments` | `/biller_id` | published deployment records |
+| `deployments` | `/biller_id` | published deployment records (target: includes the blob container/prefix a revision was published to, for shared-tier billers) |
 | `orchestration_runs` | `/biller_id` | sessions, checkpoints, sanitized interactions, publish jobs |
 
 Invoice, payment, purchase, payer-account, and notification containers remain owned by their
@@ -242,6 +243,9 @@ Two deliberately small frontends are planned:
 Every biller uses the same vetted, horizontally replicated renderer. The URL slug selects a
 private, API-delivered active artifact, while immutable revisions remain available for audit and
 rollback. Generated content is data only and cannot introduce executable JavaScript.
+
+Isolated-tier billers remain a future exception and may receive dedicated compute when regulatory,
+scaling, or executable-customization requirements justify it.
 
 ## Publication model
 
@@ -318,17 +322,24 @@ readiness/restarts, Cosmos throttling, PWA availability, and payment-page reques
 - [x] Add a typed payment provider boundary with a local demo provider until the documented
   supporting payment and invoice services are available.
 
-### Phase 5 — AKS publication
+### Phase 5 — Payer site publication (pivoted to shared router + Blob Storage)
 
-- Implement fixed Kubernetes resource generation and server-side apply.
-- Add readiness waiting, route smoke test, status persistence, rollback, and reconciliation.
-- Add namespace RBAC, workload identity, network policy, and pod security.
+- [x] Add a Storage Account to `infra/bicep` (`payer-experiences` blob container, workload-identity
+  RBAC via the shared `ic-workload` identity's Blob Data Contributor grant).
+- [ ] Implement Worker publish logic: build a biller's static PWA bundle from its approved
+  configuration, upload to a `biller_id`-keyed blob container/prefix, retain the previous revision
+  for rollback, and persist publish status.
+- [ ] Build the shared Payer Site Router workload: resolve biller from the request, serve the
+  matching blob prefix, single `HTTPRoute` for all shared-tier billers.
+- [ ] Add rollout smoke test against the router and reconciliation.
+- [ ] Isolated tier (paid upgrade): keep the original per-biller Deployment/Service/HTTPRoute path
+  (namespace RBAC, network policy, pod security) for billers who pay for dedicated compute.
 
 ### Phase 6 — Azure platform and hardening
 
-- Provision AKS, ACR, Cosmos DB, Key Vault, Azure Monitor, Application Insights, managed
-  Prometheus, and Managed Grafana with Bicep.
-- Add dashboards, alerts, runbooks, audit retention, load tests, and failure exercises.
+- [x] Provision AKS, ACR, Cosmos DB, Storage Account, Application Insights, managed Prometheus, and
+  Managed Grafana with Bicep. Key Vault not yet started.
+- [ ] Add dashboards, alerts, runbooks, audit retention, load tests, and failure exercises.
 
 ## Definition of the first vertical slice
 
