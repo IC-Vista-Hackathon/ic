@@ -13,6 +13,8 @@
   </ItemGroup>
   <ItemGroup>
     <ProjectReference Include="..\..\contracts\Pronto.BillerExperience.Contracts\Pronto.BillerExperience.Contracts.csproj" />
+    <ProjectReference Include="..\..\contracts\Pronto.Invoice.Contracts\Pronto.Invoice.Contracts.csproj" />
     <ProjectReference Include="..\..\libraries\Pronto.Agentic.Orchestration\Pronto.Agentic.Orchestration.csproj" />
+    <ProjectReference Include="..\..\libraries\Pronto.ServiceDefaults\Pronto.ServiceDefaults.csproj" />
   </ItemGroup>
 </Project>

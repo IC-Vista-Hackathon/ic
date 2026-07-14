@@ -15,12 +15,14 @@ WORKDIR /src
 COPY global.json NuGet.config Directory.Build.props Directory.Packages.props ./
 COPY contracts/Pronto.Invoice.Contracts/Pronto.Invoice.Contracts.csproj contracts/Pronto.Invoice.Contracts/
 COPY libraries/Pronto.Persistence.Cosmos/Pronto.Persistence.Cosmos.csproj libraries/Pronto.Persistence.Cosmos/
+COPY libraries/Pronto.ServiceDefaults/Pronto.ServiceDefaults.csproj libraries/Pronto.ServiceDefaults/
 COPY services/Pronto.Invoice.Api/Pronto.Invoice.Api.csproj services/Pronto.Invoice.Api/
 RUN dotnet restore services/Pronto.Invoice.Api/Pronto.Invoice.Api.csproj
 
 # Copy the actual sources and publish a Release build.
 COPY contracts/Pronto.Invoice.Contracts/ contracts/Pronto.Invoice.Contracts/
 COPY libraries/Pronto.Persistence.Cosmos/ libraries/Pronto.Persistence.Cosmos/
+COPY libraries/Pronto.ServiceDefaults/ libraries/Pronto.ServiceDefaults/
 COPY services/Pronto.Invoice.Api/ services/Pronto.Invoice.Api/
 RUN dotnet publish services/Pronto.Invoice.Api/Pronto.Invoice.Api.csproj \
     -c Release --no-restore -o /app/publish

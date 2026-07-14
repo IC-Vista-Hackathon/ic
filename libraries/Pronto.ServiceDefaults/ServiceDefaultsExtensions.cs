@@ -1,18 +1,40 @@
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using Azure.Monitor.OpenTelemetry.AspNetCore;
 using Pronto.ServiceDefaults.Errors;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
+using OpenTelemetry.Resources;
 
 namespace Pronto.ServiceDefaults;
 
 public static class ServiceDefaultsExtensions
 {
+    public static WebApplicationBuilder AddServiceDefaults(this WebApplicationBuilder builder, string serviceName)
+    {
+        builder.Logging.ClearProviders();
+        builder.Logging.AddJsonConsole(options =>
+        {
+            options.IncludeScopes = true;
+            options.TimestampFormat = "yyyy-MM-ddTHH:mm:ss.fffZ";
+            options.UseUtcTimestamp = true;
+        });
+        builder.Services.AddServiceDefaults();
+        var telemetry = builder.Services.AddOpenTelemetry()
+            .ConfigureResource(resource => resource.AddService(serviceName));
+        if (!string.IsNullOrWhiteSpace(builder.Configuration["APPLICATIONINSIGHTS_CONNECTION_STRING"]))
+        {
+            telemetry.UseAzureMonitor();
+        }
+        return builder;
+    }
+
     /// <summary>
     /// Controllers + wire policy (snake_case, lowercase string enums — design/contracts.md,
     /// matching Pronto.Invoice.Api), error envelope for model-binding failures, and health checks.
-    /// Every Pronto service host calls this.
+    /// Every IC service host calls this.
     /// </summary>
     public static IServiceCollection AddServiceDefaults(this IServiceCollection services)
     {
@@ -37,12 +59,14 @@ public static class ServiceDefaultsExtensions
                 });
 
         services.AddHealthChecks();
+        services.AddTransient<CorrelationPropagationHandler>();
         return services;
     }
 
     /// <summary>Error-envelope exception handling, controller routing, and health endpoints.</summary>
     public static WebApplication UseServiceDefaults(this WebApplication app)
     {
+        app.UseMiddleware<RequestObservabilityMiddleware>();
         app.UseMiddleware<ErrorEnvelopeMiddleware>();
         app.MapControllers();
         app.MapHealthChecks("/health/live");

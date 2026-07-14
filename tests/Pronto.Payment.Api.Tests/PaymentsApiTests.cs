@@ -131,4 +131,21 @@ public sealed class PaymentsApiTests : IClassFixture<WebApplicationFactory<Progr
             "purchases", new CreatePurchaseRequest(billerId, PurchasePlan.Shared), Wire);
         Assert.Equal(HttpStatusCode.Conflict, second.StatusCode);
     }
+
+    [Fact]
+    public async Task PaymentHistoryCanBeFilteredByPayerAccount()
+    {
+        var billerId = Guid.NewGuid().ToString();
+        var firstInvoice = fakeInvoices.AddDueInvoice(billerId, amountCents: 4200);
+        var secondInvoice = fakeInvoices.AddDueInvoice(billerId, amountCents: 5300);
+        await client.PostAsJsonAsync("payments", new CreatePaymentRequest(billerId, firstInvoice.Id, "card", "payer-1"), Wire);
+        await client.PostAsJsonAsync("payments", new CreatePaymentRequest(billerId, secondInvoice.Id, "ach", "payer-2"), Wire);
+
+        var history = await client.GetFromJsonAsync<PaymentResponse[]>(
+            $"payments?biller_id={billerId}&payer_account_id=payer-1", Wire);
+
+        var payment = Assert.Single(history!);
+        Assert.Equal("payer-1", payment.PayerAccountId);
+        Assert.Equal(firstInvoice.Id, payment.InvoiceId);
+    }
 }

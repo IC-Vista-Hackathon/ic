@@ -9,6 +9,7 @@ public interface IPayerStore
     Task AddAsync(PayerResponse payer, CancellationToken cancellationToken = default);
 
     Task<PayerResponse?> FindAsync(string billerId, string payerId, CancellationToken cancellationToken = default);
+    Task<PayerResponse?> FindByAccountAsync(string billerId, string accountNumber, CancellationToken cancellationToken = default);
 
     Task UpdateAsync(PayerResponse payer, CancellationToken cancellationToken = default);
 }
@@ -42,6 +43,16 @@ public sealed class InMemoryPayerStore : IPayerStore
         lock (gate)
         {
             return Task.FromResult(payers.GetValueOrDefault((billerId, payerId)));
+        }
+    }
+
+    public Task<PayerResponse?> FindByAccountAsync(
+        string billerId, string accountNumber, CancellationToken cancellationToken = default)
+    {
+        lock (gate)
+        {
+            return Task.FromResult(payers.Values.FirstOrDefault(payer => payer.BillerId == billerId
+                && payer.AccountNumbers.Contains(accountNumber, StringComparer.Ordinal)));
         }
     }
 

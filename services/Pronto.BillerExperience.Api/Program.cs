@@ -15,6 +15,7 @@ using Pronto.BillerExperience.Api.Infrastructure.SupportingServices;
 using Pronto.Agentic.Orchestration.Abstractions;
 using Pronto.Agentic.Orchestration.Execution;
 using Pronto.Agentic.Orchestration.Telemetry;
+using Pronto.ServiceDefaults;
 using Microsoft.Azure.Cosmos;
 using OpenTelemetry.Metrics;
 using OpenTelemetry.Resources;
@@ -39,8 +40,9 @@ builder.Services.AddSingleton<BillerOnboardingService>();
 builder.Services.AddSingleton<DeterministicExperienceDraftGenerator>();
 if (Uri.TryCreate(options.SupportingServices.InvoiceBaseUrl, UriKind.Absolute, out var invoiceBaseUri))
 {
+    builder.Services.AddHttpClient("invoice-seeder", client => client.BaseAddress = invoiceBaseUri);
     builder.Services.AddSingleton<IInvoiceSeeder>(services => new HttpInvoiceSeeder(
-        new HttpClient { BaseAddress = invoiceBaseUri },
+        services.GetRequiredService<IHttpClientFactory>().CreateClient("invoice-seeder"),
         services.GetRequiredService<ILogger<HttpInvoiceSeeder>>()));
 }
 else
@@ -137,6 +139,7 @@ if (!string.IsNullOrWhiteSpace(builder.Configuration["APPLICATIONINSIGHTS_CONNEC
 
 var app = builder.Build();
 
+app.UseMiddleware<RequestObservabilityMiddleware>();
 app.UseExceptionHandler();
 app.UseCors();
 app.MapControllers();

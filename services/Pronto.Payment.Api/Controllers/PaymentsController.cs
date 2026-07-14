@@ -1,4 +1,5 @@
 using System.Security.Cryptography;
+using System.Diagnostics;
 using Pronto.Invoice.Contracts.V1.Invoices;
 using Pronto.Payment.Api.Clients;
 using Pronto.Payment.Api.Fees;
@@ -11,19 +12,21 @@ namespace Pronto.Payment.Api.Controllers;
 
 [ApiController]
 [Route("payments")]
-public sealed class PaymentsController : ControllerBase
+public sealed partial class PaymentsController : ControllerBase
 {
     private const string ConfirmationAlphabet = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
 
     private readonly IPaymentStore store;
     private readonly IInvoiceClient invoices;
     private readonly IBillerConfigClient configs;
+    private readonly ILogger<PaymentsController> logger;
 
-    public PaymentsController(IPaymentStore store, IInvoiceClient invoices, IBillerConfigClient configs)
+    public PaymentsController(IPaymentStore store, IInvoiceClient invoices, IBillerConfigClient configs, ILogger<PaymentsController> logger)
     {
         this.store = store;
         this.invoices = invoices;
         this.configs = configs;
+        this.logger = logger;
     }
 
     [HttpPost]
@@ -75,6 +78,7 @@ public sealed class PaymentsController : ControllerBase
             ReceiptMessage: config.ReceiptMessage,
             CreatedAt: DateTimeOffset.UtcNow);
         await store.AddAsync(payment, cancellationToken).ConfigureAwait(false);
+        LogPaymentCreated(logger, payment.PaymentId, payment.BillerId, payment.InvoiceId, payment.Status, payment.TotalCents, Activity.Current?.TraceId.ToString());
 
         return Created($"/payments/{payment.PaymentId}?biller_id={payment.BillerId}", payment);
     }
@@ -84,6 +88,18 @@ public sealed class PaymentsController : ControllerBase
         string paymentId, [FromQuery(Name = "biller_id")] string billerId, CancellationToken cancellationToken)
         => await store.FindAsync(billerId, paymentId, cancellationToken).ConfigureAwait(false)
             ?? throw ServiceException.NotFound("not_found", $"payment {paymentId} not found");
+
+    [HttpGet]
+    public async Task<ActionResult<IReadOnlyList<PaymentResponse>>> List(
+        [FromQuery(Name = "biller_id")] string billerId,
+        [FromQuery(Name = "payer_account_id")] string? payerAccountId,
+        [FromQuery(Name = "invoice_id")] string? invoiceId,
+        CancellationToken cancellationToken)
+    {
+        var results = await store.ListAsync(billerId, payerAccountId, invoiceId, cancellationToken).ConfigureAwait(false);
+        LogPaymentsListed(logger, billerId, payerAccountId, invoiceId, results.Count, Activity.Current?.TraceId.ToString());
+        return Ok(results);
+    }
 
     private static string MintConfirmation()
     {
@@ -95,4 +111,9 @@ public sealed class PaymentsController : ControllerBase
 
         return $"PRONTO-{new string(code)}";
     }
+
+    [LoggerMessage(4100, LogLevel.Information, "Created payment {PaymentId} for biller {BillerId}, invoice {InvoiceId}, status {Status}, total {TotalCents}; trace {TraceId}")]
+    private static partial void LogPaymentCreated(ILogger logger, string paymentId, string billerId, string invoiceId, PaymentStatus status, int totalCents, string? traceId);
+    [LoggerMessage(4101, LogLevel.Information, "Listed {PaymentCount} payments for biller {BillerId}, payer {PayerAccountId}, invoice {InvoiceId}; trace {TraceId}")]
+    private static partial void LogPaymentsListed(ILogger logger, string billerId, string? payerAccountId, string? invoiceId, int paymentCount, string? traceId);
 }

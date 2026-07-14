@@ -1,8 +1,11 @@
 using System.Diagnostics;
+using System.Net;
+using System.Text;
 using Pronto.BillerExperience.Api.Application;
 using Pronto.BillerExperience.Api.Infrastructure;
 using Pronto.BillerExperience.Api.Infrastructure.AI;
 using Pronto.BillerExperience.Api.Infrastructure.Persistence;
+using Pronto.BillerExperience.Api.Infrastructure.SupportingServices;
 using Pronto.BillerExperience.Contracts.V1.Billers;
 using Pronto.BillerExperience.Contracts.V1.Deployments;
 using Pronto.BillerExperience.Contracts.V1.Experiences;
@@ -114,13 +117,81 @@ public sealed class BillerOnboardingServiceTests
         Assert.Equal(["ach"], chat.Draft.Definition.Preferences.AcceptedMethods);
     }
 
-    private static BillerOnboardingService CreateService()
+    [Fact]
+    public async Task CreatingBillerSeedsItsInvoiceData()
+    {
+        var seeder = new RecordingInvoiceSeeder();
+        var service = CreateService(seeder);
+
+        var created = await service.CreateAsync(CreateRequest(), CancellationToken.None);
+
+        Assert.Equal(created.Biller.BillerId, seeder.BillerId);
+        Assert.Equal("Utility", seeder.BillType);
+    }
+
+    [Fact]
+    public async Task InvoiceSeedFailureFailsBillerCreation()
+    {
+        var service = CreateService(new RecordingInvoiceSeeder(new InvalidOperationException("seed failed")));
+
+        var exception = await Assert.ThrowsAsync<InvalidOperationException>(async () =>
+            await service.CreateAsync(CreateRequest(), CancellationToken.None));
+
+        Assert.Equal("seed failed", exception.Message);
+    }
+
+    [Fact]
+    public async Task HttpInvoiceSeederUsesSnakeCaseContractAndFixedPreviewAccount()
+    {
+        var handler = new RecordingHttpHandler();
+        var client = new HttpClient(handler) { BaseAddress = new Uri("http://invoice.test/") };
+        var seeder = new HttpInvoiceSeeder(client, NullLogger<HttpInvoiceSeeder>.Instance);
+
+        await seeder.SeedAsync("biller-1", "Utility", CancellationToken.None);
+
+        Assert.Contains("\"account_number\":\"4421\"", handler.RequestBody, StringComparison.Ordinal);
+        Assert.Contains("\"bill_type\":\"Utility\"", handler.RequestBody, StringComparison.Ordinal);
+    }
+
+    private static BillerOnboardingService CreateService(IInvoiceSeeder? seeder = null)
     {
         var repository = new InMemoryBillerExperienceRepository();
         var generator = new DeterministicExperienceDraftGenerator(NullLogger<DeterministicExperienceDraftGenerator>.Instance);
-        return new(repository, generator, NullLogger<BillerOnboardingService>.Instance);
+        return new(repository, generator, NullLogger<BillerOnboardingService>.Instance, seeder);
     }
 
     private static CreateBillerRequest CreateRequest() =>
         new("City of Vista", "city-of-vista", "Utility", "02110", new Uri("https://vista.example"));
+
+    private sealed class RecordingInvoiceSeeder(Exception? failure = null) : IInvoiceSeeder
+    {
+        public string? BillerId { get; private set; }
+        public string? BillType { get; private set; }
+
+        public ValueTask SeedAsync(string billerId, string billType, CancellationToken cancellationToken)
+        {
+            if (failure is not null) throw failure;
+            BillerId = billerId;
+            BillType = billType;
+            return ValueTask.CompletedTask;
+        }
+    }
+
+    private sealed class RecordingHttpHandler : HttpMessageHandler
+    {
+        public string RequestBody { get; private set; } = string.Empty;
+
+        protected override async Task<HttpResponseMessage> SendAsync(
+            HttpRequestMessage request, CancellationToken cancellationToken)
+        {
+            RequestBody = await request.Content!.ReadAsStringAsync(cancellationToken);
+            return new HttpResponseMessage(HttpStatusCode.Created)
+            {
+                Content = new StringContent(
+                    "{\"seeded\":4,\"account_number\":\"4421\",\"invoices\":[]}",
+                    Encoding.UTF8,
+                    "application/json"),
+            };
+        }
+    }
 }
