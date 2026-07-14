@@ -73,6 +73,11 @@ public sealed class InvoicesController : ControllerBase
         [FromQuery(Name = "account_number")] string? accountNumber,
         CancellationToken cancellationToken)
     {
+        if (string.IsNullOrWhiteSpace(billerId))
+        {
+            return BadRequest(ApiError.Of("invalid_biller", "biller_id is required."));
+        }
+
         if (string.IsNullOrWhiteSpace(accountNumber))
         {
             return BadRequest(ApiError.Of("invalid_account_number", "account_number is required."));

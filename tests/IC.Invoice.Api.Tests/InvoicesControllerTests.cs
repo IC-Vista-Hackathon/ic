@@ -158,6 +158,20 @@ public sealed class InvoicesControllerTests
         Assert.Equal("invalid_account_number", error.Error.Code);
     }
 
+    [Fact]
+    public async Task ListRejectsBlankBillerId()
+    {
+        var controller = NewController(out _);
+
+        // billerId is validated before account_number, mirroring Seed — a blank
+        // biller must 400, not silently query with an invalid key and return [].
+        var result = await controller.List("  ", "ACCT-1", CancellationToken.None);
+
+        var badRequest = Assert.IsType<BadRequestObjectResult>(result);
+        var error = Assert.IsType<ApiError>(badRequest.Value);
+        Assert.Equal("invalid_biller", error.Error.Code);
+    }
+
     private sealed class FixedTimeProvider(DateTimeOffset now) : TimeProvider
     {
         public override DateTimeOffset GetUtcNow() => now;
