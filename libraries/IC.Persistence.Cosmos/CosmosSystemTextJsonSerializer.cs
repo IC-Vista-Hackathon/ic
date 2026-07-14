@@ -17,17 +17,18 @@ public sealed class CosmosSystemTextJsonSerializer : CosmosSerializer
 
     public override T FromStream<T>(Stream stream)
     {
+        // The SDK passes some payloads (e.g. raw feed responses) through as Stream;
+        // hand ownership to the caller without disposing it.
+        if (typeof(Stream).IsAssignableFrom(typeof(T)))
+        {
+            return (T)(object)stream;
+        }
+
         using (stream)
         {
             if (stream.CanSeek && stream.Length == 0)
             {
                 return default!;
-            }
-
-            // The SDK passes some payloads (e.g. raw feed responses) through as Stream.
-            if (typeof(Stream).IsAssignableFrom(typeof(T)))
-            {
-                return (T)(object)stream;
             }
 
             return JsonSerializer.Deserialize<T>(stream, options)!;
