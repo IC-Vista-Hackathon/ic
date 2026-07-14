@@ -65,6 +65,25 @@ module aiFoundry 'modules/aiFoundry.bicep' = {
   }
 }
 
+module appInsights 'modules/appInsights.bicep' = {
+  name: 'appInsights'
+  scope: rg
+  params: {
+    name: 'appi-${prefix}'
+    location: location
+    logAnalyticsWorkspaceId: logAnalytics.outputs.id
+  }
+}
+
+module monitorWorkspace 'modules/monitorWorkspace.bicep' = {
+  name: 'monitorWorkspace'
+  scope: rg
+  params: {
+    name: 'amw-${prefix}'
+    location: location
+  }
+}
+
 module aks 'modules/aks.bicep' = {
   name: 'aks'
   scope: rg
@@ -80,6 +99,18 @@ module aks 'modules/aks.bicep' = {
     uamiName: workloadIdentity.outputs.name
     workloadNamespace: workloadNamespace
     workloadServiceAccountName: workloadServiceAccountName
+    monitorWorkspaceId: monitorWorkspace.outputs.id
+    monitorWorkspaceLocation: location
+  }
+}
+
+module grafana 'modules/grafana.bicep' = {
+  name: 'grafana'
+  scope: rg
+  params: {
+    name: 'graf-${prefix}'
+    location: location
+    monitorWorkspaceId: monitorWorkspace.outputs.id
   }
 }
 
@@ -89,3 +120,6 @@ output aiFoundryEndpoint string = aiFoundry.outputs.endpoint
 output acrLoginServer string = acr.outputs.loginServer
 output aksClusterName string = aks.outputs.name
 output workloadIdentityClientId string = workloadIdentity.outputs.clientId
+output appInsightsConnectionString string = appInsights.outputs.connectionString
+output monitorWorkspaceId string = monitorWorkspace.outputs.id
+output grafanaEndpoint string = grafana.outputs.endpoint
