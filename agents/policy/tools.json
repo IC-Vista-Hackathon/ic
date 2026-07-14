@@ -1,0 +1,51 @@
+{
+  "tools": [
+    {
+      "type": "function",
+      "function": {
+        "name": "get_preferences",
+        "description": "Fetch a registered payer's profile and preferences (autopay, paperless, channels, payment_day). Backed by GET /payers/{id}?biller_id=. Only for payers with an account in session; guest payers have none.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "biller_id": { "type": "string", "description": "The biller tenant for the current portal session (partition key)." },
+            "payer_id": { "type": "string", "description": "The PayerAccount id in session." }
+          },
+          "required": ["biller_id", "payer_id"]
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "create_payer_account",
+        "description": "Register a payer account for this biller. Backed by POST /payers. Call ONLY after explicit payer opt-in — registration is offered, never imposed, and guest pay must remain available.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "biller_id": { "type": "string", "description": "The biller tenant for the current portal session (partition key)." },
+            "name": { "type": "string" },
+            "email": { "type": "string" },
+            "phone": { "type": "string" },
+            "account_numbers": {
+              "type": "array",
+              "items": { "type": "string" },
+              "description": "External biller account numbers to link to this payer."
+            },
+            "preferences": {
+              "type": "object",
+              "properties": {
+                "autopay": { "type": "boolean" },
+                "paperless": { "type": "boolean" },
+                "channels": { "type": "array", "items": { "type": "string", "enum": ["email", "sms"] } },
+                "payment_day": { "type": "integer", "description": "Preferred day of month for scheduled payments." }
+              },
+              "additionalProperties": false
+            }
+          },
+          "required": ["biller_id"]
+        }
+      }
+    }
+  ]
+}

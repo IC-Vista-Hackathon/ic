@@ -1,0 +1,28 @@
+{
+  "tools": [
+    {
+      "type": "function",
+      "function": {
+        "name": "pay_invoice",
+        "description": "Pay an invoice via the Payment Service (mock auth). Backed by POST /payments. CALL ONLY after an explicit prior {confirm: true} from the client for the pending plan — approval from the Policy Agent is NOT confirmation. Returns payment_id, confirmation code, amount_cents, fee_cents, and receipt_message.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "biller_id": { "type": "string", "description": "The biller tenant for the current portal session (partition key)." },
+            "invoice_id": { "type": "string", "description": "The invoice to pay, from the confirmed plan." },
+            "method": {
+              "type": "string",
+              "enum": ["card", "ach", "applepay", "googlepay", "paypal"],
+              "description": "Payment method from the confirmed plan; must be one of the biller's configured payment_methods."
+            },
+            "payer_account_id": {
+              "type": ["string", "null"],
+              "description": "The PayerAccount id if the payer has an account in session; null for guest pay."
+            }
+          },
+          "required": ["biller_id", "invoice_id", "method", "payer_account_id"]
+        }
+      }
+    }
+  ]
+}
