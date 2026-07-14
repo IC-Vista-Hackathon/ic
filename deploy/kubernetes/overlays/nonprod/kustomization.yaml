@@ -1,0 +1,25 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+# Nonprod environment: an isolated `ic-nonprod` namespace on the same aks-ic-hack
+# cluster (no separate infra). Deployed on every PR; functional/smoke tests reach
+# the services via `kubectl port-forward`, so no public HTTPRoutes are defined here.
+namespace: ic-nonprod
+
+resources:
+  - namespace.yaml
+  - ../../base
+
+# `kustomize edit set image <name>=<name>:<sha>` in the deploy workflow pins every
+# image to the PR head commit's immutable tag. `latest` here is only a placeholder.
+images:
+  - name: acrichackjk4zmntatjem4.azurecr.io/ic-biller-experience-api
+    newTag: latest
+  - name: acrichackjk4zmntatjem4.azurecr.io/ic-biller-experience-worker
+    newTag: latest
+  - name: acrichackjk4zmntatjem4.azurecr.io/ic-invoice-api
+    newTag: latest
+  - name: acrichackjk4zmntatjem4.azurecr.io/ic-payment-api
+    newTag: latest
+  - name: acrichackjk4zmntatjem4.azurecr.io/ic-payer-account-api
+    newTag: latest

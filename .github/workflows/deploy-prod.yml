@@ -1,0 +1,62 @@
+name: Deploy production
+
+# On merge to main: build the merged commit's images and deploy them to the shared
+# `ic` namespace on aks-ic-hack (publicly exposed via the kgateway Gateway), then
+# smoke-test. Auto-deploy, no manual gate. Add required reviewers to the GitHub
+# `production` Environment if a manual gate is ever wanted.
+
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  # Serialize prod deploys; never cancel an in-flight one.
+  group: deploy-prod
+  cancel-in-progress: false
+
+jobs:
+  build-images:
+    uses: ./.github/workflows/build-images.yml
+    with:
+      image_tag: ${{ github.sha }}
+    secrets:
+      AZURE_CREDENTIALS: ${{ secrets.AZURE_CREDENTIALS }}
+
+  deploy:
+    name: Deploy & smoke-test (ic)
+    needs: build-images
+    runs-on: ubuntu-latest
+    environment: production
+    env:
+      IMAGE_TAG: ${{ github.sha }}
+      REGISTRY: acrichackjk4zmntatjem4.azurecr.io
+      AKS_RG: ${{ vars.AKS_RG || 'rg-ic-hack' }}
+      AKS_NAME: ${{ vars.AKS_NAME || 'aks-ic-hack' }}
+      OVERLAY: deploy/kubernetes/overlays/prod
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Azure login
+        uses: azure/login@v2
+        with:
+          creds: ${{ secrets.AZURE_CREDENTIALS }}
+
+      - name: Get AKS credentials
+        run: |
+          az aks get-credentials \
+            --resource-group "$AKS_RG" --name "$AKS_NAME" \
+            --admin --overwrite-existing
+
+      - name: Pin image tags to the merged SHA
+        run: |
+          sed -i "s/newTag: latest/newTag: ${IMAGE_TAG}/" "${OVERLAY}/kustomization.yaml"
+          grep 'newTag' "${OVERLAY}/kustomization.yaml"
+
+      - name: Deploy
+        run: kubectl apply -k "${OVERLAY}"
+
+      - name: Functional smoke tests
+        run: ./scripts/smoke-test.sh ic

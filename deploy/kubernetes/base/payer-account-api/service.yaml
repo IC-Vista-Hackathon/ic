@@ -1,0 +1,14 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: ic-payer-account-api
+  labels:
+    app: ic-payer-account-api
+spec:
+  type: ClusterIP
+  selector:
+    app: ic-payer-account-api
+  ports:
+    - name: http
+      port: 8080
+      targetPort: http

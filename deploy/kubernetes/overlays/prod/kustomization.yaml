@@ -1,0 +1,25 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+# Production environment: the shared `ic` namespace on aks-ic-hack, publicly
+# exposed through the kgateway Gateway. Deployed on merge to `main`.
+namespace: ic
+
+resources:
+  - namespace.yaml
+  - ../../base
+  - httproutes.yaml
+
+# `kustomize edit set image <name>=<name>:<sha>` in the deploy workflow pins every
+# image to the merged commit's immutable tag. `latest` here is only a placeholder.
+images:
+  - name: acrichackjk4zmntatjem4.azurecr.io/ic-biller-experience-api
+    newTag: latest
+  - name: acrichackjk4zmntatjem4.azurecr.io/ic-biller-experience-worker
+    newTag: latest
+  - name: acrichackjk4zmntatjem4.azurecr.io/ic-invoice-api
+    newTag: latest
+  - name: acrichackjk4zmntatjem4.azurecr.io/ic-payment-api
+    newTag: latest
+  - name: acrichackjk4zmntatjem4.azurecr.io/ic-payer-account-api
+    newTag: latest

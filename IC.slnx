@@ -19,6 +19,7 @@
   <Folder Name="/tests/">
     <Project Path="tests/IC.Agentic.Orchestration.Tests/IC.Agentic.Orchestration.Tests.csproj" />
     <Project Path="tests/IC.BillerExperience.Api.Tests/IC.BillerExperience.Api.Tests.csproj" />
+    <Project Path="tests/IC.BillerExperience.IntegrationTests/IC.BillerExperience.IntegrationTests.csproj" />
     <Project Path="tests/IC.Invoice.Api.Tests/IC.Invoice.Api.Tests.csproj" />
     <Project Path="tests/IC.Payment.Api.Tests/IC.Payment.Api.Tests.csproj" />
     <Project Path="tests/IC.Payment.Contracts.Tests/IC.Payment.Contracts.Tests.csproj" />
