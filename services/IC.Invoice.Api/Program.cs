@@ -16,6 +16,8 @@ builder.Services
     });
 
 builder.Services.AddSingleton(TimeProvider.System);
+builder.Services.Configure<MaintenanceOptions>(
+    builder.Configuration.GetSection(MaintenanceOptions.SectionName));
 
 var persistence = builder.Configuration
     .GetSection(CosmosPersistenceOptions.SectionName)

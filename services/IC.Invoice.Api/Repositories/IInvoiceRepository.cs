@@ -37,6 +37,12 @@ public interface IInvoiceRepository
         InvoiceStatus target,
         string paymentId,
         CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Delete every invoice in a biller's partition. Test-cleanup support for functional
+    /// tests against a shared store; exposed only through the nonprod-gated maintenance endpoint.
+    /// </summary>
+    Task PurgeByBillerAsync(string billerId, CancellationToken cancellationToken = default);
 }
 
 /// <summary>Outcome of a conditional status transition.</summary>
