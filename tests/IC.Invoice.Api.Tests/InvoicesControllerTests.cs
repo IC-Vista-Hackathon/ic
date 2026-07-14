@@ -97,6 +97,81 @@ public sealed class InvoicesControllerTests
         Assert.Equal(InvoiceStatus.Due, body.Invoices[0].Status);
     }
 
+    [Fact]
+    public async Task ListReturns200WithOpenInvoicesForAccount()
+    {
+        var controller = NewController(out _);
+        await controller.Seed(
+            "b_1", new SeedInvoicesRequest(Count: 3, AccountNumber: "ACCT-1"), CancellationToken.None);
+
+        var result = await controller.List("b_1", "ACCT-1", CancellationToken.None);
+
+        var ok = Assert.IsType<OkObjectResult>(result);
+        var body = Assert.IsType<InvoiceListResponse>(ok.Value);
+        Assert.Equal(3, body.Invoices.Count);
+        Assert.All(body.Invoices, i => Assert.Equal("ACCT-1", i.AccountNumber));
+    }
+
+    [Fact]
+    public async Task ListReturnsEmptyListForUnknownAccount()
+    {
+        var controller = NewController(out _);
+        await controller.Seed(
+            "b_1", new SeedInvoicesRequest(Count: 2, AccountNumber: "ACCT-1"), CancellationToken.None);
+
+        // Unknown account is a 200 with an empty list, not a 404 (see List() doc).
+        var result = await controller.List("b_1", "ACCT-UNKNOWN", CancellationToken.None);
+
+        var ok = Assert.IsType<OkObjectResult>(result);
+        var body = Assert.IsType<InvoiceListResponse>(ok.Value);
+        Assert.Empty(body.Invoices);
+    }
+
+    [Fact]
+    public async Task ListReturnsOnlyTheRequestedAccountsInvoices()
+    {
+        var controller = NewController(out _);
+        await controller.Seed(
+            "b_1", new SeedInvoicesRequest(Count: 2, AccountNumber: "ACCT-1"), CancellationToken.None);
+        await controller.Seed(
+            "b_1", new SeedInvoicesRequest(Count: 3, AccountNumber: "ACCT-2"), CancellationToken.None);
+
+        var result = await controller.List("b_1", "ACCT-2", CancellationToken.None);
+
+        var body = (InvoiceListResponse)Assert.IsType<OkObjectResult>(result).Value!;
+        Assert.Equal(3, body.Invoices.Count);
+        Assert.All(body.Invoices, i => Assert.Equal("ACCT-2", i.AccountNumber));
+    }
+
+    [Theory]
+    [InlineData(null)]
+    [InlineData("")]
+    [InlineData("   ")]
+    public async Task ListRejectsMissingAccountNumber(string? accountNumber)
+    {
+        var controller = NewController(out _);
+
+        var result = await controller.List("b_1", accountNumber, CancellationToken.None);
+
+        var badRequest = Assert.IsType<BadRequestObjectResult>(result);
+        var error = Assert.IsType<ApiError>(badRequest.Value);
+        Assert.Equal("invalid_account_number", error.Error.Code);
+    }
+
+    [Fact]
+    public async Task ListRejectsBlankBillerId()
+    {
+        var controller = NewController(out _);
+
+        // billerId is validated before account_number, mirroring Seed — a blank
+        // biller must 400, not silently query with an invalid key and return [].
+        var result = await controller.List("  ", "ACCT-1", CancellationToken.None);
+
+        var badRequest = Assert.IsType<BadRequestObjectResult>(result);
+        var error = Assert.IsType<ApiError>(badRequest.Value);
+        Assert.Equal("invalid_biller", error.Error.Code);
+    }
+
     private sealed class FixedTimeProvider(DateTimeOffset now) : TimeProvider
     {
         public override DateTimeOffset GetUtcNow() => now;
