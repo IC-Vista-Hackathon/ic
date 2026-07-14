@@ -4,8 +4,13 @@
 # Reaches the services in the target namespace via `kubectl port-forward` (no public
 # ingress required), so it works identically for nonprod (ic-nonprod) and prod (ic).
 #
-# Checks, per service: readiness + liveness endpoints return 200. Then a functional
-# flow against the Invoice API: seed a biller's invoices and read them back.
+# Checks, per API service: readiness + liveness endpoints return 200. Then a
+# functional flow against the Invoice API: seed a biller's invoices and read them
+# back.
+#
+# Scope is the stateless control-plane APIs. The Biller Experience Worker is not
+# included: it's a background publisher deployed via biller-experience.template.yaml
+# and its readiness depends on live Cosmos/blob + workload identity.
 #
 # Usage: scripts/smoke-test.sh <namespace>
 set -euo pipefail
@@ -14,11 +19,9 @@ NAMESPACE="${1:?usage: smoke-test.sh <namespace>}"
 LOCAL_PORT="${LOCAL_PORT:-18080}"
 CURL="curl -fsS --max-time 10"
 
-# service name -> "deploy" or "svc" (worker has no Service, so port-forward its Deployment)
 API_SERVICES=(ic-biller-experience-api ic-invoice-api ic-payment-api ic-payer-account-api)
 ALL_TARGETS=(
   "svc/ic-biller-experience-api"
-  "deploy/ic-biller-experience-worker"
   "svc/ic-invoice-api"
   "svc/ic-payment-api"
   "svc/ic-payer-account-api"
@@ -42,7 +45,7 @@ start_pf() {
 }
 
 echo "== Waiting for rollouts in $NAMESPACE =="
-for d in ic-biller-experience-api ic-biller-experience-worker ic-invoice-api ic-payment-api ic-payer-account-api; do
+for d in "${API_SERVICES[@]}"; do
   kubectl rollout status -n "$NAMESPACE" "deploy/$d" --timeout=180s
 done
 
