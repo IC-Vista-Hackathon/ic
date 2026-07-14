@@ -10,6 +10,15 @@ param aksNodeCountMin int = 2
 param aksNodeCountMax int = 4
 param aksVmSize string = 'Standard_D2s_v3'
 
+// Extra service principals granted blob access on the Payer Experience storage account, on top of
+// the shared `ic-workload` identity. Contributors can read+write published SPAs; readers only read.
+param payerExperienceBlobContributorPrincipalIds array = [
+  '9b1ea516-a88b-44a6-abd8-2f0ac22d06d6'
+]
+param payerExperienceBlobReaderPrincipalIds array = [
+  '49414cd7-22d7-45a8-9377-3072b9bdde1c'
+]
+
 var suffix = uniqueString(subscription().subscriptionId, prefix)
 
 resource rg 'Microsoft.Resources/resourceGroups@2024-03-01' = {
@@ -53,6 +62,8 @@ module storage 'modules/storage.bicep' = {
     name: 'st${replace(prefix, '-', '')}${suffix}'
     location: location
     workloadIdentityPrincipalId: workloadIdentity.outputs.principalId
+    additionalBlobContributorPrincipalIds: payerExperienceBlobContributorPrincipalIds
+    additionalBlobReaderPrincipalIds: payerExperienceBlobReaderPrincipalIds
   }
 }
 
