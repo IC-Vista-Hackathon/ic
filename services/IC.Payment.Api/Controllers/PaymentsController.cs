@@ -42,7 +42,7 @@ public sealed class PaymentsController : ControllerBase
                 .ConfigureAwait(false)
             ?? throw ServiceException.NotFound("invoice_not_found", $"invoice {request.InvoiceId} not found");
 
-        if (invoice.Status == "paid")
+        if (invoice.Status == InvoiceStatus.Paid)
         {
             throw ServiceException.Conflict("already_paid", $"invoice {request.InvoiceId} is already paid");
         }
@@ -56,7 +56,8 @@ public sealed class PaymentsController : ControllerBase
         await invoices.UpdateStatusAsync(
             request.BillerId,
             request.InvoiceId,
-            new UpdateInvoiceStatusRequest(scheduled ? "scheduled" : "paid", paymentId),
+            new UpdateInvoiceStatusRequest(
+                scheduled ? InvoiceStatus.Scheduled : InvoiceStatus.Paid, paymentId),
             cancellationToken).ConfigureAwait(false);
 
         var payment = new PaymentResponse(

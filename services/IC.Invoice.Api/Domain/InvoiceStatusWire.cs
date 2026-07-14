@@ -1,22 +1,23 @@
+using WireInvoiceStatus = IC.Invoice.Contracts.V1.Invoices.InvoiceStatus;
+
 namespace IC.Invoice.Api.Domain;
 
-/// <summary>Maps the <see cref="InvoiceStatus"/> enum to/from its lowercase wire token.</summary>
+/// <summary>Maps the domain <see cref="InvoiceStatus"/> to/from the contract enum.</summary>
 public static class InvoiceStatusWire
 {
-    public static string ToWire(this InvoiceStatus status) => status switch
+    public static WireInvoiceStatus ToWire(this InvoiceStatus status) => status switch
     {
-        InvoiceStatus.Due => "due",
-        InvoiceStatus.Scheduled => "scheduled",
-        InvoiceStatus.Paid => "paid",
+        InvoiceStatus.Due => WireInvoiceStatus.Due,
+        InvoiceStatus.Scheduled => WireInvoiceStatus.Scheduled,
+        InvoiceStatus.Paid => WireInvoiceStatus.Paid,
         _ => throw new ArgumentOutOfRangeException(nameof(status), status, "Unknown invoice status."),
     };
 
-    /// <summary>Parses a wire token; null when the token is not a known status.</summary>
-    public static InvoiceStatus? FromWire(string? token) => token switch
+    public static InvoiceStatus ToDomain(this WireInvoiceStatus status) => status switch
     {
-        "due" => InvoiceStatus.Due,
-        "scheduled" => InvoiceStatus.Scheduled,
-        "paid" => InvoiceStatus.Paid,
-        _ => null,
+        WireInvoiceStatus.Due => InvoiceStatus.Due,
+        WireInvoiceStatus.Scheduled => InvoiceStatus.Scheduled,
+        WireInvoiceStatus.Paid => InvoiceStatus.Paid,
+        _ => throw new ArgumentOutOfRangeException(nameof(status), status, "Unknown invoice status."),
     };
 }

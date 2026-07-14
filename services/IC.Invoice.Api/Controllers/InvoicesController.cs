@@ -113,8 +113,7 @@ public sealed class InvoicesController : ControllerBase
         [FromBody] UpdateInvoiceStatusRequest request,
         CancellationToken cancellationToken)
     {
-        var target = InvoiceStatusWire.FromWire(request.Status);
-        if (target is null || target == InvoiceStatus.Due)
+        if (request.Status == Contracts.V1.Invoices.InvoiceStatus.Due)
         {
             return BadRequest(ApiError.Of(
                 "invalid_status", "status must be 'scheduled' or 'paid'."));
@@ -126,7 +125,7 @@ public sealed class InvoicesController : ControllerBase
         }
 
         var result = await _repository.TryUpdateStatusAsync(
-            billerId, invoiceId, target.Value, request.PaymentId, cancellationToken);
+            billerId, invoiceId, request.Status.ToDomain(), request.PaymentId, cancellationToken);
 
         return result.Outcome switch
         {
