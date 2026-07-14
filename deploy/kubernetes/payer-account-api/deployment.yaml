@@ -7,7 +7,9 @@ metadata:
     app: ic-payer-account-api
     app.kubernetes.io/part-of: ic
 spec:
-  replicas: 2
+  # In-memory stores: replicas MUST stay 1 until Cosmos lands — with 2+, seeds
+  # land on one pod and lookups hit the other (verified live 2026-07-14).
+  replicas: 1
   selector:
     matchLabels:
       app: ic-payer-account-api
