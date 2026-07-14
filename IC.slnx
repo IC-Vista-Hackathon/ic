@@ -1,6 +1,7 @@
 <Solution>
   <Folder Name="/contracts/">
     <Project Path="contracts/IC.BillerExperience.Contracts/IC.BillerExperience.Contracts.csproj" />
+    <Project Path="contracts/IC.Invoice.Contracts/IC.Invoice.Contracts.csproj" />
   </Folder>
   <Folder Name="/libraries/">
     <Project Path="libraries/IC.Agentic.Orchestration/IC.Agentic.Orchestration.csproj" />
