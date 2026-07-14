@@ -23,7 +23,7 @@ public sealed class CosmosPayerStore : IPayerStore
         var partitionKey = new PartitionKey(payer.BillerId);
 
         var query = new QueryDefinition(
-                "SELECT VALUE COUNT(1) FROM c WHERE STRINGEQUALS(c.payer.email, @email, true)")
+                "SELECT VALUE COUNT(1) FROM c WHERE STRINGEQUALS(TRIM(c.payer.email), @email, true)")
             .WithParameter("@email", payer.Email.Trim());
 
         using var iterator = container.GetItemQueryIterator<int>(
