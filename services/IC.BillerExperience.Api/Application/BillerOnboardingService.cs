@@ -1,9 +1,12 @@
 using System.Diagnostics;
 using System.Text.RegularExpressions;
+using IC.Agentic.Orchestration.Abstractions;
+using IC.Agentic.Orchestration.Execution;
 using IC.BillerExperience.Api.Domain;
 using IC.BillerExperience.Api.Infrastructure;
 using IC.BillerExperience.Api.Infrastructure.AI;
 using IC.BillerExperience.Api.Infrastructure.Persistence;
+using IC.BillerExperience.Api.Infrastructure.SupportingServices;
 using IC.BillerExperience.Contracts.V1.Billers;
 using IC.BillerExperience.Contracts.V1.Deployments;
 using IC.BillerExperience.Contracts.V1.Experiences;
@@ -14,7 +17,8 @@ namespace IC.BillerExperience.Api.Application;
 public sealed partial class BillerOnboardingService(
     IBillerExperienceRepository repository,
     IExperienceDraftGenerator draftGenerator,
-    ILogger<BillerOnboardingService> logger)
+    ILogger<BillerOnboardingService> logger,
+    IInvoiceSeeder? invoiceSeeder = null)
 {
     private const string RunId = "onboarding";
 
@@ -61,6 +65,8 @@ public sealed partial class BillerOnboardingService(
         await repository.CreateBillerAsync(biller, cancellationToken);
         var savedExperience = await repository.SaveExperienceAsync(experience, null, cancellationToken);
         var savedRun = await repository.SaveRunAsync(run, null, cancellationToken);
+        try { await (invoiceSeeder ?? new NullInvoiceSeeder()).SeedAsync(id, biller.BillType, cancellationToken); }
+        catch (Exception ex) { logger.LogError(ex, "Invoice seeding failed for biller {BillerId}; continuing with biller creation", id); }
         LogBillerCreated(logger, id, savedRun.Id, draftGenerator.Provider);
         return (Map(biller), Map(savedRun), Map(savedExperience));
     }
@@ -90,7 +96,37 @@ public sealed partial class BillerOnboardingService(
         var experience = await GetRequiredExperienceAsync(billerId, cancellationToken);
         var userMessage = new OnboardingChatMessage("user", request.Message.Trim(), DateTimeOffset.UtcNow);
         var messages = run.Messages.Append(userMessage).ToArray();
-        var generated = await draftGenerator.GenerateAsync(biller, experience, messages, cancellationToken);
+        var orchestrationContext = new OrchestrationContext(
+            run.Id,
+            Activity.Current?.TraceId.ToString() ?? Guid.NewGuid().ToString("N"),
+            billerId,
+            run.Id);
+        var eventSink = new AgentActivityRepositorySink(repository, billerId, run.Id, logger);
+        var researchStep = new ObservableOrchestrationStep<BillerRecord, BillerRecord>(
+            "biller-research", "Biller Research", "Reviewing the supplied biller profile and brand context",
+            static (input, _, _) => ValueTask.FromResult(input), eventSink);
+        await researchStep.ExecuteAsync(biller, orchestrationContext, cancellationToken);
+
+        var designStep = new ObservableOrchestrationStep<ExperienceRecord, DraftGenerationResult>(
+            "experience-designer", "Experience Designer", "Applying copy, layout, and action changes to the live preview",
+            (input, _, token) => draftGenerator.GenerateAsync(biller, input, messages, token), eventSink);
+        var generated = await designStep.ExecuteAsync(experience, orchestrationContext, cancellationToken);
+
+        var accessibilityStep = new ObservableOrchestrationStep<DraftGenerationResult, DraftGenerationResult>(
+            "accessibility", "Accessibility", "Checking colors, hierarchy, and action clarity",
+            static (input, _, _) => ValueTask.FromResult(input), eventSink);
+        generated = await accessibilityStep.ExecuteAsync(generated, orchestrationContext, cancellationToken);
+
+        var complianceStep = new ObservableOrchestrationStep<DraftGenerationResult, DraftGenerationResult>(
+            "compliance", "Compliance", "Checking payment capabilities and required review guidance",
+            (input, _, _) => ValueTask.FromResult(input with
+            {
+                Findings = input.Findings.Concat(ValidateDefinition(billerId, input.Definition))
+                    .GroupBy(finding => finding.Code, StringComparer.Ordinal)
+                    .Select(group => group.First())
+                    .ToArray()
+            }), eventSink);
+        generated = await complianceStep.ExecuteAsync(generated, orchestrationContext, cancellationToken);
         var assistantMessage = new OnboardingChatMessage("assistant", generated.Reply, DateTimeOffset.UtcNow);
         var nextState = generated.MissingFields.Count == 0
             ? OnboardingSessionState.DraftReady
@@ -100,7 +136,8 @@ public sealed partial class BillerOnboardingService(
             Definition = generated.Definition with { BillerId = billerId },
             Findings = generated.Findings
         };
-        var updatedRun = run with
+        var latestRun = await GetRequiredRunAsync(billerId, cancellationToken);
+        var updatedRun = latestRun with
         {
             State = nextState,
             Step = run.Step + 1,
@@ -110,7 +147,7 @@ public sealed partial class BillerOnboardingService(
         };
 
         var savedExperience = await repository.SaveExperienceAsync(updatedExperience, experience.ETag, cancellationToken);
-        var savedRun = await repository.SaveRunAsync(updatedRun, run.ETag, cancellationToken);
+        var savedRun = await repository.SaveRunAsync(updatedRun, latestRun.ETag, cancellationToken);
         BillerExperienceTelemetry.ChatTurns.Add(1, new KeyValuePair<string, object?>("provider", draftGenerator.Provider));
         RecordTransition(run.State, nextState);
         LogChatCompleted(logger, billerId, savedRun.Id, savedRun.Step, nextState, draftGenerator.Provider);
@@ -222,6 +259,14 @@ public sealed partial class BillerOnboardingService(
     public async ValueTask<OnboardingSessionResponse> GetSessionAsync(string billerId, CancellationToken cancellationToken) =>
         Map(await GetRequiredRunAsync(billerId, cancellationToken));
 
+    public async ValueTask<(OnboardingSessionResponse Session, IReadOnlyList<AgentActivityEvent> Activity)> GetSessionActivityAsync(
+        string billerId,
+        CancellationToken cancellationToken)
+    {
+        var run = await GetRequiredRunAsync(billerId, cancellationToken);
+        return (Map(run), run.AgentActivity ?? []);
+    }
+
     public async ValueTask<DeploymentStatusResponse> GetDeploymentAsync(
         string billerId,
         string deploymentId,
@@ -276,6 +321,34 @@ public sealed partial class BillerOnboardingService(
         {
             findings.Add(new("PAYMENT_METHOD_REQUIRED", "At least one existing payment capability is required.", ComplianceFindingSeverity.Blocking));
         }
+        if (definition.Preferences is { } preferences)
+        {
+            var unsupportedMethods = preferences.AcceptedMethods
+                .Except(definition.EnabledPaymentCapabilities, StringComparer.OrdinalIgnoreCase)
+                .ToArray();
+            if (unsupportedMethods.Length > 0)
+            {
+                findings.Add(new("PAYMENT_METHOD_UNSUPPORTED", $"Selected methods are not supported by the existing rails: {string.Join(", ", unsupportedMethods)}.", ComplianceFindingSeverity.Blocking));
+            }
+            if (preferences.AcceptedMethods.Count == 0)
+            {
+                findings.Add(new("PAYMENT_METHOD_SELECTION_REQUIRED", "At least one supported payment method must be selected for the payer experience.", ComplianceFindingSeverity.Blocking));
+            }
+        }
+        foreach (var action in definition.Ui?.Actions ?? [])
+        {
+            if (string.IsNullOrWhiteSpace(action.Label) || action.Label.Length > 48)
+            {
+                findings.Add(new("ACTION_LABEL_INVALID", "Action labels must contain 1 to 48 characters.", ComplianceFindingSeverity.Blocking));
+            }
+            if (action.Action == ExperienceActionType.SchedulePayment &&
+                !definition.EnabledPaymentCapabilities.Any(capability =>
+                    string.Equals(capability, "card", StringComparison.OrdinalIgnoreCase) ||
+                    string.Equals(capability, "ach", StringComparison.OrdinalIgnoreCase)))
+            {
+                findings.Add(new("SCHEDULE_METHOD_REQUIRED", "Pay later requires an enabled card or ACH payment method.", ComplianceFindingSeverity.Blocking));
+            }
+        }
         findings.Add(new("COMPLIANCE_REVIEW_REQUIRED", "Compliance guidance must be reviewed by the biller before publication.", ComplianceFindingSeverity.Warning));
         if (findings.Any(finding => finding.Severity == ComplianceFindingSeverity.Blocking))
         {
@@ -294,7 +367,7 @@ public sealed partial class BillerOnboardingService(
             ? new[] { "card", "ach" }
             : biller.PaymentRails.Select(rail => rail.Capability).Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
         return new BillerExperienceDefinition(
-            "1.0",
+            "1.1",
             biller.Id,
             new ExperienceBrand(biller.Name, primary, secondary, biller.Brand?.LogoAssetId, biller.Brand?.FontFamily ?? "Inter"),
             new ExperienceContent(
@@ -304,7 +377,34 @@ public sealed partial class BillerOnboardingService(
                 new Uri(root, "/privacy"),
                 new Uri(root, "/terms")),
             new PwaConfiguration(biller.Name, biller.Name[..Math.Min(12, biller.Name.Length)], primary, "#FFFFFF", null),
-            capabilities);
+            capabilities,
+            new ExperienceUi(
+                "centered-card",
+                new ExperienceTheme("comfortable", "rounded", "subtle"),
+                [
+                    new("account", "account-summary"),
+                    new("amount", "amount-due", "prominent"),
+                    new("methods", "payment-methods"),
+                    new("support", "support", "compact")
+                ],
+                [new("primary-payment-action", "Pay Now", ExperienceActionType.StartPayment)]),
+            new ExperiencePreferences(
+                GuestCheckoutAllowed: true,
+                OfferAutopay: true,
+                EnrollDuringPayment: true,
+                OfferPaperless: true,
+                ReminderChannel.Both,
+                capabilities,
+                SelfServiceHistory: true,
+                SelfServiceUpdates: true,
+                FeeHandling.Mixed,
+                new PreviewPreferences("desktop", ["payment", "history", "communication", "complex"]),
+                new Dictionary<string, string>
+                {
+                    ["guest_checkout_allowed"] = "Guest checkout reduces friction for one-time payers.",
+                    ["offer_autopay"] = "AutoPay gives returning payers a convenient recurring option.",
+                    ["offer_paperless"] = "Paperless billing can be offered independently at checkout."
+                }));
     }
 
     private static BillerResponse Map(BillerRecord record) =>
