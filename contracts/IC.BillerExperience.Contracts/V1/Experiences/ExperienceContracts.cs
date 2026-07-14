@@ -7,7 +7,39 @@ public sealed record BillerExperienceDefinition(
     ExperienceContent Content,
     PwaConfiguration Pwa,
     IReadOnlyList<string> EnabledPaymentCapabilities,
-    ExperienceUi? Ui = null);
+    ExperienceUi? Ui = null,
+    ExperiencePreferences? Preferences = null);
+
+public sealed record ExperiencePreferences(
+    bool GuestCheckoutAllowed,
+    bool OfferAutopay,
+    bool EnrollDuringPayment,
+    bool OfferPaperless,
+    ReminderChannel ReminderChannel,
+    IReadOnlyList<string> AcceptedMethods,
+    bool SelfServiceHistory,
+    bool SelfServiceUpdates,
+    FeeHandling FeeHandling,
+    PreviewPreferences Preview,
+    IReadOnlyDictionary<string, string>? RecommendationRationale = null);
+
+public sealed record PreviewPreferences(string DefaultDevice, IReadOnlyList<string> EnabledScenarios);
+
+public enum ReminderChannel
+{
+    Email,
+    Text,
+    Both,
+    None
+}
+
+public enum FeeHandling
+{
+    Absorb,
+    Charge,
+    Mixed,
+    Undecided
+}
 
 public sealed record ExperienceUi(
     string Layout,

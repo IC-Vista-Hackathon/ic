@@ -58,7 +58,10 @@ public sealed class BillerOnboardingServiceTests
         Assert.Equal(OnboardingSessionState.DraftReady, chat.Session.State);
         Assert.Equal("#174A5B", chat.Draft.Definition.Brand.PrimaryColor);
         Assert.Equal(ExperienceActionType.SchedulePayment, chat.Draft.Definition.Ui!.Actions.Single().Action);
-        Assert.Equal("Pay later", chat.Draft.Definition.Ui.Actions.Single().Label);
+        Assert.Equal("Pay Later", chat.Draft.Definition.Ui.Actions.Single().Label);
+        Assert.NotNull(chat.Draft.Definition.Preferences);
+        Assert.Equal(["card", "ach"], chat.Draft.Definition.Preferences.AcceptedMethods);
+        Assert.True(chat.Draft.Definition.Preferences.OfferAutopay);
         Assert.Equal(ExperienceRevisionState.Approved, approved.State);
         Assert.Equal(DeploymentState.Requested, deployment.State);
         Assert.Contains(activities, activity => activity.OperationName == "onboarding.chat");
@@ -92,6 +95,23 @@ public sealed class BillerOnboardingServiceTests
         var second = await service.PublishAsync(created.Biller.BillerId, request, CancellationToken.None);
 
         Assert.Equal(first.DeploymentId, second.DeploymentId);
+    }
+
+    [Fact]
+    public async Task ChatChangesExperiencePreferencesWithoutChangingPaymentRails()
+    {
+        var service = CreateService();
+        var created = await service.CreateAsync(CreateRequest(), CancellationToken.None);
+
+        var chat = await service.SendMessageAsync(
+            created.Biller.BillerId,
+            new("Disable AutoPay, disable account history, and remove card."),
+            CancellationToken.None);
+
+        Assert.Equal(["card", "ach"], chat.Draft!.Definition.EnabledPaymentCapabilities);
+        Assert.False(chat.Draft.Definition.Preferences!.OfferAutopay);
+        Assert.False(chat.Draft.Definition.Preferences.SelfServiceHistory);
+        Assert.Equal(["ach"], chat.Draft.Definition.Preferences.AcceptedMethods);
     }
 
     private static BillerOnboardingService CreateService()

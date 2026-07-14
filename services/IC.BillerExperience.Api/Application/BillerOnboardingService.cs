@@ -320,6 +320,20 @@ public sealed partial class BillerOnboardingService(
         {
             findings.Add(new("PAYMENT_METHOD_REQUIRED", "At least one existing payment capability is required.", ComplianceFindingSeverity.Blocking));
         }
+        if (definition.Preferences is { } preferences)
+        {
+            var unsupportedMethods = preferences.AcceptedMethods
+                .Except(definition.EnabledPaymentCapabilities, StringComparer.OrdinalIgnoreCase)
+                .ToArray();
+            if (unsupportedMethods.Length > 0)
+            {
+                findings.Add(new("PAYMENT_METHOD_UNSUPPORTED", $"Selected methods are not supported by the existing rails: {string.Join(", ", unsupportedMethods)}.", ComplianceFindingSeverity.Blocking));
+            }
+            if (preferences.AcceptedMethods.Count == 0)
+            {
+                findings.Add(new("PAYMENT_METHOD_SELECTION_REQUIRED", "At least one supported payment method must be selected for the payer experience.", ComplianceFindingSeverity.Blocking));
+            }
+        }
         foreach (var action in definition.Ui?.Actions ?? [])
         {
             if (string.IsNullOrWhiteSpace(action.Label) || action.Label.Length > 48)
@@ -352,7 +366,7 @@ public sealed partial class BillerOnboardingService(
             ? new[] { "card", "ach" }
             : biller.PaymentRails.Select(rail => rail.Capability).Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
         return new BillerExperienceDefinition(
-            "1.0",
+            "1.1",
             biller.Id,
             new ExperienceBrand(biller.Name, primary, secondary, biller.Brand?.LogoAssetId, biller.Brand?.FontFamily ?? "Inter"),
             new ExperienceContent(
@@ -372,7 +386,24 @@ public sealed partial class BillerOnboardingService(
                     new("methods", "payment-methods"),
                     new("support", "support", "compact")
                 ],
-                [new("primary-payment-action", "Pay now", ExperienceActionType.StartPayment)]));
+                [new("primary-payment-action", "Pay Now", ExperienceActionType.StartPayment)]),
+            new ExperiencePreferences(
+                GuestCheckoutAllowed: true,
+                OfferAutopay: true,
+                EnrollDuringPayment: true,
+                OfferPaperless: true,
+                ReminderChannel.Both,
+                capabilities,
+                SelfServiceHistory: true,
+                SelfServiceUpdates: true,
+                FeeHandling.Mixed,
+                new PreviewPreferences("desktop", ["payment", "history", "communication", "complex"]),
+                new Dictionary<string, string>
+                {
+                    ["guest_checkout_allowed"] = "Guest checkout reduces friction for one-time payers.",
+                    ["offer_autopay"] = "AutoPay gives returning payers a convenient recurring option.",
+                    ["offer_paperless"] = "Paperless billing can be offered independently at checkout."
+                }));
     }
 
     private static BillerResponse Map(BillerRecord record) =>
