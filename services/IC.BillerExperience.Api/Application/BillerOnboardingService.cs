@@ -65,8 +65,7 @@ public sealed partial class BillerOnboardingService(
         await repository.CreateBillerAsync(biller, cancellationToken);
         var savedExperience = await repository.SaveExperienceAsync(experience, null, cancellationToken);
         var savedRun = await repository.SaveRunAsync(run, null, cancellationToken);
-        try { await (invoiceSeeder ?? new NullInvoiceSeeder()).SeedAsync(id, biller.BillType, cancellationToken); }
-        catch (Exception ex) { LogInvoiceSeedingFailed(logger, id, ex); }
+        await (invoiceSeeder ?? new NullInvoiceSeeder()).SeedAsync(id, biller.BillType, cancellationToken);
         LogBillerCreated(logger, id, savedRun.Id, draftGenerator.Provider);
         return (Map(biller), Map(savedRun), Map(savedExperience));
     }

@@ -47,6 +47,24 @@ public sealed class InMemoryInvoiceRepository : IInvoiceRepository
         return Task.FromResult<IReadOnlyList<InvoiceDocument>>(matches);
     }
 
+    public Task<IReadOnlyList<InvoiceDocument>> GetByAccountAsync(
+        string billerId,
+        string accountNumber,
+        CancellationToken cancellationToken = default)
+    {
+        if (!_byBiller.TryGetValue(billerId, out var partition))
+        {
+            return Task.FromResult<IReadOnlyList<InvoiceDocument>>(Array.Empty<InvoiceDocument>());
+        }
+        lock (partition)
+        {
+            return Task.FromResult<IReadOnlyList<InvoiceDocument>>(partition
+                .Where(invoice => string.Equals(invoice.AccountNumber, accountNumber, StringComparison.Ordinal))
+                .OrderByDescending(invoice => invoice.DueDate)
+                .ToArray());
+        }
+    }
+
     public Task<InvoiceDocument?> FindAsync(
         string billerId,
         string invoiceId,

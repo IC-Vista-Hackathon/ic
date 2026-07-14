@@ -156,13 +156,25 @@ public sealed class PayersApiTests : IClassFixture<WebApplicationFactory<Program
             "invalid_payment_day", await response.Content.ReadAsStringAsync(), StringComparison.Ordinal);
     }
 
-    private async Task<PayerResponse> RegisterPayerAsync()
+    [Fact]
+    public async Task PayerCanBeFoundByBillerAccountNumber()
+    {
+        var payer = await RegisterPayerAsync("LOOKUP-4421");
+
+        var found = await client.GetFromJsonAsync<PayerResponse>(
+            $"payers?biller_id={payer.BillerId}&account_number=LOOKUP-4421", Wire);
+
+        Assert.Equal(payer.PayerId, found!.PayerId);
+    }
+
+    private async Task<PayerResponse> RegisterPayerAsync(string? accountNumber = null)
     {
         var billerId = Guid.NewGuid().ToString();
         var response = await client.PostAsJsonAsync(
             "payers",
             new RegisterPayerRequest(
-                billerId, "Test Payer", $"{Guid.NewGuid()}@example.com", null, []),
+                billerId, "Test Payer", $"{Guid.NewGuid()}@example.com", null,
+                accountNumber is null ? [] : [accountNumber]),
             Wire);
         return (await response.Content.ReadFromJsonAsync<PayerResponse>(Wire))!;
     }

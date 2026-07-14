@@ -50,6 +50,23 @@ public sealed class CosmosInvoiceRepository : IInvoiceRepository
         return results;
     }
 
+    public async Task<IReadOnlyList<InvoiceDocument>> GetByAccountAsync(
+        string billerId, string accountNumber, CancellationToken cancellationToken = default)
+    {
+        var query = new QueryDefinition(
+                "SELECT * FROM c WHERE c.account_number = @accountNumber ORDER BY c.due_date DESC")
+            .WithParameter("@accountNumber", accountNumber);
+        using var iterator = container.GetItemQueryIterator<InvoiceDocument>(
+            query, requestOptions: new QueryRequestOptions { PartitionKey = new PartitionKey(billerId) });
+        var results = new List<InvoiceDocument>();
+        while (iterator.HasMoreResults)
+        {
+            results.AddRange(await iterator.ReadNextAsync(cancellationToken));
+        }
+
+        return results;
+    }
+
     public async Task<InvoiceDocument?> FindAsync(
         string billerId, string invoiceId, CancellationToken cancellationToken = default)
     {

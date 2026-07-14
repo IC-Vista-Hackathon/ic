@@ -4,6 +4,7 @@
   </PropertyGroup>
   <ItemGroup>
     <ProjectReference Include="..\..\contracts\IC.Invoice.Contracts\IC.Invoice.Contracts.csproj" />
+    <ProjectReference Include="..\..\libraries\IC.ServiceDefaults\IC.ServiceDefaults.csproj" />
     <ProjectReference Include="..\..\libraries\IC.Persistence.Cosmos\IC.Persistence.Cosmos.csproj" />
   </ItemGroup>
 </Project>

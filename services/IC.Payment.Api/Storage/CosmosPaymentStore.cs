@@ -45,6 +45,32 @@ public sealed class CosmosPaymentStore : IPaymentStore
         }
     }
 
+    public async Task<IReadOnlyList<PaymentResponse>> ListAsync(
+        string billerId,
+        string? payerAccountId,
+        string? invoiceId,
+        CancellationToken cancellationToken = default)
+    {
+        var clauses = new List<string>();
+        if (!string.IsNullOrWhiteSpace(payerAccountId)) clauses.Add("c.payment.payer_account_id = @payerAccountId");
+        if (!string.IsNullOrWhiteSpace(invoiceId)) clauses.Add("c.payment.invoice_id = @invoiceId");
+        var sql = "SELECT VALUE c.payment FROM c";
+        if (clauses.Count > 0) sql += $" WHERE {string.Join(" AND ", clauses)}";
+        sql += " ORDER BY c.payment.created_at DESC";
+        var query = new QueryDefinition(sql);
+        if (!string.IsNullOrWhiteSpace(payerAccountId)) query.WithParameter("@payerAccountId", payerAccountId);
+        if (!string.IsNullOrWhiteSpace(invoiceId)) query.WithParameter("@invoiceId", invoiceId);
+        using var iterator = container.GetItemQueryIterator<PaymentResponse>(
+            query, requestOptions: new QueryRequestOptions { PartitionKey = new PartitionKey(billerId) });
+        var results = new List<PaymentResponse>();
+        while (iterator.HasMoreResults)
+        {
+            results.AddRange(await iterator.ReadNextAsync(cancellationToken));
+        }
+
+        return results;
+    }
+
     private sealed record PaymentDocument
     {
         [JsonPropertyName("id")]

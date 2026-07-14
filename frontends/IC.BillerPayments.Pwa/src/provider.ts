@@ -1,29 +1,52 @@
-import type { Invoice, PaymentReceipt, PaymentRequest } from './types';
-import { observed } from './telemetry';
+import type { Invoice, PayerProfile, PaymentHistory, PaymentReceipt, PaymentRequest } from './types';
+import { createFlowTrace, observed, traceHeaders } from './telemetry';
 
-export interface PaymentExperienceProvider { getInvoice(accountNumber: string): Promise<Invoice>; pay(request: PaymentRequest): Promise<PaymentReceipt> }
+export interface PaymentExperienceProvider {
+  getInvoices(accountNumber: string): Promise<Invoice[]>;
+  findPayer(accountNumber: string): Promise<PayerProfile | undefined>;
+  updatePreferences(payerId: string, preferences: PayerProfile['preferences']): Promise<PayerProfile['preferences']>;
+  getPayments(payerId: string): Promise<PaymentHistory[]>;
+  pay(request: PaymentRequest): Promise<PaymentReceipt>;
+}
 
 export class ServicePaymentExperienceProvider implements PaymentExperienceProvider {
+  private readonly flow = createFlowTrace();
   constructor(private readonly billerId: string) {}
+  private headers(json = false) { return { ...(json ? { 'content-type': 'application/json' } : {}), ...traceHeaders(this.flow, this.billerId) }; }
 
-  getInvoice(accountNumber: string) { return observed('pwa.invoice.lookup', async () => {
-    const response = await fetch(`/invoices/billers/${encodeURIComponent(this.billerId)}/invoices?account_number=${encodeURIComponent(accountNumber)}`);
-    const payload = await read<{ invoices: Array<{ id: string; account_number: string; amount_cents: number; due_date: string; description: string }> }>(response);
-    const invoice = payload.invoices[0];
-    if (!invoice) throw new Error('No open bill was found for that account.');
-    return { id: invoice.id, accountNumber: invoice.account_number, amountCents: invoice.amount_cents, dueDate: invoice.due_date, description: invoice.description };
+  getInvoices(accountNumber: string) { return observed('pwa.invoice.lookup', async () => {
+    const response = await fetch(`/invoices/billers/${encodeURIComponent(this.billerId)}/invoices?account_number=${encodeURIComponent(accountNumber)}&include_closed=true`, { headers: this.headers() });
+    const payload = await read<{ invoices: Array<{ id: string; account_number: string; payer_name: string; amount_cents: number; due_date: string; description: string; status: string }> }>(response);
+    return payload.invoices.map(invoice => ({ id: invoice.id, accountNumber: invoice.account_number, payerName: invoice.payer_name, amountCents: invoice.amount_cents, dueDate: invoice.due_date, description: invoice.description, status: invoice.status }));
   }); }
 
+  async findPayer(accountNumber: string) {
+    const response = await fetch(`/payers?biller_id=${encodeURIComponent(this.billerId)}&account_number=${encodeURIComponent(accountNumber)}`, { headers: this.headers() });
+    if (response.status === 404) return undefined;
+    return read<PayerProfile>(response);
+  }
+
+  updatePreferences(payerId: string, preferences: PayerProfile['preferences']) { return observed('pwa.preferences.update', async () =>
+    read<PayerProfile['preferences']>(await fetch(`/payers/${encodeURIComponent(payerId)}/preferences?biller_id=${encodeURIComponent(this.billerId)}`, { method: 'PATCH', headers: this.headers(true), body: JSON.stringify(preferences) })));
+  }
+
+  getPayments(payerId: string) { return observed('pwa.payments.history', async () =>
+    read<PaymentHistory[]>(await fetch(`/payments?biller_id=${encodeURIComponent(this.billerId)}&payer_account_id=${encodeURIComponent(payerId)}`, { headers: this.headers() })));
+  }
+
   pay(request: PaymentRequest) { return observed('pwa.payment.submit', async () => {
-    let payerAccountId: string | undefined;
+    let payer = await this.findPayer(request.accountNumber);
     if (request.autoPay || request.paperless) {
-      const payer = await read<{ payer_id: string }>(await fetch('/payers', { method: 'POST', headers: jsonHeaders, body: JSON.stringify({ biller_id: this.billerId, name: request.payerName, email: request.payerEmail, phone: null, account_numbers: [request.accountNumber], preferences: { autopay: request.autoPay, paperless: request.paperless, channels: ['email'], payment_day: request.autoPay ? 15 : null } }) }));
-      payerAccountId = payer.payer_id;
+      const preferences = { autopay: request.autoPay, paperless: request.paperless, channels: ['email'] as Array<'email'|'sms'>, payment_day: request.autoPay ? 15 : null };
+      if (payer) {
+        payer = { ...payer, preferences: await this.updatePreferences(payer.payer_id, preferences) };
+      } else {
+        payer = await read<PayerProfile>(await fetch('/payers', { method: 'POST', headers: this.headers(true), body: JSON.stringify({ biller_id: this.billerId, name: request.payerName, email: request.payerEmail, phone: null, account_numbers: [request.accountNumber], preferences }) }));
+      }
     }
-    const payment = await read<{ confirmation: string; amount_cents: number; fee_cents: number; status: string; scheduled_for?: string }>(await fetch('/payments', { method: 'POST', headers: jsonHeaders, body: JSON.stringify({ biller_id: this.billerId, invoice_id: request.invoiceId, method: request.method, payer_account_id: payerAccountId, scheduled_for: request.scheduledFor }) }));
-    return { confirmation: payment.confirmation, amountCents: payment.amount_cents, feeCents: payment.fee_cents, status: payment.status, scheduledFor: payment.scheduled_for };
+    const payment = await read<{ confirmation: string; amount_cents: number; fee_cents: number; status: string; scheduled_for?: string }>(await fetch('/payments', { method: 'POST', headers: this.headers(true), body: JSON.stringify({ biller_id: this.billerId, invoice_id: request.invoiceId, method: request.method, payer_account_id: payer?.payer_id, scheduled_for: request.scheduledFor }) }));
+    return { confirmation: payment.confirmation, amountCents: payment.amount_cents, feeCents: payment.fee_cents, status: payment.status, scheduledFor: payment.scheduled_for, payerAccountId: payer?.payer_id };
   }); }
 }
 
-const jsonHeaders = { 'content-type': 'application/json' };
-async function read<T>(response: Response): Promise<T> { const body = await response.json().catch(() => ({})); if (!response.ok) throw new Error(body.message ?? body.detail ?? `Request failed with ${response.status}.`); return body as T; }
+async function read<T>(response: Response): Promise<T> { const body = await response.json().catch(() => ({})); if (!response.ok) throw new Error(body.error?.message ?? body.message ?? body.detail ?? `Request failed with ${response.status}.`); return body as T; }

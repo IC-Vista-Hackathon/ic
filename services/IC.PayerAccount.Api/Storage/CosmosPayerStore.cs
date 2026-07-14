@@ -60,6 +60,24 @@ public sealed class CosmosPayerStore : IPayerStore
         }
     }
 
+    public async Task<PayerResponse?> FindByAccountAsync(
+        string billerId, string accountNumber, CancellationToken cancellationToken = default)
+    {
+        var query = new QueryDefinition(
+                "SELECT TOP 1 VALUE c.payer FROM c WHERE ARRAY_CONTAINS(c.payer.account_numbers, @accountNumber)")
+            .WithParameter("@accountNumber", accountNumber);
+        using var iterator = container.GetItemQueryIterator<PayerResponse>(
+            query, requestOptions: new QueryRequestOptions { PartitionKey = new PartitionKey(billerId) });
+        while (iterator.HasMoreResults)
+        {
+            var page = await iterator.ReadNextAsync(cancellationToken);
+            var payer = page.FirstOrDefault();
+            if (payer is not null) return payer;
+        }
+
+        return null;
+    }
+
     public async Task UpdateAsync(PayerResponse payer, CancellationToken cancellationToken = default)
         => await container.UpsertItemAsync(
             ToDocument(payer), new PartitionKey(payer.BillerId), cancellationToken: cancellationToken);

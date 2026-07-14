@@ -5,7 +5,7 @@ using Microsoft.Azure.Cosmos;
 
 var builder = WebApplication.CreateBuilder(args);
 
-builder.Services.AddServiceDefaults();
+builder.AddServiceDefaults("IC.PayerAccount.Api");
 
 var persistence = builder.Configuration
     .GetSection(CosmosPersistenceOptions.SectionName)

@@ -1,4 +1,5 @@
 using IC.Invoice.Api.Common;
+using System.Diagnostics;
 using IC.Invoice.Api.Domain;
 using IC.Invoice.Api.Repositories;
 using IC.Invoice.Api.Seeding;
@@ -13,15 +14,17 @@ namespace IC.Invoice.Api.Controllers;
 /// </summary>
 [ApiController]
 [Route("billers/{billerId}/invoices")]
-public sealed class InvoicesController : ControllerBase
+public sealed partial class InvoicesController : ControllerBase
 {
     private readonly IInvoiceRepository _repository;
     private readonly TimeProvider _timeProvider;
+    private readonly ILogger<InvoicesController> _logger;
 
-    public InvoicesController(IInvoiceRepository repository, TimeProvider timeProvider)
+    public InvoicesController(IInvoiceRepository repository, TimeProvider timeProvider, ILogger<InvoicesController>? logger = null)
     {
         _repository = repository;
         _timeProvider = timeProvider;
+        _logger = logger ?? Microsoft.Extensions.Logging.Abstractions.NullLogger<InvoicesController>.Instance;
     }
 
     /// <summary>
@@ -52,6 +55,7 @@ public sealed class InvoicesController : ControllerBase
             billerId, accountNumber, request.Count, request.BillType, today);
 
         await _repository.AddRangeAsync(invoices, cancellationToken);
+        LogInvoicesSeeded(_logger, billerId, accountNumber, invoices.Count, Activity.Current?.TraceId.ToString());
 
         var response = new SeedInvoicesResponse(
             invoices.Count,
@@ -71,7 +75,8 @@ public sealed class InvoicesController : ControllerBase
     public async Task<IActionResult> List(
         string billerId,
         [FromQuery(Name = "account_number")] string? accountNumber,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        [FromQuery(Name = "include_closed")] bool includeClosed = false)
     {
         if (string.IsNullOrWhiteSpace(billerId))
         {
@@ -83,7 +88,10 @@ public sealed class InvoicesController : ControllerBase
             return BadRequest(ApiError.Of("invalid_account_number", "account_number is required."));
         }
 
-        var invoices = await _repository.GetOpenAsync(billerId, accountNumber.Trim(), cancellationToken);
+        var invoices = includeClosed
+            ? await _repository.GetByAccountAsync(billerId, accountNumber.Trim(), cancellationToken)
+            : await _repository.GetOpenAsync(billerId, accountNumber.Trim(), cancellationToken);
+        LogInvoicesListed(_logger, billerId, accountNumber.Trim(), invoices.Count, includeClosed, Activity.Current?.TraceId.ToString());
         return Ok(new InvoiceListResponse(invoices.Select(ToResponse).ToList()));
     }
 
@@ -168,4 +176,9 @@ public sealed class InvoicesController : ControllerBase
 
     private static string GenerateAccountNumber() =>
         "ACCT-" + Guid.NewGuid().ToString("N")[..6].ToUpperInvariant();
+
+    [LoggerMessage(3100, LogLevel.Information, "Seeded {InvoiceCount} invoices for biller {BillerId}, account {AccountNumber}; trace {TraceId}")]
+    private static partial void LogInvoicesSeeded(ILogger logger, string billerId, string accountNumber, int invoiceCount, string? traceId);
+    [LoggerMessage(3101, LogLevel.Information, "Listed {InvoiceCount} invoices for biller {BillerId}, account {AccountNumber}, include closed {IncludeClosed}; trace {TraceId}")]
+    private static partial void LogInvoicesListed(ILogger logger, string billerId, string accountNumber, int invoiceCount, bool includeClosed, string? traceId);
 }
