@@ -1,0 +1,50 @@
+{
+  "tools": [
+    {
+      "type": "function",
+      "function": {
+        "name": "research_website",
+        "description": "Crawl the biller's website and return extracted brand tokens, copy, and structure. Backed by the crawler service.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "url": { "type": "string", "description": "The biller's website URL to crawl (the biller's own domain)." }
+          },
+          "required": ["url"]
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "update_config",
+        "description": "Apply a JSON merge-patch to the biller's draft BillerConfiguration with brand/bill_type facts extracted from the site. Backed by PATCH /billers/{id}/config. The 'compliance' field is server-written only and any patch touching it is rejected — never include it.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "patch": {
+              "type": "object",
+              "description": "Merge-patch limited to fields supported by real evidence from the site.",
+              "properties": {
+                "bill_type": { "type": "string", "description": "Inferred from the org, e.g. Utility, Real Estate Tax" },
+                "brand": {
+                  "type": "object",
+                  "properties": {
+                    "primary_color": { "type": "string", "description": "hex color, e.g. #0044cc" },
+                    "logo_text": { "type": "string" },
+                    "logo_url": { "type": "string" },
+                    "tagline": { "type": "string" },
+                    "tone": { "type": "string" }
+                  },
+                  "additionalProperties": false
+                }
+              },
+              "additionalProperties": false
+            }
+          },
+          "required": ["patch"]
+        }
+      }
+    }
+  ]
+}
