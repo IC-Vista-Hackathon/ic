@@ -41,6 +41,10 @@ jobs:
             dockerfile: services/IC.BillerExperience.Api/Dockerfile
           - image: ic-biller-experience-worker
             dockerfile: services/IC.BillerExperience.Worker/Dockerfile
+          - image: ic-biller-experience-studio
+            dockerfile: frontends/IC.BillerExperience.Studio/Dockerfile
+          - image: ic-biller-payments-pwa
+            dockerfile: frontends/IC.BillerPayments.Pwa/Dockerfile
           - image: ic-invoice-api
             dockerfile: services/IC.Invoice.Api/Dockerfile
           - image: ic-payment-api

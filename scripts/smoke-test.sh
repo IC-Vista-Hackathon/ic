@@ -9,8 +9,8 @@
 # back.
 #
 # Scope is the stateless control-plane APIs. The Biller Experience Worker is not
-# included: it's a background publisher deployed via biller-experience.template.yaml
-# and its readiness depends on live Cosmos/blob + workload identity.
+# included: it's a background publisher (deployed via overlays/prod/biller-experience.yaml)
+# whose readiness depends on live Cosmos/blob + workload identity.
 #
 # Usage: scripts/smoke-test.sh <namespace>
 set -euo pipefail
