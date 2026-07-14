@@ -6,6 +6,11 @@ param name string
 param location string
 param workloadIdentityPrincipalId string
 
+// Extra service principals granted blob access on top of the shared `ic-workload` identity —
+// e.g. dev/tooling principals that publish or read Payer Experience SPAs directly.
+param additionalBlobContributorPrincipalIds array = []
+param additionalBlobReaderPrincipalIds array = []
+
 // One container holds all billers' published SPAs, keyed by biller_id/slug prefix (the Deployment
 // Service writes each biller's build under its own prefix; the router reads by prefix per request).
 param containerName string = 'payer-experiences'
@@ -43,6 +48,8 @@ resource container 'Microsoft.Storage/storageAccounts/blobServices/containers@20
 // SPA here and the router reads it — both run as the shared `ic-workload` identity, so one grant
 // covers both.
 var blobDataContributorRoleId = 'ba92f5b4-2d11-453d-a403-e96b0029c9fe'
+// Storage Blob Data Reader: read-only blob access for principals that only need to serve/read SPAs.
+var blobDataReaderRoleId = '2a2b9908-6ea1-4ae2-8e65-a410df84e7d1'
 
 resource blobAccess 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
   scope: account
@@ -53,6 +60,26 @@ resource blobAccess 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
     principalType: 'ServicePrincipal'
   }
 }
+
+resource additionalBlobContributorAccess 'Microsoft.Authorization/roleAssignments@2022-04-01' = [for principalId in additionalBlobContributorPrincipalIds: {
+  scope: account
+  name: guid(account.id, principalId, blobDataContributorRoleId)
+  properties: {
+    roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', blobDataContributorRoleId)
+    principalId: principalId
+    principalType: 'ServicePrincipal'
+  }
+}]
+
+resource additionalBlobReaderAccess 'Microsoft.Authorization/roleAssignments@2022-04-01' = [for principalId in additionalBlobReaderPrincipalIds: {
+  scope: account
+  name: guid(account.id, principalId, blobDataReaderRoleId)
+  properties: {
+    roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', blobDataReaderRoleId)
+    principalId: principalId
+    principalType: 'ServicePrincipal'
+  }
+}]
 
 output id string = account.id
 output name string = account.name
