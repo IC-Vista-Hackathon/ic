@@ -1,0 +1,4 @@
+{
+  "_comment": "Per contracts.md's Agent tools table, the Financial Planning Agent is not listed against any tool. It is a pure reasoning stage: it consumes the bill_summary artifact plus biller config and emits a payment_plan artifact. It has no tools by design — money movement is Execution's, data lookups belong to Bill Intelligence/Policy.",
+  "tools": []
+}
