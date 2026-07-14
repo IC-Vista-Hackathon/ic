@@ -80,6 +80,14 @@ public sealed partial class BillersController(
         return Accepted(deployment);
     }
 
+    [HttpGet("{billerId}/deployments/{deploymentId}")]
+    [ProducesResponseType<DeploymentStatusResponse>(StatusCodes.Status200OK)]
+    public async Task<ActionResult<DeploymentStatusResponse>> GetDeployment(
+        string billerId,
+        string deploymentId,
+        CancellationToken cancellationToken) =>
+        Ok(await onboarding.GetDeploymentAsync(billerId, deploymentId, cancellationToken));
+
     [HttpGet("{billerId}/events")]
     public async Task StreamEvents(string billerId, CancellationToken cancellationToken)
     {

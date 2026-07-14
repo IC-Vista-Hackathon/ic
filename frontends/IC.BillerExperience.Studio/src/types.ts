@@ -33,4 +33,4 @@ export interface Bootstrap {
 }
 
 export interface ChatResponse { reply: string; session: Session; draft: ExperienceRevision }
-export interface Deployment { deployment_id: string; state: string; revision: string; published_url?: string }
+export interface Deployment { deployment_id: string; state: string; revision: string; published_url?: string; failure_code?: string; failure_message?: string }

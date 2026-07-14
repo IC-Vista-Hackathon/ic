@@ -222,6 +222,13 @@ public sealed partial class BillerOnboardingService(
     public async ValueTask<OnboardingSessionResponse> GetSessionAsync(string billerId, CancellationToken cancellationToken) =>
         Map(await GetRequiredRunAsync(billerId, cancellationToken));
 
+    public async ValueTask<DeploymentStatusResponse> GetDeploymentAsync(
+        string billerId,
+        string deploymentId,
+        CancellationToken cancellationToken) =>
+        Map(await repository.GetDeploymentAsync(billerId, deploymentId, cancellationToken)
+            ?? throw new KeyNotFoundException($"Deployment '{deploymentId}' was not found for biller '{billerId}'."));
+
     private async ValueTask<BillerRecord> GetRequiredBillerAsync(string billerId, CancellationToken cancellationToken) =>
         await repository.GetBillerAsync(billerId, cancellationToken)
         ?? throw new KeyNotFoundException($"Biller '{billerId}' was not found.");
@@ -310,7 +317,20 @@ public sealed partial class BillerOnboardingService(
         new(record.BillerId, record.Id, record.Definition, record.State, record.CreatedAt, record.ApprovedAt, record.ETag, record.Findings);
 
     private static DeploymentStatusResponse Map(DeploymentRecord record) =>
-        new(record.Id, record.BillerId, $"config-{record.ConfigVersion}", DeploymentState.Requested, null, null, null, record.RequestedAt);
+        new(record.Id, record.BillerId, $"config-{record.ConfigVersion}", ParseDeploymentState(record.Status),
+            record.PublishedUrl, record.FailureCode, record.FailureMessage, record.UpdatedAt ?? record.RequestedAt);
+
+    private static DeploymentState ParseDeploymentState(string state) => state switch
+    {
+        "requested" => DeploymentState.Requested,
+        "applying" => DeploymentState.Applying,
+        "waiting_for_readiness" => DeploymentState.WaitingForReadiness,
+        "verifying" => DeploymentState.Verifying,
+        "ready" => DeploymentState.Ready,
+        "failed" => DeploymentState.Failed,
+        "rolled_back" => DeploymentState.RolledBack,
+        _ => DeploymentState.Failed
+    };
 
     private static Activity? StartActivity(string name) => BillerExperienceTelemetry.Source.StartActivity(name);
 

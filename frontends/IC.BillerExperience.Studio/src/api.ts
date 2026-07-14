@@ -32,4 +32,6 @@ export const api = {
     request<ExperienceRevision>(`/billers/${billerId}/config/approve`, { method: 'POST', body: JSON.stringify({ revision, approved_by: 'biller-studio-user' }) }),
   publish: (billerId: string, revision: string) =>
     request<Deployment>(`/billers/${billerId}/config/publish`, { method: 'POST', body: JSON.stringify({ biller_id: billerId, revision }) }),
+  deployment: (billerId: string, deploymentId: string) =>
+    request<Deployment>(`/billers/${billerId}/deployments/${deploymentId}`),
 };

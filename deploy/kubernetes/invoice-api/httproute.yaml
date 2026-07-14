@@ -3,7 +3,7 @@
 # on its :80 HTTP listener.
 #
 # Follows the platform's path-based convention (mirrors ic-biller-experience:
-# /api, /studio and biller-sites: /pay): a path prefix is routed to the service
+# /api, /studio and the shared payer renderer at /pay): a path prefix is routed to the service
 # and stripped via URLRewrite so the backend receives its normal paths.
 #
 # Reachable at:  http://ic-hack.eastus2.cloudapp.azure.com/invoices/...

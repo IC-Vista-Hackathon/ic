@@ -5,6 +5,13 @@ public sealed class BillerExperienceOptions
     public const string SectionName = "BillerExperience";
     public PersistenceOptions Persistence { get; set; } = new();
     public ModelOptions Model { get; set; } = new();
+    public PublishedExperienceOptions PublishedExperience { get; set; } = new();
+}
+
+public sealed class PublishedExperienceOptions
+{
+    public string StorageEndpoint { get; set; } = string.Empty;
+    public string ContainerName { get; set; } = "payer-experiences";
 }
 
 public sealed class PersistenceOptions
