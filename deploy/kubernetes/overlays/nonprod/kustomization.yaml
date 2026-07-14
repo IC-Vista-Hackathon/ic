@@ -19,6 +19,8 @@ resources:
 # system:serviceaccount:ic-nonprod:ic-workload (infra/bicep), so these pods authenticate here too.
 patches:
   - path: cosmos-persistence.yaml
+  # Nonprod-only: enable the test-data purge endpoint so per-PR functional tests clean up.
+  - path: purge-flag.yaml
 
 # `kustomize edit set image <name>=<name>:<sha>` in the deploy workflow pins every
 # image to the PR head commit's immutable tag. `latest` here is only a placeholder.
