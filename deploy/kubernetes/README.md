@@ -6,11 +6,15 @@ Shared namespace, RBAC, network policy, and workload manifests live here.
 
 The control-plane service workloads are managed with Kustomize:
 
-- `base/` — namespace-agnostic Deployment/Service manifests for the five services
-  (`ic-biller-experience-api`, `ic-biller-experience-worker`, `ic-invoice-api`,
-  `ic-payment-api`, `ic-payer-account-api`) plus the `ic-workload` service account.
-- `overlays/nonprod/` — the `ic-nonprod` namespace. Deployed on every PR; functional
-  tests reach it via `kubectl port-forward` (no public routes).
+- `base/` — namespace-agnostic Deployment/Service manifests for the four stateless API
+  services (`ic-biller-experience-api`, `ic-invoice-api`, `ic-payment-api`,
+  `ic-payer-account-api`) plus the `ic-workload` service account. The Biller Experience
+  Worker is deployed via `biller-experience.template.yaml` (it needs live Cosmos/blob +
+  `ic`-namespace workload identity), so it is not part of these overlays.
+- `overlays/nonprod/` — the `ic-nonprod` namespace with its own dedicated public
+  kgateway `Gateway` (`ic-hack-nonprod.eastus2.cloudapp.azure.com`, a separate Azure
+  LoadBalancer from prod's). Deployed on every PR; smoke tests still use
+  `kubectl port-forward` (deterministic, no wait on LB/DNS provisioning).
 - `overlays/prod/` — the `ic` namespace plus public kgateway `HTTPRoute`s. Deployed on
   merge to `main`.
 

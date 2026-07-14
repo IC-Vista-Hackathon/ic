@@ -2,13 +2,17 @@ apiVersion: kustomize.config.k8s.io/v1beta1
 kind: Kustomization
 
 # Nonprod environment: an isolated `ic-nonprod` namespace on the same aks-ic-hack
-# cluster (no separate infra). Deployed on every PR; functional/smoke tests reach
-# the services via `kubectl port-forward`, so no public HTTPRoutes are defined here.
+# cluster. Deployed on every PR. Publicly exposed through its OWN kgateway Gateway
+# (ic-hack-nonprod.eastus2.cloudapp.azure.com), separate from prod's LB and
+# hostname. Smoke tests still use `kubectl port-forward` (deterministic; doesn't
+# wait on LB/DNS provisioning).
 namespace: ic-nonprod
 
 resources:
   - namespace.yaml
   - ../../base
+  - gateway.yaml
+  - httproutes.yaml
 
 # `kustomize edit set image <name>=<name>:<sha>` in the deploy workflow pins every
 # image to the PR head commit's immutable tag. `latest` here is only a placeholder.
