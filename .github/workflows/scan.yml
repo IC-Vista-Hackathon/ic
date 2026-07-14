@@ -5,6 +5,9 @@ name: Security scan
 # upload to the GitHub Security tab is attempted too, but it needs GitHub Advanced
 # Security — so it's non-blocking until GHAS is enabled on the repo.
 # CodeQL (code) and dependency-review (supply chain) run in their own workflows.
+#
+# Trivy is installed via its official script (pinned) rather than trivy-action,
+# whose older tags reference a deleted setup-trivy release.
 
 on:
   pull_request:
@@ -22,6 +25,9 @@ concurrency:
   group: scan-${{ github.ref }}
   cancel-in-progress: true
 
+env:
+  TRIVY_VERSION: v0.71.2
+
 jobs:
   trivy:
     name: Trivy filesystem & config
@@ -29,26 +35,22 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Install Trivy
+        run: |
+          curl -sfL https://raw.githubusercontent.com/aquasecurity/trivy/main/contrib/install.sh \
+            | sh -s -- -b "${RUNNER_TEMP}/bin" "${TRIVY_VERSION}"
+          echo "${RUNNER_TEMP}/bin" >> "$GITHUB_PATH"
+
       - name: Trivy scan (table, printed to log)
-        uses: aquasecurity/trivy-action@18f2510ee396bbf400402947b394f2dd8c87dbb0 # v0.29.0
-        with:
-          scan-type: fs
-          scanners: vuln,misconfig,secret
-          format: table
-          severity: CRITICAL,HIGH
-          ignore-unfixed: true
-          exit-code: "0"
+        run: |
+          trivy fs --scanners vuln,misconfig,secret \
+            --severity CRITICAL,HIGH --ignore-unfixed --exit-code 0 .
 
       - name: Trivy scan (SARIF)
-        uses: aquasecurity/trivy-action@18f2510ee396bbf400402947b394f2dd8c87dbb0 # v0.29.0
-        with:
-          scan-type: fs
-          scanners: vuln,misconfig,secret
-          format: sarif
-          output: trivy-results.sarif
-          severity: CRITICAL,HIGH
-          ignore-unfixed: true
-          exit-code: "0"
+        run: |
+          trivy fs --scanners vuln,misconfig,secret \
+            --severity CRITICAL,HIGH --ignore-unfixed --exit-code 0 \
+            --format sarif --output trivy-results.sarif .
 
       - name: Upload SARIF to Security tab
         # Requires GitHub Advanced Security; non-blocking until it's enabled.
