@@ -43,7 +43,7 @@ export const api = {
 
 async function supportingRequest<T>(path: string, billerId: string): Promise<T> {
   const trace = newTrace();
-  const response = await fetch(path, { headers: { 'x-correlation-id': trace.correlationId, traceparent: trace.traceparent, 'x-ic-biller-id': billerId } });
+  const response = await fetch(`${baseUrl}${path}`, { headers: { 'x-correlation-id': trace.correlationId, traceparent: trace.traceparent, 'x-ic-biller-id': billerId } });
   if (!response.ok) throw new Error(`Supporting service request failed with ${response.status}.`);
   return response.json() as Promise<T>;
 }
