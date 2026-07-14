@@ -1,0 +1,37 @@
+{
+  "tools": [
+    {
+      "type": "function",
+      "function": {
+        "name": "update_config",
+        "description": "Apply a JSON merge-patch to the biller's draft BillerConfiguration to correct aesthetics/accessibility issues (e.g. a contrast-corrected primary_color). Backed by PATCH /billers/{id}/config. The 'compliance' field is server-written only and any patch touching it is rejected — never include it.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "patch": {
+              "type": "object",
+              "description": "Merge-patch limited to brand/legibility fields being corrected.",
+              "properties": {
+                "brand": {
+                  "type": "object",
+                  "properties": {
+                    "primary_color": { "type": "string", "description": "hex color, e.g. #0044cc" },
+                    "logo_text": { "type": "string" },
+                    "logo_url": { "type": "string" },
+                    "tagline": { "type": "string" },
+                    "tone": { "type": "string" }
+                  },
+                  "additionalProperties": false
+                },
+                "receipt_message": { "type": "string" },
+                "languages": { "type": "array", "items": { "type": "string", "description": "ISO language code" } }
+              },
+              "additionalProperties": false
+            }
+          },
+          "required": ["patch"]
+        }
+      }
+    }
+  ]
+}
