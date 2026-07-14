@@ -87,7 +87,7 @@ Container `payer_accounts`, partition key `/biller_id`.
 | biller_id | string (guid) | partition key; scoped per biller (no cross-biller identity, v1) |
 | name, email, phone | string | |
 | account_numbers | string[] | linked biller account numbers (external, not a reference) |
-| preferences | object | `{autopay, paperless, channels: [email, sms], payment_day}` |
+| preferences | object | `{autopay, paperless, channels: [email, sms], payment_day}` — `payment_day` is only meaningful while `autopay` is true (no "clear" operation needed: disabling autopay makes it inert, re-enabling overwrites it). Host validation: enabling autopay requires a `payment_day` already set or supplied in the same request. |
 
 ## Invoice
 Fake-seeded at onboarding; queried by account number.

@@ -94,7 +94,7 @@ public sealed class InvoicesControllerTests
         var result = await controller.Seed("b_1", new SeedInvoicesRequest(Count: 1), CancellationToken.None);
 
         var body = (SeedInvoicesResponse)Assert.IsType<ObjectResult>(result).Value!;
-        Assert.Equal("due", body.Invoices[0].Status);
+        Assert.Equal(InvoiceStatus.Due, body.Invoices[0].Status);
     }
 
     private sealed class FixedTimeProvider(DateTimeOffset now) : TimeProvider

@@ -1,0 +1,20 @@
+# GatewayParameters customizes the LoadBalancer Service that kgateway provisions
+# for the Gateway in this directory. The extraAnnotations block is how we get an
+# Azure-issued, instantly-resolvable hostname with no external DNS purchase and no
+# propagation wait: the azure-dns-label-name annotation tells the in-tree Azure
+# cloud-provider to register <label>.<region>.cloudapp.azure.com in Azure's own
+# DNS (not a zone we manage), which resolves immediately once the LB is provisioned.
+#
+# Do not edit the chart-managed default GatewayParameters (kgateway-system/kgateway).
+# This is a separate, explicitly-referenced GatewayParameters per kgateway's guidance.
+apiVersion: gateway.kgateway.dev/v1alpha1
+kind: GatewayParameters
+metadata:
+  name: ic-hack-gw-params
+  namespace: kgateway-system
+spec:
+  kube:
+    service:
+      type: LoadBalancer
+      extraAnnotations:
+        service.beta.kubernetes.io/azure-dns-label-name: ic-hack

@@ -41,6 +41,14 @@ Foundry) read/write through service APIs via tools. Agents never touch storage d
 Pipeline: `Bill Intelligence → Financial Planning → Policy → Execution`. Each stage hands a
 structured artifact to the next (bill summary → payment plan → approved plan → payment).
 
+## Implementation conventions
+
+- **API hosts use ASP.NET Core controllers, not minimal APIs.** All service hosts
+  (`IC.BillerExperience.Api` and future `IC.Payment.Api`, `IC.PayerAccount.Api`,
+  `IC.Invoice.Api`, …) expose their endpoints via `[ApiController]` controller classes.
+  The current minimal-API placeholder endpoints in `IC.BillerExperience.Api/Program.cs`
+  get converted when real endpoints land. Health checks (`MapHealthChecks`) stay as-is.
+
 ## Boundaries
 
 - Only Execution Agent calls the Payment Service, and only after explicit payer confirmation.

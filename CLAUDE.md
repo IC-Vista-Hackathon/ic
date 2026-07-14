@@ -93,9 +93,11 @@ Docs to read before making non-trivial changes:
   endpoint — `compliance` is not agent-writable via `update_config`.
 - **Contracts vs. design docs.** `contracts/IC.BillerExperience.Contracts` holds versioned
   transport DTOs for the Biller Experience capability only. Persistence entities, Kubernetes SDK
-  types, and Microsoft Agent Framework types must never leak into those contracts. Supporting
-  services not yet implemented (Invoice, Payment, PayerAccount, Notification) keep their wire
-  behavior defined in `design/contracts.md` until they get their own versioned project.
+  types, and Microsoft Agent Framework types must never leak into those contracts. Invoice,
+  Payment, and PayerAccount now have versioned contract projects under `contracts/` and hosts
+  under `services/`; Notification keeps its wire behavior defined in `design/contracts.md` until
+  it gets its own versioned project. Wire format is snake_case with lowercase string enums —
+  non-Invoice hosts get it from `libraries/IC.ServiceDefaults`.
 
 ## Git workflow
 
@@ -119,6 +121,7 @@ against `main`. Do not commit or push straight to `main`.
 
 ## Current state (foundation phase)
 
-No Dockerfiles exist yet for any service. `deploy/helm/` and `deploy/kubernetes/` are placeholder
-READMEs with no manifests yet. Don't assume build/deploy tooling exists beyond what's described
-above — check before relying on it.
+`IC.Invoice.Api`, `IC.Payment.Api`, and `IC.PayerAccount.Api` each have a multi-stage Dockerfile
+(build context = repo root). `deploy/helm/` and `deploy/kubernetes/` remain mostly placeholder
+READMEs. Don't assume build/deploy tooling exists beyond what's described above — check before
+relying on it.
