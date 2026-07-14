@@ -62,6 +62,8 @@ module aiFoundry 'modules/aiFoundry.bicep' = {
     name: 'aif-${prefix}-${suffix}'
     location: location
     workloadIdentityPrincipalId: workloadIdentity.outputs.principalId
+    appInsightsId: appInsights.outputs.id
+    appInsightsConnectionString: appInsights.outputs.connectionString
   }
 }
 
