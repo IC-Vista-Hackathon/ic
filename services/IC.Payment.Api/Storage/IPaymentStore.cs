@@ -4,9 +4,9 @@ namespace IC.Payment.Api.Storage;
 
 public interface IPaymentStore
 {
-    void Add(PaymentResponse payment);
+    Task AddAsync(PaymentResponse payment, CancellationToken cancellationToken = default);
 
-    PaymentResponse? Find(string billerId, string paymentId);
+    Task<PaymentResponse?> FindAsync(string billerId, string paymentId, CancellationToken cancellationToken = default);
 }
 
 public sealed class InMemoryPaymentStore : IPaymentStore
@@ -14,19 +14,22 @@ public sealed class InMemoryPaymentStore : IPaymentStore
     private readonly object gate = new();
     private readonly Dictionary<(string BillerId, string PaymentId), PaymentResponse> payments = [];
 
-    public void Add(PaymentResponse payment)
+    public Task AddAsync(PaymentResponse payment, CancellationToken cancellationToken = default)
     {
         lock (gate)
         {
             payments[(payment.BillerId, payment.PaymentId)] = payment;
         }
+
+        return Task.CompletedTask;
     }
 
-    public PaymentResponse? Find(string billerId, string paymentId)
+    public Task<PaymentResponse?> FindAsync(
+        string billerId, string paymentId, CancellationToken cancellationToken = default)
     {
         lock (gate)
         {
-            return payments.GetValueOrDefault((billerId, paymentId));
+            return Task.FromResult(payments.GetValueOrDefault((billerId, paymentId)));
         }
     }
 }

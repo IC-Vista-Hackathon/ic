@@ -6,9 +6,9 @@ namespace IC.Payment.Api.Storage;
 public interface IPurchaseStore
 {
     /// <summary>Adds the purchase; throws 409 already_purchased if the biller has one.</summary>
-    void Add(PurchaseResponse purchase);
+    Task AddAsync(PurchaseResponse purchase, CancellationToken cancellationToken = default);
 
-    PurchaseResponse? Find(string billerId, string purchaseId);
+    Task<PurchaseResponse?> FindAsync(string billerId, string purchaseId, CancellationToken cancellationToken = default);
 }
 
 public sealed class InMemoryPurchaseStore : IPurchaseStore
@@ -16,7 +16,7 @@ public sealed class InMemoryPurchaseStore : IPurchaseStore
     private readonly object gate = new();
     private readonly Dictionary<(string BillerId, string PurchaseId), PurchaseResponse> purchases = [];
 
-    public void Add(PurchaseResponse purchase)
+    public Task AddAsync(PurchaseResponse purchase, CancellationToken cancellationToken = default)
     {
         lock (gate)
         {
@@ -28,13 +28,16 @@ public sealed class InMemoryPurchaseStore : IPurchaseStore
 
             purchases[(purchase.BillerId, purchase.PurchaseId)] = purchase;
         }
+
+        return Task.CompletedTask;
     }
 
-    public PurchaseResponse? Find(string billerId, string purchaseId)
+    public Task<PurchaseResponse?> FindAsync(
+        string billerId, string purchaseId, CancellationToken cancellationToken = default)
     {
         lock (gate)
         {
-            return purchases.GetValueOrDefault((billerId, purchaseId));
+            return Task.FromResult(purchases.GetValueOrDefault((billerId, purchaseId)));
         }
     }
 }

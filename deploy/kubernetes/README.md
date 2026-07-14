@@ -10,6 +10,9 @@ Raw YAML for now — static objects, not enough variation yet to justify Helm/Ku
 | `service-account.yaml` | `ic-workload` service account, federated to `uami-ic-hack-workload` via workload identity (see `infra/bicep`) |
 | `biller-experience.template.yaml` | API, worker, Studio, shared PWA renderer, services, probes, resource controls, and Gateway API routes |
 | `biller-publisher-service-account.yaml` | dedicated Azure workload identity for the artifact publisher |
+| `invoice-api/` | `ic-invoice-api` Deployment + Service (Cosmos-backed invoices) |
+| `payment-api/` | `ic-payment-api` Deployment + Service (Cosmos-backed payments/purchases) |
+| `payer-account-api/` | `ic-payer-account-api` Deployment + Service (Cosmos-backed payer accounts) |
 
 The Biller Experience template is rendered at deploy time. Replace `ACR_LOGIN_SERVER`,
 `IMAGE_TAG`, `COSMOS_ENDPOINT`, `AI_FOUNDRY_ENDPOINT`, `PAYER_EXPERIENCE_BLOB_ENDPOINT`,
@@ -45,6 +48,28 @@ az aks command invoke -g rg-ic-hack -n aks-ic-hack \
   --command "kubectl apply -f namespace.yaml -f service-account.yaml -f biller-publisher-service-account.yaml" \
   --file namespace.yaml --file service-account.yaml \
   --file biller-publisher-service-account.yaml
+```
+
+## Foundation services (invoice / payment / payer-account)
+
+Each has a `Deployment` + `Service` under its own directory, pinned to an immutable image tag
+(git short SHA) with `imagePullPolicy: IfNotPresent`. All three persist to Cosmos DB (database
+`ic`, one container per entity, partition key `/biller_id`) via `DefaultAzureCredential` — no
+connection strings or keys. Persistence is selected at runtime through the `Persistence__Provider`
+env (`Cosmos` in-cluster, `InMemory` default for local dev); the pods carry the
+`azure.workload.identity/use: "true"` label and run under `ic-workload` so the AKS webhook injects
+the federated token. State is shared across replicas, so these are safe to scale (kept at 1 for the
+sandbox).
+
+Apply (images must already be pushed to ACR — see the build-and-push flow):
+
+```sh
+cd deploy/kubernetes
+az aks command invoke -g rg-ic-hack -n aks-ic-hack \
+  --command "kubectl apply -f invoice-api/ -f payment-api/ -f payer-account-api/" \
+  --file invoice-api/deployment.yaml --file invoice-api/service.yaml --file invoice-api/httproute.yaml \
+  --file payment-api/deployment.yaml --file payment-api/service.yaml --file payment-api/httproute.yaml \
+  --file payer-account-api/deployment.yaml --file payer-account-api/service.yaml --file payer-account-api/httproute.yaml
 ```
 
 ## Gateway API / kgateway ingress
