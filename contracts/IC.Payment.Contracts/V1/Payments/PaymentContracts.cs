@@ -1,3 +1,5 @@
+using System.Text.Json.Serialization;
+
 namespace IC.Payment.Contracts.V1.Payments;
 
 public sealed record CreatePaymentRequest(
@@ -22,9 +24,25 @@ public sealed record PaymentResponse(
     string ReceiptMessage,
     DateTimeOffset CreatedAt);
 
+/// <summary>Wire tokens pinned at the type level so serialization is host-independent.</summary>
+[JsonConverter(typeof(PaymentStatusJsonConverter))]
 public enum PaymentStatus
 {
+    [JsonStringEnumMemberName("scheduled")]
     Scheduled,
+
+    [JsonStringEnumMemberName("succeeded")]
     Succeeded,
-    Failed
+
+    [JsonStringEnumMemberName("failed")]
+    Failed,
+}
+
+/// <summary>String-only converter for <see cref="PaymentStatus"/> (rejects integer tokens).</summary>
+public sealed class PaymentStatusJsonConverter : JsonStringEnumConverter<PaymentStatus>
+{
+    public PaymentStatusJsonConverter()
+        : base(namingPolicy: null, allowIntegerValues: false)
+    {
+    }
 }

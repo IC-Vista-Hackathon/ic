@@ -29,7 +29,7 @@ public sealed partial class ErrorEnvelopeMiddleware
         {
             await next(context).ConfigureAwait(false);
         }
-        catch (ServiceException exception)
+        catch (ServiceException exception) when (!context.Response.HasStarted)
         {
             context.Response.StatusCode = exception.StatusCode;
             await context.Response

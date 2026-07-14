@@ -1,3 +1,5 @@
+using System.Text.Json.Serialization;
+
 namespace IC.PayerAccount.Contracts.V1.Payers;
 
 public sealed record RegisterPayerRequest(
@@ -29,8 +31,22 @@ public sealed record UpdatePayerPreferencesRequest(
     IReadOnlyList<NotificationChannel>? Channels = null,
     int? PaymentDay = null);
 
+/// <summary>Wire tokens pinned at the type level so serialization is host-independent.</summary>
+[JsonConverter(typeof(NotificationChannelJsonConverter))]
 public enum NotificationChannel
 {
+    [JsonStringEnumMemberName("email")]
     Email,
-    Sms
+
+    [JsonStringEnumMemberName("sms")]
+    Sms,
+}
+
+/// <summary>String-only converter for <see cref="NotificationChannel"/> (rejects integer tokens).</summary>
+public sealed class NotificationChannelJsonConverter : JsonStringEnumConverter<NotificationChannel>
+{
+    public NotificationChannelJsonConverter()
+        : base(namingPolicy: null, allowIntegerValues: false)
+    {
+    }
 }

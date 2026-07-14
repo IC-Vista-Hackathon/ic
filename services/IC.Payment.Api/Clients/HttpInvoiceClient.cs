@@ -34,7 +34,11 @@ public sealed class HttpInvoiceClient : IInvoiceClient
             return null;
         }
 
-        response.EnsureSuccessStatusCode();
+        if (!response.IsSuccessStatusCode)
+        {
+            throw await ToServiceExceptionAsync(response, cancellationToken).ConfigureAwait(false);
+        }
+
         return await response.Content
             .ReadFromJsonAsync<InvoiceResponse>(Wire, cancellationToken)
             .ConfigureAwait(false);
@@ -54,17 +58,32 @@ public sealed class HttpInvoiceClient : IInvoiceClient
 
         if (!response.IsSuccessStatusCode)
         {
-            var envelope = await response.Content
-                .ReadFromJsonAsync<ErrorEnvelope>(Wire, cancellationToken)
-                .ConfigureAwait(false);
-            throw new ServiceException(
-                (int)response.StatusCode,
-                envelope?.Error.Code ?? "invoice_service_error",
-                envelope?.Error.Message ?? "Invoice service rejected the status update.");
+            throw await ToServiceExceptionAsync(response, cancellationToken).ConfigureAwait(false);
         }
 
         return (await response.Content
             .ReadFromJsonAsync<InvoiceResponse>(Wire, cancellationToken)
             .ConfigureAwait(false))!;
+    }
+
+    private static async Task<ServiceException> ToServiceExceptionAsync(
+        HttpResponseMessage response, CancellationToken cancellationToken)
+    {
+        ErrorEnvelope? envelope = null;
+        try
+        {
+            envelope = await response.Content
+                .ReadFromJsonAsync<ErrorEnvelope>(Wire, cancellationToken)
+                .ConfigureAwait(false);
+        }
+        catch (JsonException)
+        {
+            // Non-envelope body (proxy error page etc.) — fall through to the generic message.
+        }
+
+        return new ServiceException(
+            (int)response.StatusCode,
+            envelope?.Error.Code ?? "invoice_service_error",
+            envelope?.Error.Message ?? "Invoice service returned an unexpected error.");
     }
 }
