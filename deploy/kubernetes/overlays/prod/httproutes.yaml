@@ -1,6 +1,6 @@
 # Public exposure for the production control-plane APIs via the shared kgateway
 # Gateway (ic-gateway in kgateway-system, public LB / DNS
-# ic-hack.eastus2.cloudapp.azure.com). Each API gets a path prefix that is
+# pronto.eastus2.cloudapp.azure.com). Each API gets a path prefix that is
 # stripped via URLRewrite where the backend expects root paths.
 apiVersion: gateway.networking.k8s.io/v1
 kind: HTTPRoute

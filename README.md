@@ -1,9 +1,9 @@
-# IC Biller Studio
+# Pronto Biller Studio
 
-IC Biller Studio is an agent-assisted onboarding and experience-publishing platform for billers.
+Pronto Biller Studio is an agent-assisted onboarding and experience-publishing platform for billers.
 A biller describes its brand and payment experience through chat, previews and approves the result,
 and receives an installable, fully branded PWA rendered by a shared Kubernetes deployment. Customers
-remain inside the biller's branded experience and existing InvoiceCloud payment rails remain
+remain inside the biller's branded experience and existing Pronto payment rails remain
 unchanged.
 
 The disruption is onboarding speed and customization, not money movement.
@@ -15,11 +15,11 @@ agent-assisted onboarding with a deterministic fallback, Cosmos and in-memory re
 approval and idempotent publication requests, the Biller Studio, and a configuration-driven payer
 PWA. Phase 5 publishes immutable per-biller artifacts to Azure Blob Storage and activates them in
 the shared payer renderer. The supporting payment experience is still backed by local demo
-providers until the existing InvoiceCloud payment APIs are connected.
+providers until the existing Pronto payment APIs are connected.
 
 The documents under [`design/`](design/README.md) came from the original `main` branch and remain
 the source of truth for supporting service responsibilities, entities, REST behavior, and agent
-boundaries. This README and `IC.slnx` are the source of truth for repository and solution structure.
+boundaries. This README and `Pronto.slnx` are the source of truth for repository and solution structure.
 Where the documents use conceptual names such as "Biller Configuration Service," the mapping below
 defines the concrete .NET project that implements that capability.
 
@@ -27,16 +27,16 @@ defines the concrete .NET project that implements that capability.
 
 | Concern | Name | Runtime name |
 | --- | --- | --- |
-| Product | IC Biller Studio | — |
-| Agentic experience API | `IC.BillerExperience.Api` | `ic-biller-experience-api` |
-| Publishing worker | `IC.BillerExperience.Worker` | `ic-biller-experience-worker` |
-| Orchestration library | `IC.Agentic.Orchestration` | — |
-| Public contracts | `IC.BillerExperience.Contracts` | — |
-| Customer application | `IC.BillerPayments.Pwa` | `ic-biller-payments-pwa` |
+| Product | Pronto Biller Studio | — |
+| Agentic experience API | `Pronto.BillerExperience.Api` | `ic-biller-experience-api` |
+| Publishing worker | `Pronto.BillerExperience.Worker` | `ic-biller-experience-worker` |
+| Orchestration library | `Pronto.Agentic.Orchestration` | — |
+| Public contracts | `Pronto.BillerExperience.Contracts` | — |
+| Customer application | `Pronto.BillerPayments.Pwa` | `ic-biller-payments-pwa` |
 | Operational database | `ic-biller-experience` | — |
 
 The service is named after the business capability rather than the implementation. Agentic
-orchestration can evolve without renaming the API used by billers and other IC systems.
+orchestration can evolve without renaming the API used by billers and other Pronto systems.
 
 ## Architecture
 
@@ -44,12 +44,12 @@ orchestration can evolve without renaming the API used by billers and other IC s
 Biller
   │ chat + preview + approval
   ▼
-IC Biller Studio
+Pronto Biller Studio
   │ HTTPS / server-sent events
   ▼
-IC.BillerExperience.Api
+Pronto.BillerExperience.Api
   │
-  ├── IC.Agentic.Orchestration
+  ├── Pronto.Agentic.Orchestration
   │     Discover → Draft → Validate → Preview → Approve
   │
   ├── Azure Cosmos DB for NoSQL
@@ -57,23 +57,23 @@ IC.BillerExperience.Api
   │
   └── durable publication request
           ▼
-IC.BillerExperience.Worker
+Pronto.BillerExperience.Worker
   │ immutable revision + atomic active pointer
   ▼
 Private Azure Blob Storage
   │ versioned public-safe biller artifacts
   ▼
-IC.BillerExperience.Api
+Pronto.BillerExperience.Api
   │ private artifact reader
   ▼
-Shared IC.BillerPayments.Pwa deployment
+Shared Pronto.BillerPayments.Pwa deployment
   │ /pay/{slug}/
           │
           ▼
 Branded installable PWA
           │
           ▼
-Existing InvoiceCloud payment APIs and rails
+Existing Pronto payment APIs and rails
 ```
 
 The generated artifact is a typed, versioned `BillerExperienceDefinition`. Agents may generate
@@ -85,14 +85,14 @@ manifest artifacts; every biller uses the same reviewed PWA image.
 
 | Documented capability | Concrete project/location | Ownership |
 | --- | --- | --- |
-| Biller Configuration Service | `services/IC.BillerExperience.Api` | Biller Experience |
-| Deployment Service | `services/IC.BillerExperience.Worker` | Biller Experience |
-| Biller Onboarding Experience | `frontends/IC.BillerExperience.Studio` | Biller Experience |
-| Payer Experience | `frontends/IC.BillerPayments.Pwa` | Biller Experience |
-| Invoice Service | `services/IC.Invoice.Api` | Supporting service; follow `design/` |
-| Payment Service | `services/IC.Payment.Api` | Supporting service; follow `design/` |
-| Payer Account Service | `services/IC.PayerAccount.Api` | Supporting service; follow `design/` |
-| Notification Service | future `services/IC.Notification.Worker` | Stretch; follow `design/` |
+| Biller Configuration Service | `services/Pronto.BillerExperience.Api` | Biller Experience |
+| Deployment Service | `services/Pronto.BillerExperience.Worker` | Biller Experience |
+| Biller Onboarding Experience | `frontends/Pronto.BillerExperience.Studio` | Biller Experience |
+| Payer Experience | `frontends/Pronto.BillerPayments.Pwa` | Biller Experience |
+| Invoice Service | `services/Pronto.Invoice.Api` | Supporting service; follow `design/` |
+| Payment Service | `services/Pronto.Payment.Api` | Supporting service; follow `design/` |
+| Payer Account Service | `services/Pronto.PayerAccount.Api` | Supporting service; follow `design/` |
+| Notification Service | future `services/Pronto.Notification.Worker` | Stretch; follow `design/` |
 | AI Foundry agent definitions | `agents/` | Follow `design/services.md` |
 
 Supporting services retain the behavior documented on `main`, including integer-cent money values,
@@ -104,21 +104,21 @@ configures and invokes those capabilities; it does not absorb their data or mone
 
 ```text
 ic/
-├── IC.slnx
+├── Pronto.slnx
 ├── Directory.Build.props
 ├── Directory.Packages.props
 ├── global.json
 ├── contracts/
-│   ├── IC.Contracts.slnx
-│   └── IC.BillerExperience.Contracts/
+│   ├── Pronto.Contracts.slnx
+│   └── Pronto.BillerExperience.Contracts/
 ├── libraries/
-│   └── IC.Agentic.Orchestration/
+│   └── Pronto.Agentic.Orchestration/
 ├── services/
-│   ├── IC.BillerExperience.Api/
-│   └── IC.BillerExperience.Worker/
+│   ├── Pronto.BillerExperience.Api/
+│   └── Pronto.BillerExperience.Worker/
 ├── frontends/
-│   ├── IC.BillerExperience.Studio/
-│   └── IC.BillerPayments.Pwa/
+│   ├── Pronto.BillerExperience.Studio/
+│   └── Pronto.BillerPayments.Pwa/
 ├── deploy/
 │   ├── helm/
 │   └── kubernetes/
@@ -130,15 +130,15 @@ ic/
 `contracts` contains transport contracts only. Persistence entities, Kubernetes SDK types, and
 Microsoft Agent Framework types must never become part of those public contracts.
 
-`libraries/IC.Agentic.Orchestration` owns IC's framework-neutral orchestration API. Microsoft Agent
-Framework can be used internally, but consumers depend on IC abstractions.
+`libraries/Pronto.Agentic.Orchestration` owns Pronto's framework-neutral orchestration API. Microsoft Agent
+Framework can be used internally, but consumers depend on Pronto abstractions.
 
 `services` contains independently deployable .NET 10 workloads. Frontends and infrastructure are
 kept separate from service implementation.
 
 `design` preserves the existing system design and capability boundaries. `agents` contains the
-AI Foundry agent definitions described there. New supporting services use the `IC.<Capability>.*`
-project naming and are added to `IC.slnx`; they are not introduced as a competing repository layout.
+AI Foundry agent definitions described there. New supporting services use the `Pronto.<Capability>.*`
+project naming and are added to `Pronto.slnx`; they are not introduced as a competing repository layout.
 
 ## Onboarding workflow
 
@@ -161,7 +161,7 @@ retried without duplicating the deployment.
 
 ## Contracts
 
-Contracts are versioned under `IC.BillerExperience.Contracts/V1` and grouped by capability:
+Contracts are versioned under `Pronto.BillerExperience.Contracts/V1` and grouped by capability:
 
 - `Billers`: identity, brand, support, and existing payment-rail references.
 - `Onboarding`: sessions and biller messages.
@@ -176,12 +176,12 @@ payment credentials.
 
 Supporting-service wire behavior remains defined in [`design/contracts.md`](design/contracts.md).
 As those services are implemented, each receives its own versioned project under `contracts/` and
-is included in `contracts/IC.Contracts.slnx`; supporting-service DTOs do not get folded into
-`IC.BillerExperience.Contracts`.
+is included in `contracts/Pronto.Contracts.slnx`; supporting-service DTOs do not get folded into
+`Pronto.BillerExperience.Contracts`.
 
 ## Orchestration library
 
-`IC.Agentic.Orchestration` replaces the prototype's in-memory orchestration mode switchboard with
+`Pronto.Agentic.Orchestration` replaces the prototype's in-memory orchestration mode switchboard with
 small, typed seams:
 
 - `IOrchestrationWorkflow<TInput,TOutput>` defines a workflow.
@@ -222,7 +222,7 @@ Safety requirements:
 
 Two deliberately small frontends are planned:
 
-### IC Biller Studio
+### Pronto Biller Studio
 
 - conversational onboarding
 - missing-information checklist
@@ -231,14 +231,14 @@ Two deliberately small frontends are planned:
 - explicit approve and publish action
 - streaming workflow and deployment status
 
-### IC Biller Payments PWA
+### Pronto Biller Payments PWA
 
 - one reviewed, immutable application image
 - CSS custom properties and configuration-driven composition
 - web manifest and service worker
 - accessible, responsive payment components
-- integration only with existing InvoiceCloud payment APIs
-- no InvoiceCloud customer-facing branding
+- integration only with existing Pronto payment APIs
+- no Pronto customer-facing branding
 
 Every biller uses the same vetted, horizontally replicated renderer. The URL slug selects a
 private, API-delivered active artifact, while immutable revisions remain available for audit and
@@ -298,7 +298,7 @@ readiness/restarts, Cosmos throttling, PWA availability, and payment-page reques
   boundaries.
 - [x] Add initial versioned contracts and typed orchestration abstractions.
 - [x] Add API and worker host skeletons.
-- [x] Rebase onto the existing design and map its capabilities into the IC solution structure.
+- [x] Rebase onto the existing design and map its capabilities into the Pronto solution structure.
 - [ ] Add CI, ownership, and architecture decision records.
 
 ### Phase 2 — Orchestration and persistence
@@ -354,16 +354,16 @@ through Kubernetes readiness. Payment movement is unchanged.
 Prerequisite: .NET SDK 10.0.301 or a compatible 10.0 feature-band patch.
 
 ```powershell
-dotnet restore .\IC.slnx
-dotnet build .\IC.slnx --no-restore
-dotnet test .\IC.slnx --no-build
+dotnet restore .\Pronto.slnx
+dotnet build .\Pronto.slnx --no-restore
+dotnet test .\Pronto.slnx --no-build
 ```
 
 Run the service hosts locally:
 
 ```powershell
-dotnet run --project .\services\IC.BillerExperience.Api
-dotnet run --project .\services\IC.BillerExperience.Worker
+dotnet run --project .\services\Pronto.BillerExperience.Api
+dotnet run --project .\services\Pronto.BillerExperience.Worker
 ```
 
 The API defaults to in-memory persistence and the deterministic model provider, so no Azure

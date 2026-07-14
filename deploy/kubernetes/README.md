@@ -13,7 +13,7 @@ The control-plane service workloads are managed with Kustomize:
   runs. The Biller Experience Worker and frontends are NOT in `base` — they need live
   Cosmos/blob + `ic`-namespace workload identity, so they live only in the prod overlay.
 - `overlays/nonprod/` — the `ic-nonprod` namespace with its own dedicated public
-  kgateway `Gateway` (`ic-hack-nonprod.eastus2.cloudapp.azure.com`, a separate Azure
+  kgateway `Gateway` (`pronto-nonprod.eastus2.cloudapp.azure.com`, a separate Azure
   LoadBalancer from prod's). Deployed on every PR; smoke tests still use
   `kubectl port-forward` (deterministic, no wait on LB/DNS provisioning).
 - `overlays/prod/` — the `ic` namespace plus public kgateway `HTTPRoute`s. Adds the
@@ -58,7 +58,7 @@ from Azure at deploy time (`az monitor app-insights component show`) and substit
 by the deploy workflow.
 
 **Pivot in progress:** published payer sites only serve static content, so the target is one
-shared **Payer Site Router** workload instead of one Deployment per biller. `IC.BillerExperience.Worker`
+shared **Payer Site Router** workload instead of one Deployment per biller. `Pronto.BillerExperience.Worker`
 uploads each biller's artifacts into the `payer-experiences` blob container
 (`infra/bicep/modules/storage.bicep`, already provisioned), keyed by biller_id/slug prefix, and the
 API serves the active artifact to the shared PWA. Per-biller Deployment/Service/HTTPRoute RBAC then
@@ -140,7 +140,7 @@ Installing the `kgateway` Helm chart auto-creates the `GatewayClass/kgateway`
 
 `Gateway/ic-gateway` defaults to a `Service` of `type: LoadBalancer`, which gets a public Azure
 Load Balancer IP. `gateway/gateway-parameters.yaml` adds the
-`service.beta.kubernetes.io/azure-dns-label-name: ic-hack` annotation to that Service via
+`service.beta.kubernetes.io/azure-dns-label-name: pronto` annotation to that Service via
 `GatewayParameters.spec.kube.service.extraAnnotations` (referenced from the Gateway through
 `spec.infrastructure.parametersRef` — Gateway API's own `infrastructure.annotations` field is not
 used because kgateway plumbs Service customization through its `GatewayParameters` CRD instead).
@@ -151,7 +151,7 @@ no cost, no propagation delay.
 Resulting hostname:
 
 ```
-ic-hack.eastus2.cloudapp.azure.com   ->  20.96.210.8
+pronto.eastus2.cloudapp.azure.com   ->  20.96.210.8
 ```
 
 Verified two ways:
@@ -159,9 +159,9 @@ Verified two ways:
 ```bash
 az network public-ip list -g MC_rg-ic-hack_aks-ic-hack_eastus2 \
   --query "[].{name:name, ip:ipAddress, fqdn:dnsSettings.fqdn}" -o table
-# kubernetes-a31175a886f9c42f1a7c997a7fa2f750  20.96.210.8  ic-hack.eastus2.cloudapp.azure.com
+# kubernetes-a31175a886f9c42f1a7c997a7fa2f750  20.96.210.8  pronto.eastus2.cloudapp.azure.com
 
-curl -i http://ic-hack.eastus2.cloudapp.azure.com/
+curl -i http://pronto.eastus2.cloudapp.azure.com/
 # HTTP/1.1 500 Internal Server Error
 # server: envoy
 ```

@@ -40,7 +40,7 @@ jobs:
           build-mode: manual
 
       - name: Build
-        run: dotnet build IC.slnx -c Release
+        run: dotnet build Pronto.slnx -c Release
 
       - name: Perform CodeQL analysis
         uses: github/codeql-action/analyze@v3

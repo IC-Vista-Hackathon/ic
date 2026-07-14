@@ -2,9 +2,9 @@
 # separate Azure LoadBalancer for it; the azure-dns-label-name annotation registers
 # an instantly-resolvable hostname in Azure's own DNS (no external DNS purchase):
 #
-#   ic-hack-nonprod.eastus2.cloudapp.azure.com
+#   pronto-nonprod.eastus2.cloudapp.azure.com
 #
-# Prod keeps its own Gateway (ic-hack.eastus2.cloudapp.azure.com) in kgateway-system,
+# Prod keeps its own Gateway (pronto.eastus2.cloudapp.azure.com) in kgateway-system,
 # so the two environments never share a load balancer, hostname, or route path.
 # Both Gateway and GatewayParameters live in ic-nonprod (namespaced by the overlay).
 apiVersion: gateway.kgateway.dev/v1alpha1
@@ -16,7 +16,7 @@ spec:
     service:
       type: LoadBalancer
       extraAnnotations:
-        service.beta.kubernetes.io/azure-dns-label-name: ic-hack-nonprod
+        service.beta.kubernetes.io/azure-dns-label-name: pronto-nonprod
 ---
 apiVersion: gateway.networking.k8s.io/v1
 kind: Gateway

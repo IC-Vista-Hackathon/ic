@@ -119,7 +119,7 @@ Container `payments`, partition key `/biller_id`.
 | method | string | one of the config's payment_methods |
 | amount_cents | int | |
 | fee_cents | int | computed from config fees |
-| confirmation | string | `IC-XXXXXX`, generated code, not a reference |
+| confirmation | string | `PRONTO-XXXXXX`, generated code, not a reference |
 | status | enum | `scheduled` \| `succeeded` \| `failed` |
 | scheduled_for | date \| null | set when Financial Planning Agent chooses "pay later"; null for immediate pay |
 | created_at | timestamp | |

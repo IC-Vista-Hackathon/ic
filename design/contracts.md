@@ -2,7 +2,7 @@
 
 REST, JSON, integer cents. Errors: `{"error": {"code", "message"}}` with conventional HTTP status.
 Wire casing is **snake_case** with **lowercase string enums**, exactly as the JSON examples below
-show — implemented by `IC.Invoice.Api`'s JSON options and by `libraries/IC.ServiceDefaults`
+show — implemented by `Pronto.Invoice.Api`'s JSON options and by `libraries/Pronto.ServiceDefaults`
 (`SnakeCaseLower` naming policy + `JsonStringEnumConverter`) for every other host. Query-string
 parameters are snake_case too (`?biller_id=`, `?account_number=`).
 IDs on the wire are Cosmos-generated GUID strings (`b_1a2b`, `i_77` etc. below are illustrative
@@ -61,7 +61,7 @@ POST /billers/b_1a2b/deployments   {"isolation": "shared"}
 
 ```json
 POST /payments           {"biller_id": "b_1a2b", "invoice_id": "i_77", "method": "card", "payer_account_id": null}
-→ 201                    {"payment_id": "p_3c", "confirmation": "IC-4F2A9B", "amount_cents": 8420,
+→ 201                    {"payment_id": "p_3c", "confirmation": "PRONTO-4F2A9B", "amount_cents": 8420,
                           "fee_cents": 211, "receipt_message": "Thanks from the City of Plano!"}
 ```
 

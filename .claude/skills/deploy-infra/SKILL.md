@@ -1,6 +1,6 @@
 ---
 name: deploy-infra
-description: Validate and deploy/update the hackathon sandbox Bicep infra (Cosmos DB, AI Foundry, AKS, ACR) under infra/bicep. Use when asked to deploy, redeploy, update, or provision the IC hackathon Azure infra, or to check what a Bicep change would do before applying it.
+description: Validate and deploy/update the hackathon sandbox Bicep infra (Cosmos DB, AI Foundry, AKS, ACR) under infra/bicep. Use when asked to deploy, redeploy, update, or provision the Pronto hackathon Azure infra, or to check what a Bicep change would do before applying it.
 ---
 
 # Deploy infra

@@ -38,19 +38,19 @@ jobs:
       matrix:
         include:
           - image: ic-biller-experience-api
-            dockerfile: services/IC.BillerExperience.Api/Dockerfile
+            dockerfile: services/Pronto.BillerExperience.Api/Dockerfile
           - image: ic-biller-experience-worker
-            dockerfile: services/IC.BillerExperience.Worker/Dockerfile
+            dockerfile: services/Pronto.BillerExperience.Worker/Dockerfile
           - image: ic-biller-experience-studio
-            dockerfile: frontends/IC.BillerExperience.Studio/Dockerfile
+            dockerfile: frontends/Pronto.BillerExperience.Studio/Dockerfile
           - image: ic-biller-payments-pwa
-            dockerfile: frontends/IC.BillerPayments.Pwa/Dockerfile
+            dockerfile: frontends/Pronto.BillerPayments.Pwa/Dockerfile
           - image: ic-invoice-api
-            dockerfile: services/IC.Invoice.Api/Dockerfile
+            dockerfile: services/Pronto.Invoice.Api/Dockerfile
           - image: ic-payment-api
-            dockerfile: services/IC.Payment.Api/Dockerfile
+            dockerfile: services/Pronto.Payment.Api/Dockerfile
           - image: ic-payer-account-api
-            dockerfile: services/IC.PayerAccount.Api/Dockerfile
+            dockerfile: services/Pronto.PayerAccount.Api/Dockerfile
     steps:
       - uses: actions/checkout@v4
 
