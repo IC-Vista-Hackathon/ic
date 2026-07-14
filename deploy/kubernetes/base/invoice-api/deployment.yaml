@@ -6,8 +6,8 @@ metadata:
     app: ic-invoice-api
     app.kubernetes.io/part-of: ic
 spec:
-  # Cosmos-backed persistence (partition /biller_id) — state is shared, so this is
-  # safe to scale; kept at 1 for the sandbox.
+  # In-memory stores: replicas MUST stay 1 until Cosmos lands — with 2+, seeds
+  # land on one pod and lookups hit the other (verified live 2026-07-14).
   replicas: 1
   selector:
     matchLabels:
@@ -16,11 +16,7 @@ spec:
     metadata:
       labels:
         app: ic-invoice-api
-        # Opt this pod into the AKS workload-identity webhook (federated token for Cosmos).
-        azure.workload.identity/use: "true"
     spec:
-      # Platform-provisioned SA (federated to the workload UAMI); authenticates to
-      # Cosmos via DefaultAzureCredential — no connection strings or keys.
       serviceAccountName: ic-workload
       containers:
         - name: invoice-api
@@ -28,14 +24,6 @@ spec:
           ports:
             - name: http
               containerPort: 8080
-          env:
-            # Cosmos SQL account (public endpoint; auth is workload identity, not keys).
-            - name: Persistence__Provider
-              value: Cosmos
-            - name: Persistence__CosmosEndpoint
-              value: https://cosmos-ic-hack-jk4zmntatjem4.documents.azure.com:443/
-            - name: Persistence__DatabaseName
-              value: ic
           readinessProbe:
             httpGet:
               path: /health/ready

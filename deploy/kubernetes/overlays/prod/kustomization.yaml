@@ -10,6 +10,12 @@ resources:
   - ../../base
   - httproutes.yaml
 
+# Cosmos-backed persistence + workload-identity opt-in for the foundation services.
+# Prod-only: the workload identity is federated to system:serviceaccount:ic:ic-workload,
+# so only this namespace can authenticate to Cosmos. nonprod uses the base InMemory default.
+patches:
+  - path: cosmos-persistence.yaml
+
 # `kustomize edit set image <name>=<name>:<sha>` in the deploy workflow pins every
 # image to the merged commit's immutable tag. `latest` here is only a placeholder.
 images:
