@@ -1,7 +1,14 @@
 # Exposure via the existing kgateway Gateway API controller (not classic Ingress).
-# Attaches to the shared ic-gateway (public LB 20.96.210.8) on its :80 HTTP listener.
-# Hostname uses nip.io so it resolves to the gateway IP without any DNS setup:
-#   http://ic-invoice.20.96.210.8.nip.io/
+# Attaches to the shared ic-gateway (public LB / DNS ic-hack.eastus2.cloudapp.azure.com)
+# on its :80 HTTP listener.
+#
+# Follows the platform's path-based convention (mirrors ic-biller-experience:
+# /api, /studio and biller-sites: /pay): a path prefix is routed to the service
+# and stripped via URLRewrite so the backend receives its normal paths.
+#
+# Reachable at:  http://ic-hack.eastus2.cloudapp.azure.com/invoices/...
+#   e.g. POST /invoices/billers/{billerId}/invoices/seed
+#        -> rewritten to /billers/{billerId}/invoices/seed at the service
 apiVersion: gateway.networking.k8s.io/v1
 kind: HTTPRoute
 metadata:
@@ -16,13 +23,17 @@ spec:
       name: ic-gateway
       namespace: kgateway-system
       sectionName: http
-  hostnames:
-    - ic-invoice.20.96.210.8.nip.io
   rules:
     - matches:
         - path:
             type: PathPrefix
-            value: /
+            value: /invoices
+      filters:
+        - type: URLRewrite
+          urlRewrite:
+            path:
+              type: ReplacePrefixMatch
+              replacePrefixMatch: /
       backendRefs:
         - group: ""
           kind: Service
