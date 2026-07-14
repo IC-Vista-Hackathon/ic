@@ -1,3 +1,4 @@
+using IC.PayerAccount.Api;
 using IC.PayerAccount.Api.Storage;
 using IC.Persistence.Cosmos;
 using IC.ServiceDefaults;
@@ -6,6 +7,8 @@ using Microsoft.Azure.Cosmos;
 var builder = WebApplication.CreateBuilder(args);
 
 builder.Services.AddServiceDefaults();
+builder.Services.Configure<MaintenanceOptions>(
+    builder.Configuration.GetSection(MaintenanceOptions.SectionName));
 
 var persistence = builder.Configuration
     .GetSection(CosmosPersistenceOptions.SectionName)
