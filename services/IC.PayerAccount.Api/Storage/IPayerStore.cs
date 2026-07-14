@@ -9,6 +9,7 @@ public interface IPayerStore
     void Add(PayerResponse payer);
 
     PayerResponse? Find(string billerId, string payerId);
+    PayerResponse? FindByAccount(string billerId, string accountNumber);
 
     void Update(PayerResponse payer);
 }
@@ -39,6 +40,15 @@ public sealed class InMemoryPayerStore : IPayerStore
         lock (gate)
         {
             return payers.GetValueOrDefault((billerId, payerId));
+        }
+    }
+
+    public PayerResponse? FindByAccount(string billerId, string accountNumber)
+    {
+        lock (gate)
+        {
+            return payers.Values.FirstOrDefault(payer => payer.BillerId == billerId
+                && payer.AccountNumbers.Contains(accountNumber, StringComparer.Ordinal));
         }
     }
 

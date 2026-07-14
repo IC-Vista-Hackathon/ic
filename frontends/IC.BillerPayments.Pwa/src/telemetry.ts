@@ -1,3 +1,7 @@
+import { randomId } from './id';
+export interface FlowTrace { correlationId: string; traceId: string }
+export function createFlowTrace(): FlowTrace { return { correlationId: randomId(), traceId: randomId().replaceAll('-', '') }; }
+export function traceHeaders(flow: FlowTrace, billerId: string) { const spanId = randomId().replaceAll('-', '').slice(0, 16); return { 'x-correlation-id': flow.correlationId, 'x-ic-biller-id': billerId, traceparent: `00-${flow.traceId}-${spanId}-01` }; }
 export function logEvent(event: string, fields: Record<string, unknown> = {}) { console.info(JSON.stringify({ level: 'information', event, timestamp: new Date().toISOString(), ...fields })); }
 export function logError(event: string, error: unknown, fields: Record<string, unknown> = {}) { console.error(JSON.stringify({ level: 'error', event, timestamp: new Date().toISOString(), message: error instanceof Error ? error.message : String(error), ...fields })); }
 export async function observed<T>(operation: string, action: () => Promise<T>): Promise<T> { const started = performance.now(); try { const result = await action(); logEvent(`${operation}.completed`, { duration_ms: Math.round(performance.now() - started) }); return result; } catch (error) { logError(`${operation}.failed`, error, { duration_ms: Math.round(performance.now() - started) }); throw error; } }

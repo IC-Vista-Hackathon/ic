@@ -7,6 +7,7 @@ public interface IPaymentStore
     void Add(PaymentResponse payment);
 
     PaymentResponse? Find(string billerId, string paymentId);
+    IReadOnlyList<PaymentResponse> List(string billerId, string? payerAccountId, string? invoiceId);
 }
 
 public sealed class InMemoryPaymentStore : IPaymentStore
@@ -27,6 +28,19 @@ public sealed class InMemoryPaymentStore : IPaymentStore
         lock (gate)
         {
             return payments.GetValueOrDefault((billerId, paymentId));
+        }
+    }
+
+    public IReadOnlyList<PaymentResponse> List(string billerId, string? payerAccountId, string? invoiceId)
+    {
+        lock (gate)
+        {
+            return payments.Values
+                .Where(payment => payment.BillerId == billerId
+                    && (payerAccountId is null || payment.PayerAccountId == payerAccountId)
+                    && (invoiceId is null || payment.InvoiceId == invoiceId))
+                .OrderByDescending(payment => payment.CreatedAt)
+                .ToArray();
         }
     }
 }

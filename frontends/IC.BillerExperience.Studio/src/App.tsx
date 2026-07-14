@@ -1,7 +1,7 @@
 import { FormEvent, useMemo, useState } from 'react';
 import { activityUrl, api } from './api';
 import { logError, logEvent } from './telemetry';
-import type { AgentActivity, Bootstrap, Deployment, ExperienceDefinition, ExperiencePreferences, ExperienceRevision, PreviewScenario, Session } from './types';
+import type { AgentActivity, Bootstrap, Deployment, ExperienceDefinition, ExperiencePreferences, ExperienceRevision, PreviewInvoice, PreviewScenario, Session } from './types';
 
 type Message = { role: 'assistant' | 'user'; content: string };
 type PreviewDevice = 'desktop' | 'mobile';
@@ -19,6 +19,7 @@ export function App() {
   const [agentActivity, setAgentActivity] = useState<AgentActivity[]>([]);
   const [previewDevice, setPreviewDevice] = useState<PreviewDevice>('desktop');
   const [previewScenario, setPreviewScenario] = useState<PreviewScenario>('payment');
+  const [previewInvoices, setPreviewInvoices] = useState<PreviewInvoice[]>([]);
 
   const preferences = useMemo(() => experiencePreferences(draft?.definition), [draft]);
   const checklist = useMemo(() => [
@@ -36,6 +37,8 @@ export function App() {
       setBootstrap(created); setDraft(created.draft); setSession(created.session);
       setMessages([{ role: 'assistant', content: `Welcome! I created a starting preview for ${created.biller.display_name}. Tell me what should change.` }]);
       setPreviewDevice(experiencePreferences(created.draft.definition).preview.default_device);
+      const seeded = await api.invoices(created.biller.biller_id);
+      setPreviewInvoices(seeded.invoices);
       logEvent('studio.onboarding.started', { biller_id: created.biller.biller_id });
     } catch (caught) { setError(toMessage(caught)); logError('studio.onboarding.start_failed', caught); }
     finally { setBusy(false); }
@@ -60,6 +63,16 @@ export function App() {
     if (!bootstrap || !draft) return; setBusy(true); setError('');
     try { setDraft(await api.approve(bootstrap.biller.biller_id, draft.revision)); setApproved(true); }
     catch (caught) { setError(toMessage(caught)); logError('studio.approval.failed', caught); }
+    finally { setBusy(false); }
+  }
+
+  async function updatePreferences(next: ExperiencePreferences) {
+    if (!bootstrap || !draft) return; setBusy(true); setError('');
+    try {
+      const updated = await api.update(bootstrap.biller.biller_id, { ...draft.definition, preferences: next }, draft.e_tag);
+      setDraft(updated); setApproved(false);
+      logEvent('studio.preferences.updated', { biller_id: bootstrap.biller.biller_id });
+    } catch (caught) { setError(toMessage(caught)); logError('studio.preferences.update_failed', caught, { biller_id: bootstrap.biller.biller_id }); }
     finally { setBusy(false); }
   }
 
@@ -92,16 +105,17 @@ export function App() {
         <div className="panel-heading"><span className="eyebrow">Conversation</span><h2>Build with your onboarding agent</h2><p>Describe outcomes in plain language. Every accepted change appears in the preview.</p></div>
         <div className="prompt-chips" aria-label="Suggested changes">{['Offer guest checkout', 'Disable AutoPay', 'Enable paperless', 'Use Pay Later'].map(prompt => <button type="button" key={prompt} onClick={() => setMessage(prompt)}>{prompt}</button>)}</div>
         <div className="messages" aria-live="polite">{messages.map((item, index) => <div className={`message ${item.role}`} key={`${item.role}-${index}`}><strong>{item.role === 'assistant' ? 'Studio' : 'You'}</strong><p>{item.content}</p></div>)}</div>
+        <OrchestrationOutput activity={agentActivity} busy={busy} />
         <form className="composer" onSubmit={sendMessage}><label htmlFor="message">What should we change?</label><textarea id="message" value={message} onChange={event => setMessage(event.target.value)} rows={3} maxLength={4000}/><button disabled={busy || !message.trim()}>{busy ? 'Working…' : 'Send Change'}</button></form>
       </section>
       <section className="preview-panel" aria-label="Live customer preview">
         <div className="panel-heading preview-heading"><div><span className="eyebrow">Live preview</span><h2>Customer payment experience</h2></div><div className="device-switch" aria-label="Preview device"><button className={previewDevice === 'desktop' ? 'active' : ''} onClick={() => setPreviewDevice('desktop')}>Desktop</button><button className={previewDevice === 'mobile' ? 'active' : ''} onClick={() => setPreviewDevice('mobile')}>Mobile</button></div></div>
         <div className="scenario-tabs" role="tablist">{preferences.preview.enabled_scenarios.map(scenario => <button role="tab" aria-selected={previewScenario === scenario} className={previewScenario === scenario ? 'active' : ''} onClick={() => setPreviewScenario(scenario)} key={scenario}>{scenarioLabel(scenario)}</button>)}</div>
-        {draft && <PaymentPreview draft={draft} preferences={preferences} device={previewDevice} scenario={previewScenario} />}
+        {draft && <PaymentPreview draft={draft} preferences={preferences} invoices={previewInvoices} device={previewDevice} scenario={previewScenario} />}
       </section>
       <aside className="review-panel">
         <span className="eyebrow">Experience definition</span><h2>Review recommendations</h2><p>Preferences are stored with the versioned biller definition and rendered by the shared payer application.</p>
-        <PreferenceReview preferences={preferences} />
+        <PreferenceReview preferences={preferences} capabilities={draft?.definition.enabled_payment_capabilities ?? []} busy={busy} onChange={updatePreferences} />
         <h3>Publish readiness</h3><ul className="checklist">{checklist.map(([label, done]) => <li key={label} className={done ? 'done' : ''}><span aria-hidden="true">{done ? '✓' : '○'}</span>{label}</li>)}</ul>
         {draft?.findings?.map(finding => <div className="alert guidance" key={finding.code}><strong>Guidance for review</strong><p>{finding.message}</p></div>)}
         {!approved ? <button className="secondary" disabled={busy || session?.state !== 'draft_ready'} onClick={approve}>Approve Draft</button> : <button disabled={busy || Boolean(deployment)} onClick={publish}>{deployment ? 'Publication Queued' : 'Publish Experience'}</button>}
@@ -112,12 +126,43 @@ export function App() {
 }
 
 function Landing({ busy, error, onSubmit }: { busy: boolean; error: string; onSubmit: (event: FormEvent<HTMLFormElement>) => void }) {
-  return <main className="landing"><section className="hero"><span className="eyebrow light">Payment Experience Builder</span><h1>Launch a payment experience that feels like your brand.</h1><p>Describe your business, review AI-assisted recommendations, test payer scenarios, and publish a secure PWA in minutes.</p><div className="feature-list"><span>Compliance-aware</span><span>Branded by default</span><span>Real service integrations</span></div></section><form className="start-card" onSubmit={onSubmit}><span className="eyebrow">Get started</span><h2>Tell us about your business</h2>{error && <div className="alert error" role="alert">{error}</div>}<label>Business name<input name="name" required defaultValue="City of Vista" /></label><div className="field-row"><label>URL slug<input name="slug" required pattern="[a-z0-9-]{3,63}" defaultValue="city-of-vista" /></label><label>Postal code<input name="postalCode" required inputMode="numeric" pattern="[0-9]{5}" defaultValue="02110" /></label></div><label>Industry<select name="billType" defaultValue="Utility"><option>Utility</option><option>Property Tax</option><option>Insurance</option><option>General Invoice</option></select></label><label>Website <span>(optional)</span><input name="website" type="url" placeholder="https://example.gov" /></label><button disabled={busy}>{busy ? 'Building Preview…' : 'Build My Preview'}</button><small>No payment credentials are collected. Compliance findings remain guidance for biller review.</small></form></main>;
+  const [started, setStarted] = useState(false);
+  const [step, setStep] = useState(0);
+  const [name, setName] = useState('City of Vista');
+  const [slugValue, setSlugValue] = useState('city-of-vista');
+  const [postalCode, setPostalCode] = useState('02110');
+  const [billType, setBillType] = useState('Utility');
+  const [website, setWebsite] = useState('');
+  if (!started) return <main className="handoff-landing">
+    <header className="handoff-header"><strong>InvoiceCloud</strong><span>Payment Experience Builder</span></header>
+    <section className="handoff-hero"><span className="eyebrow light">InvoiceCloud · Try it out</span><h1>Build your own custom payment experience</h1><p>Answer a few questions about your business. Our agents will check your requirements, match your brand, and generate a live, service-backed preview.</p><button type="button" onClick={() => setStarted(true)}>Try It Out</button><small>No account or credit card required to preview</small></section>
+    <section className="handoff-features">{[
+      ['Compliance-aware', 'Review location-aware payment guidance before publishing.'],
+      ['Matches your brand', 'Turn your identity, colors, and language into a versioned experience.'],
+      ['Agent-built, human-approved', 'Watch each specialist agent work and keep control of every change.'],
+    ].map(([title, copy], index) => <article key={title}><i>{['✓','◇','✦'][index]}</i><h2>{title}</h2><p>{copy}</p></article>)}</section>
+  </main>;
+
+  const steps = ['Business type', 'Business details', 'Brand details', 'Review'];
+  return <main className="wizard-page"><div className="wordmark">InvoiceCloud</div><form className="wizard-card" onSubmit={onSubmit}>
+    <div className="wizard-progress"><div><span style={{ width: `${((step + 1) / steps.length) * 100}%` }}/></div><ol>{steps.map((label, index) => <li className={index <= step ? 'active' : ''} key={label}>{label}</li>)}</ol></div>
+    {error && <div className="alert error" role="alert">{error}</div>}
+    {step === 0 && <section><h1>What line of business is this for?</h1><p>We’ll tailor terminology, recommendations, and the payer preview to your business.</p><div className="choice-list">{['Utility','Property Tax','Insurance','General Invoice'].map(value => <button type="button" className={billType === value ? 'selected' : ''} onClick={() => setBillType(value)} key={value}><strong>{value}</strong><small>{value === 'Utility' ? 'Water, electric, gas, or municipal services' : value === 'Property Tax' ? 'Local tax and assessment payments' : value === 'Insurance' ? 'Premiums and policyholder billing' : 'Flexible invoice and account payments'}</small></button>)}</div></section>}
+    {step === 1 && <section><h1>Tell us about the business</h1><p>This becomes the identity and URL of the generated experience.</p><label>Business name<input value={name} onChange={event => { setName(event.target.value); setSlugValue(slug(event.target.value)); }} autoFocus /></label><div className="field-row"><label>URL slug<input value={slugValue} onChange={event => setSlugValue(event.target.value)} pattern="[a-z0-9-]{3,63}" /></label><label>Postal code<input value={postalCode} onChange={event => setPostalCode(event.target.value)} inputMode="numeric" pattern="[0-9]{5}" /></label></div></section>}
+    {step === 2 && <section><h1>Brand details</h1><p>Share a website and the design agent will use it as context for the branded preview.</p><label>Website <span>(optional)</span><input value={website} onChange={event => setWebsite(event.target.value)} type="url" placeholder="https://example.gov" autoFocus /></label><div className="smart-defaults"><strong>No website yet?</strong><span>Leave this blank and the agents will begin with accessible InvoiceCloud design-system defaults. You can refine colors, type, and content in Studio.</span></div></section>}
+    {step === 3 && <section><h1>Ready to build</h1><p>Review the starting context. You can edit every agent recommendation before publishing.</p><dl className="intake-review"><div><dt>Business</dt><dd>{name}</dd></div><div><dt>Line of business</dt><dd>{billType}</dd></div><div><dt>Experience URL</dt><dd>pay.invoicecloud.com/{slugValue}</dd></div><div><dt>Brand source</dt><dd>{website || 'Smart defaults'}</dd></div></dl><div className="agent-promise"><i>✦</i><span><strong>The agent run remains visible</strong><small>Research, Experience Design, Accessibility, and Compliance output will stream into the Studio workspace.</small></span></div></section>}
+    <input type="hidden" name="name" value={name}/><input type="hidden" name="slug" value={slugValue}/><input type="hidden" name="postalCode" value={postalCode}/><input type="hidden" name="billType" value={billType}/><input type="hidden" name="website" value={website}/>
+    <footer><button className="wizard-back" type="button" onClick={() => step === 0 ? setStarted(false) : setStep(current => current - 1)}>Back</button>{step < steps.length - 1 ? <button type="button" disabled={(step === 1 && (!name || !slugValue || !/^\d{5}$/.test(postalCode)))} onClick={() => setStep(current => current + 1)}>Continue</button> : <button disabled={busy}>{busy ? 'Building Preview…' : 'Build My Preview'}</button>}</footer>
+  </form></main>;
 }
 
 function AgentActivityStrip({ activity, busy }: { activity: AgentActivity[]; busy: boolean }) { const latest = [...activity].reverse().filter((item, index, all) => all.findIndex(candidate => candidate.agent_id === item.agent_id) === index).reverse(); return <section className="agent-strip" aria-live="polite"><div className="agent-title"><span className={`agent-pulse ${busy ? 'active' : ''}`} /><strong>{busy ? 'Agents working' : 'Agent activity'}</strong></div><div className="agent-list">{latest.length === 0 ? <span className="agent-empty">Research, Design, Accessibility, and Compliance are ready</span> : latest.map(item => <span className={`agent-chip ${item.status}`} key={item.agent_id}><i>{item.status === 'completed' ? '✓' : item.status === 'failed' ? '!' : '•'}</i><span><strong>{item.display_name}</strong><small>{item.summary}</small></span></span>)}</div></section>; }
 
-function PreferenceReview({ preferences }: { preferences: ExperiencePreferences }) {
+function OrchestrationOutput({ activity, busy }: { activity: AgentActivity[]; busy: boolean }) {
+  return <details className="orchestration-output" open={busy || activity.length > 0}><summary><span><i className={busy ? 'running' : ''}/><strong>Agent orchestration output</strong></span><small>{activity.length ? `${activity.length} events` : 'Ready'}</small></summary><div className="orchestration-events">{activity.length === 0 ? <p>Agent decisions, status changes, and trace IDs will appear here as the experience is generated.</p> : activity.map(item => <article className={item.status} key={item.event_id}><i>{item.status === 'completed' ? '✓' : item.status === 'failed' ? '!' : '•'}</i><span><strong>{item.display_name}</strong><p>{item.summary}</p><small>{humanize(item.status)} · {new Date(item.occurred_at).toLocaleTimeString()}{item.trace_id ? ` · trace ${item.trace_id}` : ''}</small></span></article>)}</div></details>;
+}
+
+function PreferenceReview({ preferences, capabilities, busy, onChange }: { preferences: ExperiencePreferences; capabilities: string[]; busy: boolean; onChange: (next: ExperiencePreferences) => void }) {
   const rows = [
     ['Guest checkout', yesNo(preferences.guest_checkout_allowed)], ['AutoPay', yesNo(preferences.offer_autopay)],
     ['Enroll at checkout', yesNo(preferences.enroll_during_payment)], ['Paperless', yesNo(preferences.offer_paperless)],
@@ -125,16 +170,18 @@ function PreferenceReview({ preferences }: { preferences: ExperiencePreferences 
     ['Account history', yesNo(preferences.self_service_history)], ['Account updates', yesNo(preferences.self_service_updates)],
     ['Fee handling', feeLabel(preferences.fee_handling)],
   ];
-  return <div className="preference-review">{rows.map(([label, value]) => <div className="preference-row" key={label}><span>{label}</span><strong>{value}</strong>{preferences.recommendation_rationale?.[snake(label)] && <small>{preferences.recommendation_rationale[snake(label)]}</small>}</div>)}</div>;
+  const toggle = (key: 'guest_checkout_allowed'|'offer_autopay'|'enroll_during_payment'|'offer_paperless'|'self_service_history'|'self_service_updates') => onChange({ ...preferences, [key]: !preferences[key] });
+  return <div className="preference-review">{rows.map(([label, value], index) => <div className="preference-row" key={label}><span>{label}</span><strong>{value}</strong>{index < 4 && <button disabled={busy} onClick={() => toggle((['guest_checkout_allowed','offer_autopay','enroll_during_payment','offer_paperless'] as const)[index])}>Change</button>}{index === 6 && <button disabled={busy} onClick={() => toggle('self_service_history')}>Change</button>}{index === 7 && <button disabled={busy} onClick={() => toggle('self_service_updates')}>Change</button>}{preferences.recommendation_rationale?.[snake(label)] && <small>{preferences.recommendation_rationale[snake(label)]}</small>}</div>)}<div className="preference-editor"><label>Reminder channel<select value={String(preferences.reminder_channel)} onChange={event => onChange({ ...preferences, reminder_channel: parseEnum(event.target.value) })}><option value="0">Email</option><option value="1">Text</option><option value="2">Both</option><option value="3">None</option></select></label><fieldset><legend>Accepted methods</legend>{capabilities.map(method => <label key={method}><input type="checkbox" checked={preferences.accepted_methods.includes(method)} onChange={() => onChange({ ...preferences, accepted_methods: preferences.accepted_methods.includes(method) ? preferences.accepted_methods.filter(item => item !== method) : [...preferences.accepted_methods, method] })}/>{humanize(method)}</label>)}</fieldset></div></div>;
 }
 
-function PaymentPreview({ draft, preferences, device, scenario }: { draft: ExperienceRevision; preferences: ExperiencePreferences; device: PreviewDevice; scenario: PreviewScenario }) {
+function PaymentPreview({ draft, preferences, invoices, device, scenario }: { draft: ExperienceRevision; preferences: ExperiencePreferences; invoices: PreviewInvoice[]; device: PreviewDevice; scenario: PreviewScenario }) {
   const definition = draft.definition; const action = definition.ui?.actions.find(item => item.id === 'primary-payment-action');
+  const current = invoices.find(invoice => invoice.status !== 'paid') ?? invoices[0];
   return <div className={`preview-stage ${device}`}><div className={`browser-frame ${device}`} style={{ '--brand': definition.brand.primary_color, '--brand-secondary': definition.brand.secondary_color, fontFamily: definition.brand.font_family ?? 'Inter' } as React.CSSProperties}>
     <div className="browser-bar"><i/><i/><i/><span>pay.{slug(definition.brand.display_name)}.com</span></div>
-    <div className="customer-header"><div className="logo-mark">{initials(definition.brand.display_name)}</div><strong>{definition.brand.display_name}</strong><span>Jordan Ellis<br/><small>Acct ····4421</small></span></div>
-    <div className="customer-body">{scenario === 'payment' && <><div className="amount-hero"><span>Amount due · Due Aug 4</span><strong>$128.42</strong><button style={{ color: definition.brand.primary_color }}>{action?.label ?? 'Pay Now'}</button></div><h3>Recent statements</h3><Statement label="Utility Bill #240183" detail="Posted Jul 1" amount="$128.42" status="Due"/><Statement label="Utility Bill #239022" detail="Paid Jun 3" amount="$112.15" status="Paid"/></>}
-      {scenario === 'history' && <><h2>Account history</h2><Statement label="Payment received" detail="Jun 1" amount="$112.15" status="Completed"/><Statement label="AutoPay enrollment" detail="Apr 3" amount="—" status="Completed"/><Statement label="Payment received" detail="Mar 1" amount="$104.90" status="Completed"/></>}
+    <div className="customer-header"><div className="logo-mark">{initials(definition.brand.display_name)}</div><strong>{definition.brand.display_name}</strong><span>{current?.payer_name ?? 'Demo payer'}<br/><small>Acct ····{current?.account_number.slice(-4) ?? '4421'}</small></span></div>
+    <div className="customer-body">{scenario === 'payment' && <><div className="amount-hero"><span>Amount due · {current ? new Date(current.due_date).toLocaleDateString() : 'Loading'}</span><strong>{current ? money(current.amount_cents) : '—'}</strong><button style={{ color: definition.brand.primary_color }}>{action?.label ?? 'Pay Now'}</button></div><h3>Recent statements</h3>{invoices.map(invoice => <Statement key={invoice.id} label={invoice.description} detail={new Date(invoice.due_date).toLocaleDateString()} amount={money(invoice.amount_cents)} status={humanize(invoice.status)}/>)}</>}
+      {scenario === 'history' && <><h2>Account history</h2>{invoices.map(invoice => <Statement key={invoice.id} label={invoice.description} detail={new Date(invoice.due_date).toLocaleDateString()} amount={money(invoice.amount_cents)} status={humanize(invoice.status)}/>)}</>}
       {scenario === 'communication' && <><h2>Communication preferences</h2><PreferenceCard label="Payment reminders" value={reminderLabel(preferences.reminder_channel)}/><PreferenceCard label="Paperless billing" value={yesNo(preferences.offer_paperless)}/><PreferenceCard label="AutoPay" value={yesNo(preferences.offer_autopay)}/></>}
       {scenario === 'complex' && <><h2>Scenario preview</h2><div className="scenario-result"><strong>Delinquent payment</strong><p>The payer sees the outstanding balance, due-date context, supported methods, and biller-approved guidance without changing payment rails.</p></div></>}
       <div className="methods">Accepted: {preferences.accepted_methods.map(humanize).join(' · ')}</div>
@@ -156,3 +203,5 @@ function initials(value: string) { return value.split(' ').map(word => word[0]).
 function humanize(value: string) { return value.replaceAll('_', ' ').replace(/\b\w/g, match => match.toUpperCase()); }
 function toMessage(error: unknown) { return error instanceof Error ? error.message : 'The request failed.'; }
 function delay(milliseconds: number) { return new Promise(resolve => window.setTimeout(resolve, milliseconds)); }
+function parseEnum(value: string): ExperiencePreferences['reminder_channel'] { return Number(value); }
+function money(cents: number) { return new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' }).format(cents / 100); }

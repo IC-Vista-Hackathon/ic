@@ -58,5 +58,19 @@ jobs:
       - name: Deploy
         run: kubectl apply -k "${OVERLAY}"
 
+      - name: Configure correlated Azure telemetry
+        run: |
+          APPINSIGHTS=$(az deployment sub show --name ic-hack --query 'properties.outputs.appInsightsConnectionString.value' -o tsv)
+          kubectl -n ic set env \
+            deployment/ic-biller-experience-api \
+            deployment/ic-invoice-api \
+            deployment/ic-payment-api \
+            deployment/ic-payer-account-api \
+            APPLICATIONINSIGHTS_CONNECTION_STRING="$APPINSIGHTS"
+          kubectl -n ic rollout status deployment/ic-biller-experience-api --timeout=180s
+          kubectl -n ic rollout status deployment/ic-invoice-api --timeout=180s
+          kubectl -n ic rollout status deployment/ic-payment-api --timeout=180s
+          kubectl -n ic rollout status deployment/ic-payer-account-api --timeout=180s
+
       - name: Functional smoke tests
         run: ./scripts/smoke-test.sh ic

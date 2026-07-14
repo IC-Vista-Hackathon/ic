@@ -20,6 +20,11 @@ public interface IInvoiceRepository
         string accountNumber,
         CancellationToken cancellationToken = default);
 
+    Task<IReadOnlyList<InvoiceDocument>> GetByAccountAsync(
+        string billerId,
+        string accountNumber,
+        CancellationToken cancellationToken = default);
+
     /// <summary>Point read within one partition; null when absent.</summary>
     Task<InvoiceDocument?> FindAsync(
         string billerId,

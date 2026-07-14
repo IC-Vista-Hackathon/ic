@@ -4,14 +4,15 @@ using IC.ServiceDefaults;
 
 var builder = WebApplication.CreateBuilder(args);
 
-builder.Services.AddServiceDefaults();
+builder.AddServiceDefaults("IC.Payment.Api");
 builder.Services.AddSingleton<IPaymentStore, InMemoryPaymentStore>();
 builder.Services.AddSingleton<IPurchaseStore, InMemoryPurchaseStore>();
 builder.Services.AddSingleton<IBillerConfigClient, DemoBillerConfigClient>();
 builder.Services.AddSingleton<IBillerAccountClient, NoOpBillerAccountClient>();
 builder.Services.AddHttpClient<IInvoiceClient, HttpInvoiceClient>(client =>
     client.BaseAddress = new Uri(
-        builder.Configuration["Services:InvoiceApi"] ?? "http://localhost:5101"));
+        builder.Configuration["Services:InvoiceApi"] ?? "http://localhost:5101"))
+    .AddHttpMessageHandler<CorrelationPropagationHandler>();
 
 var app = builder.Build();
 

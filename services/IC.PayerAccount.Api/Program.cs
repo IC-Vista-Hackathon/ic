@@ -3,7 +3,7 @@ using IC.ServiceDefaults;
 
 var builder = WebApplication.CreateBuilder(args);
 
-builder.Services.AddServiceDefaults();
+builder.AddServiceDefaults("IC.PayerAccount.Api");
 builder.Services.AddSingleton<IPayerStore, InMemoryPayerStore>();
 
 var app = builder.Build();

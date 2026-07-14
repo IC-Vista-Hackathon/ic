@@ -178,4 +178,17 @@ public sealed class InvoiceStatusTransitionTests
         Assert.Single(((InvoiceListResponse)ok.Value!).Invoices);
         Assert.IsType<BadRequestObjectResult>(missingAccount);
     }
+
+    [Fact]
+    public async Task ControllerListCanIncludePaidInvoiceHistory()
+    {
+        var controller = NewController(out var repo);
+        await repo.AddRangeAsync([Make("b_1"), Make("b_1", Domain.InvoiceStatus.Paid, "pay-0")]);
+
+        var listed = await controller.List("b_1", "ACCT-1", CancellationToken.None, includeClosed: true);
+
+        var body = Assert.IsType<InvoiceListResponse>(Assert.IsType<OkObjectResult>(listed).Value);
+        Assert.Equal(2, body.Invoices.Count);
+        Assert.Contains(body.Invoices, invoice => invoice.Status == WireStatus.Paid);
+    }
 }
