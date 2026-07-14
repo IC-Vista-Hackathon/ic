@@ -2,6 +2,7 @@ import type { Bootstrap, ChatResponse, Deployment, ExperienceDefinition, Experie
 import { logError, logEvent, newTrace } from './telemetry';
 
 const baseUrl = import.meta.env.VITE_API_URL ?? (import.meta.env.PROD ? '/api' : 'http://localhost:5000');
+const supportingServicesBaseUrl = import.meta.env.VITE_SUPPORTING_SERVICES_URL ?? '';
 export const activityUrl = (billerId: string) => `${baseUrl}/billers/${billerId}/events`;
 
 async function request<T>(path: string, init?: RequestInit, billerId?: string): Promise<T> {
@@ -43,7 +44,7 @@ export const api = {
 
 async function supportingRequest<T>(path: string, billerId: string): Promise<T> {
   const trace = newTrace();
-  const response = await fetch(`${baseUrl}${path}`, { headers: { 'x-correlation-id': trace.correlationId, traceparent: trace.traceparent, 'x-ic-biller-id': billerId } });
+  const response = await fetch(`${supportingServicesBaseUrl}${path}`, { headers: { 'x-correlation-id': trace.correlationId, traceparent: trace.traceparent, 'x-ic-biller-id': billerId } });
   if (!response.ok) throw new Error(`Supporting service request failed with ${response.status}.`);
   return response.json() as Promise<T>;
 }
