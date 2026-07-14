@@ -83,4 +83,28 @@ public sealed class InMemoryInvoiceRepositoryTests
 
         Assert.Empty(open);
     }
+
+    [Fact]
+    public async Task PurgeByBillerRemovesOnlyThatBillersInvoices()
+    {
+        var repo = new InMemoryInvoiceRepository();
+        await repo.AddRangeAsync([Make("b_1", "ACCT-1"), Make("b_1", "ACCT-2"), Make("b_2", "ACCT-1")]);
+
+        await repo.PurgeByBillerAsync("b_1");
+
+        Assert.Empty(await repo.GetOpenAsync("b_1", "ACCT-1"));
+        Assert.Empty(await repo.GetOpenAsync("b_1", "ACCT-2"));
+        Assert.Single(await repo.GetOpenAsync("b_2", "ACCT-1"));
+    }
+
+    [Fact]
+    public async Task PurgeByUnknownBillerIsNoop()
+    {
+        var repo = new InMemoryInvoiceRepository();
+        await repo.AddRangeAsync([Make("b_1", "ACCT-1")]);
+
+        await repo.PurgeByBillerAsync("nobody");
+
+        Assert.Single(await repo.GetOpenAsync("b_1", "ACCT-1"));
+    }
 }

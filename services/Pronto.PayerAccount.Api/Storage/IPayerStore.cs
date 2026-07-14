@@ -12,6 +12,9 @@ public interface IPayerStore
     Task<PayerResponse?> FindByAccountAsync(string billerId, string accountNumber, CancellationToken cancellationToken = default);
 
     Task UpdateAsync(PayerResponse payer, CancellationToken cancellationToken = default);
+
+    /// <summary>Delete all payers in a biller's partition (nonprod test-cleanup only).</summary>
+    Task PurgeByBillerAsync(string billerId, CancellationToken cancellationToken = default);
 }
 
 public sealed class InMemoryPayerStore : IPayerStore
@@ -61,6 +64,19 @@ public sealed class InMemoryPayerStore : IPayerStore
         lock (gate)
         {
             payers[(payer.BillerId, payer.PayerId)] = payer;
+        }
+
+        return Task.CompletedTask;
+    }
+
+    public Task PurgeByBillerAsync(string billerId, CancellationToken cancellationToken = default)
+    {
+        lock (gate)
+        {
+            foreach (var key in payers.Keys.Where(k => k.BillerId == billerId).ToList())
+            {
+                payers.Remove(key);
+            }
         }
 
         return Task.CompletedTask;

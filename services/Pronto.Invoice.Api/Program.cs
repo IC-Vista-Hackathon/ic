@@ -7,6 +7,8 @@ using Microsoft.Azure.Cosmos;
 var builder = WebApplication.CreateBuilder(args);
 builder.AddServiceDefaults("Pronto.Invoice.Api");
 builder.Services.AddSingleton(TimeProvider.System);
+builder.Services.Configure<MaintenanceOptions>(
+    builder.Configuration.GetSection(MaintenanceOptions.SectionName));
 
 var persistence = builder.Configuration
     .GetSection(CosmosPersistenceOptions.SectionName)
