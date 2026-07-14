@@ -24,7 +24,6 @@ kind: Deployment
 metadata:
   name: ic-biller-experience-worker
   labels:
-    app: ic-biller-experience-worker
     app.kubernetes.io/name: ic-biller-experience-worker
     app.kubernetes.io/part-of: ic-biller-experience
 spec:
@@ -35,7 +34,6 @@ spec:
   template:
     metadata:
       labels:
-        app: ic-biller-experience-worker
         app.kubernetes.io/name: ic-biller-experience-worker
         app.kubernetes.io/part-of: ic-biller-experience
         azure.workload.identity/use: "true"
@@ -81,7 +79,6 @@ kind: Deployment
 metadata:
   name: ic-biller-experience-studio
   labels:
-    app: ic-biller-experience-studio
     app.kubernetes.io/name: ic-biller-experience-studio
     app.kubernetes.io/part-of: ic-biller-experience
 spec:
@@ -92,7 +89,6 @@ spec:
   template:
     metadata:
       labels:
-        app: ic-biller-experience-studio
         app.kubernetes.io/name: ic-biller-experience-studio
         app.kubernetes.io/part-of: ic-biller-experience
     spec:
@@ -138,7 +134,6 @@ kind: Deployment
 metadata:
   name: ic-biller-payments-pwa
   labels:
-    app: ic-biller-payments-pwa
     app.kubernetes.io/name: ic-biller-payments-pwa
     app.kubernetes.io/part-of: ic-biller-experience
 spec:
@@ -150,7 +145,6 @@ spec:
   template:
     metadata:
       labels:
-        app: ic-biller-payments-pwa
         app.kubernetes.io/name: ic-biller-payments-pwa
         app.kubernetes.io/part-of: ic-biller-experience
     spec:

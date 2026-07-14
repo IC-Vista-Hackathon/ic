@@ -23,7 +23,9 @@ The control-plane service workloads are managed with Kustomize:
   account, Studio, and shared PWA (`biller-experience.yaml`) with their `/`, `/studio`,
   and `/pay` routes. Deployed on merge to `main`. `kubectl apply -k overlays/prod` now
   reproduces live prod; the App Insights connection string is the one value resolved from
-  Azure at deploy time (never committed) and substituted into the overlay.
+  Azure at deploy time (never committed) and substituted into the overlay. Prod preserves
+  the existing `app.kubernetes.io/name` Deployment selectors and combined
+  `ic-biller-experience` route identity so updates apply in place.
 
 Deploys are automated by GitHub Actions (`.github/workflows/deploy-{nonprod,prod}.yml`):
 each pins every image to the commit SHA (`kustomize`/`newTag`) and runs

@@ -1,11 +1,7 @@
 # Public exposure for the production control-plane APIs via the shared kgateway
 # Gateway (ic-gateway in kgateway-system, public LB / DNS
 # ic-hack.eastus2.cloudapp.azure.com). Each API gets a path prefix that is
-# stripped via URLRewrite so the backend receives its normal paths.
-#
-# Nonprod does NOT define HTTPRoutes: functional tests reach the ic-nonprod
-# services directly via `kubectl port-forward`, so the two environments never
-# contend for the same public path on the shared gateway.
+# stripped via URLRewrite where the backend expects root paths.
 apiVersion: gateway.networking.k8s.io/v1
 kind: HTTPRoute
 metadata:
@@ -91,12 +87,14 @@ spec:
           name: ic-payer-account-api
           port: 8080
 ---
+# Keep the existing combined Biller Experience route identity so Kustomize updates
+# the live route in place instead of creating overlapping route resources.
 apiVersion: gateway.networking.k8s.io/v1
 kind: HTTPRoute
 metadata:
-  name: ic-biller-experience-api
+  name: ic-biller-experience
   labels:
-    app: ic-biller-experience-api
+    app.kubernetes.io/part-of: ic-biller-experience
 spec:
   parentRefs:
     - group: gateway.networking.k8s.io
@@ -120,24 +118,6 @@ spec:
           kind: Service
           name: ic-biller-experience-api
           port: 8080
----
-# Biller Studio (onboarding UI). `/` redirects to `/studio/`; `/studio` is stripped
-# so the SPA receives its normal paths. Mirrors the routes previously carried by the
-# hand-applied biller-experience.template.yaml.
-apiVersion: gateway.networking.k8s.io/v1
-kind: HTTPRoute
-metadata:
-  name: ic-biller-experience-studio
-  labels:
-    app: ic-biller-experience-studio
-spec:
-  parentRefs:
-    - group: gateway.networking.k8s.io
-      kind: Gateway
-      name: ic-gateway
-      namespace: kgateway-system
-      sectionName: http
-  rules:
     - matches:
         - path:
             type: Exact
@@ -164,23 +144,6 @@ spec:
           kind: Service
           name: ic-biller-experience-studio
           port: 8080
----
-# Payer PWA. `/pay/{slug}` selects the biller; the prefix is stripped so the shared
-# renderer serves its own paths and fetches the active experience from the API.
-apiVersion: gateway.networking.k8s.io/v1
-kind: HTTPRoute
-metadata:
-  name: ic-biller-payments-pwa
-  labels:
-    app: ic-biller-payments-pwa
-spec:
-  parentRefs:
-    - group: gateway.networking.k8s.io
-      kind: Gateway
-      name: ic-gateway
-      namespace: kgateway-system
-      sectionName: http
-  rules:
     - matches:
         - path:
             type: PathPrefix
