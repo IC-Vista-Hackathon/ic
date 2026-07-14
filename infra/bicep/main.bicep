@@ -11,6 +11,11 @@ param aksNodeCountMin int = 2
 param aksNodeCountMax int = 4
 param aksVmSize string = 'Standard_D2s_v3'
 
+// Optional service principals granted Blob access in addition to the dedicated publisher writer
+// and API workload reader identities below.
+param payerExperienceBlobContributorPrincipalIds array = []
+param payerExperienceBlobReaderPrincipalIds array = []
+
 var suffix = uniqueString(subscription().subscriptionId, prefix)
 
 resource rg 'Microsoft.Resources/resourceGroups@2024-03-01' = {
@@ -64,6 +69,8 @@ module storage 'modules/storage.bicep' = {
     location: location
     writerPrincipalId: publisherIdentity.outputs.principalId
     readerPrincipalId: workloadIdentity.outputs.principalId
+    additionalBlobContributorPrincipalIds: payerExperienceBlobContributorPrincipalIds
+    additionalBlobReaderPrincipalIds: payerExperienceBlobReaderPrincipalIds
   }
 }
 
