@@ -1,0 +1,9 @@
+{
+  "name": "Biller Payments",
+  "short_name": "Payments",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#ffffff",
+  "theme_color": "#085368",
+  "icons": []
+}

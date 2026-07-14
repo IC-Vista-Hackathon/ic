@@ -15,6 +15,10 @@ public sealed class OrchestrationRunner : IOrchestrationRunner
         ArgumentNullException.ThrowIfNull(workflow);
         ArgumentNullException.ThrowIfNull(context);
 
+        var startedAt = Stopwatch.GetTimestamp();
+        var tags = new TagList { { "workflow", workflow.Name } };
+        OrchestrationTelemetry.WorkflowStarted.Add(1, tags);
+
         using var activity = OrchestrationTelemetry.ActivitySource.StartActivity(
             $"workflow:{workflow.Name}",
             ActivityKind.Internal);
@@ -29,12 +33,18 @@ public sealed class OrchestrationRunner : IOrchestrationRunner
         {
             var result = await workflow.ExecuteAsync(input, context, cancellationToken);
             activity?.SetStatus(ActivityStatusCode.Ok);
+            OrchestrationTelemetry.WorkflowCompleted.Add(1, tags);
             return result;
         }
         catch (Exception exception)
         {
             activity?.SetStatus(ActivityStatusCode.Error, exception.GetType().Name);
+            OrchestrationTelemetry.WorkflowFailed.Add(1, tags);
             throw;
+        }
+        finally
+        {
+            OrchestrationTelemetry.WorkflowDuration.Record(Stopwatch.GetElapsedTime(startedAt).TotalMilliseconds, tags);
         }
     }
 }

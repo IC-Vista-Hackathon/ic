@@ -10,10 +10,10 @@ The disruption is onboarding speed and customization, not money movement.
 
 ## Status
 
-This repository is at the foundation stage. It currently establishes the .NET 10 solution,
-versioned contracts, orchestration abstractions, API and worker hosts, frontend locations, tests,
-and deployment/infra boundaries. The first vertical slice will take a biller from a chat session to
-a validated experience draft, then to an approved and healthy AKS deployment.
+Phases 2 through 4 now provide a runnable local vertical slice: versioned controller contracts,
+agent-assisted onboarding with a deterministic fallback, Cosmos and in-memory repositories,
+approval and idempotent publication requests, the Biller Studio, and a configuration-driven payer
+PWA. Phase 5 will turn an accepted publication request into a healthy AKS deployment.
 
 The documents under [`design/`](design/README.md) came from the original `main` branch and remain
 the source of truth for supporting service responsibilities, entities, REST behavior, and agent
@@ -199,7 +199,7 @@ the existing entity-container model and adds a separate container only for orche
 | `billers` | `/id` | tenant-root `BillerAccount` documents |
 | `configs` | `/biller_id` | versioned biller experience configuration |
 | `deployments` | `/biller_id` | published deployment records |
-| `orchestration-runs` | `/biller_id` | sessions, checkpoints, sanitized interactions, publish jobs |
+| `orchestration_runs` | `/biller_id` | sessions, checkpoints, sanitized interactions, publish jobs |
 
 Invoice, payment, purchase, payer-account, and notification containers remain owned by their
 supporting services exactly as described in [`design/entities.md`](design/entities.md).
@@ -307,22 +307,24 @@ readiness/restarts, Cosmos throttling, PWA availability, and payment-page reques
 
 ### Phase 2 — Orchestration and persistence
 
-- Implement the biller onboarding workflow and structured model output.
-- Add Cosmos DB repositories, checkpoints, optimistic concurrency, and redaction.
-- Add retries, cancellation, idempotency, policy gates, and approval waits.
-- Add orchestration traces and metrics.
+- [x] Implement the biller onboarding workflow and structured model output.
+- [x] Add Cosmos DB repositories, checkpoints, optimistic concurrency, and redaction boundaries.
+- [x] Add cancellation, publication idempotency, policy gates, and explicit approval.
+- [x] Add orchestration traces, metrics, and structured error logging.
 
 ### Phase 3 — API and Biller Studio
 
-- Implement biller/session/message/preview/approval/publication endpoints.
-- Stream chat and workflow status with server-sent events.
-- Build the minimal chat, checklist, preview, revision, and publication UI.
+- [x] Implement controller-based biller/session/message/preview/approval/publication endpoints.
+- [x] Stream workflow status with server-sent events.
+- [x] Build the minimal chat, checklist, live preview, review, approval, and publication UI.
 
 ### Phase 4 — Customer PWA
 
-- Build the configuration-driven payment shell.
-- Add manifest, service worker, accessibility, and responsive brand tokens.
-- Connect it to existing payment contracts and APIs.
+- [x] Build the configuration-driven payment shell.
+- [x] Add manifest, service worker, accessibility, responsive brand tokens, and independent
+  AutoPay/paperless consent.
+- [x] Add a typed payment provider boundary with a local demo provider until the documented
+  supporting payment and invoice services are available.
 
 ### Phase 5 — AKS publication
 
@@ -361,4 +363,17 @@ dotnet run --project .\services\IC.BillerExperience.Api
 dotnet run --project .\services\IC.BillerExperience.Worker
 ```
 
-The API exposes `/`, `/health/live`, and `/health/ready` during the foundation phase.
+The API defaults to in-memory persistence and the deterministic model provider, so no Azure
+credentials are required for a local run. Set `BillerExperience__Persistence__Provider=Cosmos` and
+`BillerExperience__Persistence__CosmosEndpoint`, or set
+`BillerExperience__Model__Provider=AzureAI` and `BillerExperience__Model__Endpoint`, to use the
+Azure implementations with `DefaultAzureCredential`.
+
+Run either frontend with `npm install` followed by `npm run dev` in its folder. Biller Studio uses
+`http://localhost:5000` by default; override it with `VITE_API_URL`.
+
+The API exposes `/`, `/health/live`, `/health/ready`, and controller routes rooted at `/billers`.
+Logs are emitted as newline-delimited JSON for AKS/Container Insights ingestion. Application
+Insights is enabled when `APPLICATIONINSIGHTS_CONNECTION_STRING` is present; traces and metrics
+include the custom Biller Experience and orchestration sources without recording prompts or raw
+model output.

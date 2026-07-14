@@ -9,6 +9,7 @@ param containers array = [
   { name: 'billers', partitionKeyPath: '/id' }
   { name: 'configs', partitionKeyPath: '/biller_id' }
   { name: 'deployments', partitionKeyPath: '/biller_id' }
+  { name: 'orchestration_runs', partitionKeyPath: '/biller_id' }
   { name: 'payer_accounts', partitionKeyPath: '/biller_id' }
   { name: 'invoices', partitionKeyPath: '/biller_id' }
   { name: 'payments', partitionKeyPath: '/biller_id' }
