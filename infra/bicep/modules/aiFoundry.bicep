@@ -4,6 +4,9 @@ param name string
 param location string
 param projectName string = 'ic'
 param workloadIdentityPrincipalId string
+param appInsightsId string
+@secure()
+param appInsightsConnectionString string
 
 resource account 'Microsoft.CognitiveServices/accounts@2025-04-01-preview' = {
   name: name
@@ -47,6 +50,27 @@ resource gpt54Mini 'Microsoft.CognitiveServices/accounts/deployments@2025-04-01-
     model: { format: 'OpenAI', name: 'gpt-5.4-mini', version: '2026-03-17' }
   }
   dependsOn: [ gpt54 ]
+}
+
+// Wires the project to App Insights so Foundry Observability (evaluation/monitoring/tracing)
+// actually has somewhere to publish — without this connection, App Insights just sits in the
+// resource group unconnected, and the Foundry portal's Observability dashboard stays empty.
+resource appInsightsConnection 'Microsoft.CognitiveServices/accounts/projects/connections@2025-04-01-preview' = {
+  parent: project
+  name: 'appinsights'
+  properties: {
+    category: 'AppInsights'
+    target: appInsightsId
+    authType: 'ApiKey'
+    isSharedToAll: false
+    credentials: {
+      key: appInsightsConnectionString
+    }
+    metadata: {
+      ApiType: 'Azure'
+      ResourceId: appInsightsId
+    }
+  }
 }
 
 // Lets services/agents call the AI Foundry project's inference endpoints with no API key.
