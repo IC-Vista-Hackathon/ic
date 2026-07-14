@@ -1,0 +1,186 @@
+# Biller Experience stack that only runs in prod (the shared `ic` namespace).
+#
+# The Worker and the Cosmos/AI-backed API authenticate to Azure through workload
+# identity, which is federated ONLY to `system:serviceaccount:ic:ic-workload` and
+# `system:serviceaccount:ic:biller-publisher` (see infra/bicep, and the
+# `az identity federated-credential` list). Those subjects are namespace-scoped to
+# `ic`, so this stack is intentionally NOT in the shared base and NOT deployed to
+# `ic-nonprod` — nonprod has no federated identity and keeps the in-memory API from
+# the base overlay. This file (plus the env patch and the studio/pwa/pay HTTPRoutes)
+# replaces the hand-applied biller-experience.template.yaml so `kubectl apply -k` now
+# reproduces live prod instead of regressing it.
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: biller-publisher
+  annotations:
+    # infra/bicep publisherIdentityClientId (uami-ic-hack-publisher). Update if recreated.
+    azure.workload.identity/client-id: "ec6aaa8e-1176-475f-8e66-11494a0fe4e0"
+  labels:
+    azure.workload.identity/use: "true"
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: ic-biller-experience-worker
+  labels:
+    app.kubernetes.io/name: ic-biller-experience-worker
+    app.kubernetes.io/part-of: ic-biller-experience
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: ic-biller-experience-worker
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: ic-biller-experience-worker
+        app.kubernetes.io/part-of: ic-biller-experience
+        azure.workload.identity/use: "true"
+    spec:
+      serviceAccountName: biller-publisher
+      containers:
+        - name: worker
+          image: acrichackjk4zmntatjem4.azurecr.io/ic-biller-experience-worker:latest
+          ports:
+            - name: http
+              containerPort: 8080
+          env:
+            - { name: ASPNETCORE_URLS, value: "http://+:8080" }
+            - { name: Publication__CosmosEndpoint, value: "https://cosmos-ic-hack-jk4zmntatjem4.documents.azure.com:443/" }
+            - { name: Publication__DatabaseName, value: ic }
+            - { name: Publication__StorageEndpoint, value: "https://stichackjk4zmntatjem4.blob.core.windows.net/" }
+            - { name: Publication__ContainerName, value: payer-experiences }
+            - { name: Publication__PublicBaseUrl, value: "http://ic-hack.eastus2.cloudapp.azure.com/" }
+            # Resolved from Azure and substituted by the deploy workflow (envsubst); empty
+            # locally, in which case the service simply does not export to Azure Monitor.
+            - { name: APPLICATIONINSIGHTS_CONNECTION_STRING, value: "${APPLICATIONINSIGHTS_CONNECTION_STRING}" }
+          readinessProbe:
+            httpGet: { path: /health/ready, port: http }
+            initialDelaySeconds: 5
+            periodSeconds: 5
+          livenessProbe:
+            httpGet: { path: /health/live, port: http }
+            initialDelaySeconds: 10
+            periodSeconds: 10
+          resources:
+            requests: { cpu: 50m, memory: 128Mi }
+            limits: { cpu: 250m, memory: 256Mi }
+          securityContext:
+            runAsNonRoot: true
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
+            seccompProfile:
+              type: RuntimeDefault
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: ic-biller-experience-studio
+  labels:
+    app.kubernetes.io/name: ic-biller-experience-studio
+    app.kubernetes.io/part-of: ic-biller-experience
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: ic-biller-experience-studio
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: ic-biller-experience-studio
+        app.kubernetes.io/part-of: ic-biller-experience
+    spec:
+      containers:
+        - name: studio
+          image: acrichackjk4zmntatjem4.azurecr.io/ic-biller-experience-studio:latest
+          ports:
+            - name: http
+              containerPort: 8080
+          readinessProbe:
+            httpGet: { path: /health/ready, port: http }
+            initialDelaySeconds: 2
+            periodSeconds: 5
+          livenessProbe:
+            httpGet: { path: /health/live, port: http }
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          resources:
+            requests: { cpu: 25m, memory: 32Mi }
+            limits: { cpu: 100m, memory: 64Mi }
+          securityContext:
+            runAsNonRoot: true
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
+            seccompProfile:
+              type: RuntimeDefault
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: ic-biller-experience-studio
+spec:
+  selector:
+    app.kubernetes.io/name: ic-biller-experience-studio
+  ports:
+    - name: http
+      port: 8080
+      targetPort: http
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: ic-biller-payments-pwa
+  labels:
+    app.kubernetes.io/name: ic-biller-payments-pwa
+    app.kubernetes.io/part-of: ic-biller-experience
+spec:
+  # Stateless static renderer — safe to run multiple replicas.
+  replicas: 2
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: ic-biller-payments-pwa
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: ic-biller-payments-pwa
+        app.kubernetes.io/part-of: ic-biller-experience
+    spec:
+      containers:
+        - name: pwa
+          image: acrichackjk4zmntatjem4.azurecr.io/ic-biller-payments-pwa:latest
+          ports:
+            - name: http
+              containerPort: 8080
+          readinessProbe:
+            httpGet: { path: /health/ready, port: http }
+            initialDelaySeconds: 2
+            periodSeconds: 5
+          livenessProbe:
+            httpGet: { path: /health/live, port: http }
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          resources:
+            requests: { cpu: 25m, memory: 32Mi }
+            limits: { cpu: 100m, memory: 64Mi }
+          securityContext:
+            runAsNonRoot: true
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
+            seccompProfile:
+              type: RuntimeDefault
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: ic-biller-payments-pwa
+spec:
+  selector:
+    app.kubernetes.io/name: ic-biller-payments-pwa
+  ports:
+    - name: http
+      port: 8080
+      targetPort: http

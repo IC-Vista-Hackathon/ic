@@ -6,6 +6,12 @@ public sealed class BillerExperienceOptions
     public PersistenceOptions Persistence { get; set; } = new();
     public ModelOptions Model { get; set; } = new();
     public PublishedExperienceOptions PublishedExperience { get; set; } = new();
+    public SupportingServicesOptions SupportingServices { get; set; } = new();
+}
+
+public sealed class SupportingServicesOptions
+{
+    public string InvoiceBaseUrl { get; set; } = string.Empty;
 }
 
 public sealed class PublishedExperienceOptions

@@ -29,7 +29,7 @@ public sealed class PurchasesController : ControllerBase
             Plan: request.Plan,
             AmountCents: request.Plan == PurchasePlan.Isolated ? 199900 : 49900,
             Status: PurchaseStatus.Paid);
-        store.Add(purchase);
+        await store.AddAsync(purchase, cancellationToken).ConfigureAwait(false);
 
         await billerAccounts.AdvanceToPurchasedAsync(request.BillerId, request.Plan, cancellationToken)
             .ConfigureAwait(false);
@@ -38,7 +38,8 @@ public sealed class PurchasesController : ControllerBase
     }
 
     [HttpGet("{purchaseId}")]
-    public ActionResult<PurchaseResponse> Get(string purchaseId, [FromQuery(Name = "biller_id")] string billerId)
-        => store.Find(billerId, purchaseId)
+    public async Task<ActionResult<PurchaseResponse>> Get(
+        string purchaseId, [FromQuery(Name = "biller_id")] string billerId, CancellationToken cancellationToken)
+        => await store.FindAsync(billerId, purchaseId, cancellationToken).ConfigureAwait(false)
             ?? throw ServiceException.NotFound("not_found", $"purchase {purchaseId} not found");
 }

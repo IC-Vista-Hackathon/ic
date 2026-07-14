@@ -3,6 +3,7 @@ FROM mcr.microsoft.com/dotnet/sdk:10.0 AS build
 WORKDIR /src
 COPY Directory.Build.props Directory.Packages.props NuGet.config global.json ./
 COPY contracts/IC.PayerAccount.Contracts/IC.PayerAccount.Contracts.csproj contracts/IC.PayerAccount.Contracts/
+COPY libraries/IC.Persistence.Cosmos/IC.Persistence.Cosmos.csproj libraries/IC.Persistence.Cosmos/
 COPY libraries/IC.ServiceDefaults/IC.ServiceDefaults.csproj libraries/IC.ServiceDefaults/
 COPY services/IC.PayerAccount.Api/IC.PayerAccount.Api.csproj services/IC.PayerAccount.Api/
 RUN dotnet restore services/IC.PayerAccount.Api/IC.PayerAccount.Api.csproj

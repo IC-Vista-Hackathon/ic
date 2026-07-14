@@ -1,7 +1,7 @@
-# Public exposure for the nonprod deterministic backend APIs (Invoice, Payment,
-# PayerAccount) via the dedicated nonprod Gateway (ic-nonprod-gateway, hostname
-# ic-hack-nonprod.eastus2.cloudapp.azure.com). Path scheme mirrors prod (parity for
-# functional tests); isolation comes from the separate Gateway/LB, not the paths.
+# Public exposure for the nonprod control-plane APIs via the dedicated nonprod
+# Gateway (ic-nonprod-gateway, hostname ic-hack-nonprod.eastus2.cloudapp.azure.com).
+# Path scheme mirrors prod exactly (parity for functional tests); isolation comes
+# from the separate Gateway/LB, not from different paths.
 apiVersion: gateway.networking.k8s.io/v1
 kind: HTTPRoute
 metadata:
@@ -78,4 +78,33 @@ spec:
         - group: ""
           kind: Service
           name: ic-payer-account-api
+          port: 8080
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: ic-biller-experience-api
+  labels:
+    app: ic-biller-experience-api
+spec:
+  parentRefs:
+    - group: gateway.networking.k8s.io
+      kind: Gateway
+      name: ic-nonprod-gateway
+      sectionName: http
+  rules:
+    - matches:
+        - path:
+            type: PathPrefix
+            value: /api
+      filters:
+        - type: URLRewrite
+          urlRewrite:
+            path:
+              type: ReplacePrefixMatch
+              replacePrefixMatch: /
+      backendRefs:
+        - group: ""
+          kind: Service
+          name: ic-biller-experience-api
           port: 8080

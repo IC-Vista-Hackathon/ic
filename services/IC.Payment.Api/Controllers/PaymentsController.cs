@@ -74,14 +74,15 @@ public sealed class PaymentsController : ControllerBase
             ScheduledFor: request.ScheduledFor,
             ReceiptMessage: config.ReceiptMessage,
             CreatedAt: DateTimeOffset.UtcNow);
-        store.Add(payment);
+        await store.AddAsync(payment, cancellationToken).ConfigureAwait(false);
 
         return Created($"/payments/{payment.PaymentId}?biller_id={payment.BillerId}", payment);
     }
 
     [HttpGet("{paymentId}")]
-    public ActionResult<PaymentResponse> Get(string paymentId, [FromQuery(Name = "biller_id")] string billerId)
-        => store.Find(billerId, paymentId)
+    public async Task<ActionResult<PaymentResponse>> Get(
+        string paymentId, [FromQuery(Name = "biller_id")] string billerId, CancellationToken cancellationToken)
+        => await store.FindAsync(billerId, paymentId, cancellationToken).ConfigureAwait(false)
             ?? throw ServiceException.NotFound("not_found", $"payment {paymentId} not found");
 
     private static string MintConfirmation()

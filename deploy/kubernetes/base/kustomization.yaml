@@ -1,18 +1,18 @@
 apiVersion: kustomize.config.k8s.io/v1beta1
 kind: Kustomization
 
-# Shared, namespace-agnostic definitions for the deterministic backend API services
-# (Invoice, Payment, PayerAccount). Namespace and image tags are set by the overlays
-# under ../overlays.
+# Shared, namespace-agnostic definitions for the IC control-plane API services.
+# Namespace and image tags are set by the overlays under ../overlays.
 #
-# The Biller Experience components (API, Worker, Studio, PWA) are intentionally NOT
-# here: they are deployed through their own rendered manifest,
-# biller-experience.template.yaml, which wires their Cosmos/AI-Foundry/blob config and
-# workload identity (federated only to system:serviceaccount:ic:ic-workload) and owns
-# the `app.kubernetes.io/name` selector + the `/api`, `/studio`, `/pay` routes. CI
-# still builds and pushes their images.
+# base ships the in-memory ic-biller-experience-api (no Azure dependencies); the prod
+# overlay patches it onto Cosmos/AI/blob/App Insights. The Biller Experience Worker and
+# frontends are intentionally NOT here: they hard-require live Cosmos/blob access via
+# workload identity, federated only to service accounts in the `ic` namespace, so they
+# live in overlays/prod/biller-experience.yaml (prod only). CI builds all images.
 resources:
   - service-account.yaml
+  - biller-experience-api/deployment.yaml
+  - biller-experience-api/service.yaml
   - invoice-api/deployment.yaml
   - invoice-api/service.yaml
   - payment-api/deployment.yaml

@@ -8,6 +8,7 @@ param nodeCountMax int
 param vmSize string
 param uamiName string
 param workloadNamespace string
+param nonprodWorkloadNamespace string
 param workloadServiceAccountName string
 param publisherUamiName string
 param publisherNamespace string
@@ -93,6 +94,21 @@ resource federatedCredential 'Microsoft.ManagedIdentity/userAssignedIdentities/f
     subject: 'system:serviceaccount:${workloadNamespace}:${workloadServiceAccountName}'
     audiences: [ 'api://AzureADTokenExchange' ]
   }
+}
+
+// Same workload identity, also federated to the nonprod namespace's service account so per-PR
+// (ic-nonprod) pods can authenticate to the nonprod Cosmos account. One identity, two subjects.
+// Azure rejects concurrent federated-credential writes on a single managed identity, so this
+// depends on the prod credential above to force them to be created sequentially.
+resource nonprodFederatedCredential 'Microsoft.ManagedIdentity/userAssignedIdentities/federatedIdentityCredentials@2023-01-31' = {
+  parent: uami
+  name: 'aks-${nonprodWorkloadNamespace}-${workloadServiceAccountName}'
+  properties: {
+    issuer: aks.properties.oidcIssuerProfile.issuerURL
+    subject: 'system:serviceaccount:${nonprodWorkloadNamespace}:${workloadServiceAccountName}'
+    audiences: [ 'api://AzureADTokenExchange' ]
+  }
+  dependsOn: [ federatedCredential ]
 }
 
 resource publisherFederatedCredential 'Microsoft.ManagedIdentity/userAssignedIdentities/federatedIdentityCredentials@2023-01-31' = {

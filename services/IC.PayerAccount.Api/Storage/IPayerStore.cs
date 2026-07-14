@@ -6,11 +6,11 @@ namespace IC.PayerAccount.Api.Storage;
 public interface IPayerStore
 {
     /// <summary>Adds the payer; throws 409 already_registered on duplicate email per biller.</summary>
-    void Add(PayerResponse payer);
+    Task AddAsync(PayerResponse payer, CancellationToken cancellationToken = default);
 
-    PayerResponse? Find(string billerId, string payerId);
+    Task<PayerResponse?> FindAsync(string billerId, string payerId, CancellationToken cancellationToken = default);
 
-    void Update(PayerResponse payer);
+    Task UpdateAsync(PayerResponse payer, CancellationToken cancellationToken = default);
 }
 
 public sealed class InMemoryPayerStore : IPayerStore
@@ -18,7 +18,7 @@ public sealed class InMemoryPayerStore : IPayerStore
     private readonly object gate = new();
     private readonly Dictionary<(string BillerId, string PayerId), PayerResponse> payers = [];
 
-    public void Add(PayerResponse payer)
+    public Task AddAsync(PayerResponse payer, CancellationToken cancellationToken = default)
     {
         lock (gate)
         {
@@ -32,22 +32,27 @@ public sealed class InMemoryPayerStore : IPayerStore
 
             payers[(payer.BillerId, payer.PayerId)] = payer;
         }
+
+        return Task.CompletedTask;
     }
 
-    public PayerResponse? Find(string billerId, string payerId)
+    public Task<PayerResponse?> FindAsync(
+        string billerId, string payerId, CancellationToken cancellationToken = default)
     {
         lock (gate)
         {
-            return payers.GetValueOrDefault((billerId, payerId));
+            return Task.FromResult(payers.GetValueOrDefault((billerId, payerId)));
         }
     }
 
-    public void Update(PayerResponse payer)
+    public Task UpdateAsync(PayerResponse payer, CancellationToken cancellationToken = default)
     {
         lock (gate)
         {
             payers[(payer.BillerId, payer.PayerId)] = payer;
         }
+
+        return Task.CompletedTask;
     }
 
     private static string Normalize(string email) => email.Trim().ToUpperInvariant();

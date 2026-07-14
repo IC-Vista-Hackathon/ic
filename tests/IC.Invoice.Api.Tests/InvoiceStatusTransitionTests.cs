@@ -178,4 +178,42 @@ public sealed class InvoiceStatusTransitionTests
         Assert.Single(((InvoiceListResponse)ok.Value!).Invoices);
         Assert.IsType<BadRequestObjectResult>(missingAccount);
     }
+
+    [Fact]
+    public async Task ControllerListRejectsBlankBillerId()
+    {
+        var controller = NewController(out _);
+
+        // billerId is validated before account_number — a blank biller must 400
+        // with invalid_biller even when a valid account_number is supplied.
+        var result = await controller.List("  ", "ACCT-1", CancellationToken.None);
+
+        var badRequest = Assert.IsType<BadRequestObjectResult>(result);
+        Assert.Equal("invalid_biller", ((ApiError)badRequest.Value!).Error.Code);
+    }
+
+    [Fact]
+    public async Task ControllerGetRejectsBlankBillerId()
+    {
+        var controller = NewController(out _);
+
+        var result = await controller.Get("  ", "i_1", CancellationToken.None);
+
+        var badRequest = Assert.IsType<BadRequestObjectResult>(result);
+        Assert.Equal("invalid_biller", ((ApiError)badRequest.Value!).Error.Code);
+    }
+
+    [Fact]
+    public async Task ControllerUpdateStatusRejectsBlankBillerId()
+    {
+        var controller = NewController(out _);
+
+        // billerId is validated before status/payment_id — a blank biller must 400
+        // with invalid_biller, not fall through to a status/payment check.
+        var result = await controller.UpdateStatus(
+            "  ", "i_1", new UpdateInvoiceStatusRequest(WireStatus.Paid, "pay-1"), CancellationToken.None);
+
+        var badRequest = Assert.IsType<BadRequestObjectResult>(result);
+        Assert.Equal("invalid_biller", ((ApiError)badRequest.Value!).Error.Code);
+    }
 }

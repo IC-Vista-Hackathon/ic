@@ -4,6 +4,7 @@ WORKDIR /src
 COPY Directory.Build.props Directory.Packages.props NuGet.config global.json ./
 COPY contracts/IC.Invoice.Contracts/IC.Invoice.Contracts.csproj contracts/IC.Invoice.Contracts/
 COPY contracts/IC.Payment.Contracts/IC.Payment.Contracts.csproj contracts/IC.Payment.Contracts/
+COPY libraries/IC.Persistence.Cosmos/IC.Persistence.Cosmos.csproj libraries/IC.Persistence.Cosmos/
 COPY libraries/IC.ServiceDefaults/IC.ServiceDefaults.csproj libraries/IC.ServiceDefaults/
 COPY services/IC.Payment.Api/IC.Payment.Api.csproj services/IC.Payment.Api/
 RUN dotnet restore services/IC.Payment.Api/IC.Payment.Api.csproj
