@@ -1,51 +1,76 @@
-using IC.Invoice.Api.Storage;
+using IC.Invoice.Api.Common;
+using IC.Invoice.Api.Domain;
+using IC.Invoice.Api.Repositories;
+using IC.Invoice.Api.Seeding;
 using IC.Invoice.Contracts.V1.Invoices;
-using IC.ServiceDefaults.Errors;
 using Microsoft.AspNetCore.Mvc;
 
 namespace IC.Invoice.Api.Controllers;
 
+/// <summary>
+/// Invoice endpoints, all partition-scoped under a biller.
+/// Routes follow design/contracts.md (<c>/billers/{id}/invoices...</c>).
+/// </summary>
 [ApiController]
 [Route("billers/{billerId}/invoices")]
 public sealed class InvoicesController : ControllerBase
 {
-    private readonly IInvoiceStore store;
+    private readonly IInvoiceRepository _repository;
+    private readonly TimeProvider _timeProvider;
 
-    public InvoicesController(IInvoiceStore store)
+    public InvoicesController(IInvoiceRepository repository, TimeProvider timeProvider)
     {
-        this.store = store;
+        _repository = repository;
+        _timeProvider = timeProvider;
     }
 
-    /// <summary>Open invoices (due + scheduled) by default; pass status= for a specific one.</summary>
-    [HttpGet]
-    public ActionResult<InvoiceListResponse> List(
-        string billerId,
-        [FromQuery] string? accountNumber,
-        [FromQuery] InvoiceStatus? status)
-        => new InvoiceListResponse(store.List(billerId, accountNumber, status));
-
-    [HttpGet("{invoiceId}")]
-    public ActionResult<InvoiceResponse> Get(string billerId, string invoiceId)
-        => store.Find(billerId, invoiceId)
-            ?? throw ServiceException.NotFound("not_found", $"invoice {invoiceId} not found");
-
+    /// <summary>
+    /// Internal: seed fake invoice data at onboarding.
+    /// <c>POST /billers/{billerId}/invoices/seed</c>.
+    /// </summary>
     [HttpPost("seed")]
-    public ActionResult<InvoiceListResponse> Seed(string billerId, SeedInvoicesRequest request)
+    [ProducesResponseType<SeedInvoicesResponse>(StatusCodes.Status201Created)]
+    [ProducesResponseType<ApiError>(StatusCodes.Status400BadRequest)]
+    public async Task<IActionResult> Seed(
+        string billerId,
+        [FromBody] SeedInvoicesRequest? request,
+        CancellationToken cancellationToken)
     {
-        if (request.Count is < 1 or > 100)
+        if (string.IsNullOrWhiteSpace(billerId))
         {
-            throw ServiceException.BadRequest("invalid_count", "count must be between 1 and 100");
+            return BadRequest(ApiError.Of("invalid_biller", "biller_id is required."));
         }
 
-        var seeded = store.Seed(billerId, request);
-        return Created($"/billers/{billerId}/invoices", new InvoiceListResponse(seeded));
+        request ??= new SeedInvoicesRequest();
+
+        var accountNumber = string.IsNullOrWhiteSpace(request.AccountNumber)
+            ? GenerateAccountNumber()
+            : request.AccountNumber.Trim();
+
+        var today = DateOnly.FromDateTime(_timeProvider.GetUtcNow().UtcDateTime);
+        var invoices = FakeInvoiceFactory.Create(
+            billerId, accountNumber, request.Count, request.BillType, today);
+
+        await _repository.AddRangeAsync(invoices, cancellationToken);
+
+        var response = new SeedInvoicesResponse(
+            invoices.Count,
+            accountNumber,
+            invoices.Select(ToResponse).ToList());
+
+        return StatusCode(StatusCodes.Status201Created, response);
     }
 
-    /// <summary>Internal: Payment Service asserts due→paid/scheduled, scheduled→paid.</summary>
-    [HttpPost("{invoiceId}/status")]
-    public ActionResult<InvoiceResponse> UpdateStatus(
-        string billerId,
-        string invoiceId,
-        UpdateInvoiceStatusRequest request)
-        => store.UpdateStatus(billerId, invoiceId, request);
+    private static InvoiceResponse ToResponse(InvoiceDocument invoice) => new(
+        invoice.Id,
+        invoice.BillerId,
+        invoice.AccountNumber,
+        invoice.PayerName,
+        invoice.Description,
+        invoice.AmountCents,
+        invoice.DueDate,
+        invoice.Status.ToWire());
+
+    private static string GenerateAccountNumber() =>
+        "ACCT-" + Guid.NewGuid().ToString("N")[..6].ToUpperInvariant();
 }

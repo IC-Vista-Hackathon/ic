@@ -1,9 +1,21 @@
+# Keep build contexts small and reproducible. Applies to every image built from
+# the repo root. Nothing here should end up inside an image — it's all restored
+# or compiled fresh in the build stage.
 **/bin/
 **/obj/
-**/.git/
-**/.vs/
-**/.vscode/
-**/.idea/
-**/node_modules/
-**/TestResults/
+**/out/
+**/publish/
+
+.git/
+.gitignore
+.vs/
+.vscode/
+.idea/
 **/*.user
+
+# Docker's own files never need to be in the context.
+**/Dockerfile*
+.dockerignore
+
+# Local/editor noise
+**/.DS_Store

@@ -1,0 +1,61 @@
+{
+  "tools": [
+    {
+      "type": "function",
+      "function": {
+        "name": "update_config",
+        "description": "Apply a JSON merge-patch to the biller's draft BillerConfiguration. Pass only the fields that changed. Backed by PATCH /billers/{id}/config. The 'compliance' field is server-written only (by the publish gate) and any patch touching it is rejected — never include it.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "patch": {
+              "type": "object",
+              "description": "Merge-patch of draft config fields to change.",
+              "properties": {
+                "bill_type": { "type": "string", "description": "e.g. Utility, Real Estate Tax" },
+                "brand": {
+                  "type": "object",
+                  "properties": {
+                    "primary_color": { "type": "string", "description": "hex color, e.g. #0044cc" },
+                    "logo_text": { "type": "string" },
+                    "logo_url": { "type": "string" },
+                    "tagline": { "type": "string" },
+                    "tone": { "type": "string" }
+                  },
+                  "additionalProperties": false
+                },
+                "payment_methods": {
+                  "type": "array",
+                  "items": { "type": "string", "enum": ["card", "ach", "applepay", "googlepay", "paypal"] }
+                },
+                "fees": {
+                  "type": "object",
+                  "properties": {
+                    "card_percent": { "type": "number" },
+                    "ach_flat_cents": { "type": "integer" },
+                    "payer_pays_fee": { "type": "boolean" }
+                  },
+                  "additionalProperties": false
+                },
+                "features": {
+                  "type": "object",
+                  "properties": {
+                    "autopay": { "type": "boolean" },
+                    "paperless": { "type": "boolean" },
+                    "sms_receipts": { "type": "boolean" },
+                    "guest_pay": { "type": "boolean" }
+                  },
+                  "additionalProperties": false
+                },
+                "receipt_message": { "type": "string" },
+                "languages": { "type": "array", "items": { "type": "string", "description": "ISO language code" } }
+              },
+              "additionalProperties": false
+            }
+          },
+          "required": ["patch"]
+        }
+      }
+    }
+  ]
+}

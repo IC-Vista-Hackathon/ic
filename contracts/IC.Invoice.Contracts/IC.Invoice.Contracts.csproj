@@ -1,5 +1,5 @@
 <Project Sdk="Microsoft.NET.Sdk">
   <PropertyGroup>
-    <Description>Versioned public contracts for IC Invoice Service.</Description>
+    <Description>Versioned public contracts for the IC Invoice Service.</Description>
   </PropertyGroup>
 </Project>
