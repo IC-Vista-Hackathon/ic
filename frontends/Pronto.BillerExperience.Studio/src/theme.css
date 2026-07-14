@@ -1,0 +1,33 @@
+/* Pronto brand override — replaces IC token values, not the IC design system itself. */
+:root {
+  --invoicecloud-primary: #197D00;
+  --invoicecloud-primary-shade: #145f00;
+  --invoicecloud-primary-tint: #e8f5e0;
+  --invoicecloud-primary-border: #6bb654;
+  --invoicecloud-secondary: #1C1917;
+  --invoicecloud-secondary-shade: #121110;
+  --invoicecloud-secondary-tint: #ECEAE8;
+  --invoicecloud-font-family-primary: 'DM Sans', sans-serif;
+  --invoicecloud-font-family-heading: 'Barlow Condensed', sans-serif;
+  --invoicecloud-font-family-mono: 'DM Mono', monospace;
+  --invoicecloud-heading-font-weight: 700;
+}
+
+h1, h2, h3 { font-style: italic; letter-spacing: -0.01em; }
+
+@keyframes spin { to { transform: rotate(360deg); } }
+@keyframes fadeUp { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: translateY(0); } }
+@keyframes orbitSpin { from { transform: rotate(0deg) translateX(46px) rotate(0deg); } to { transform: rotate(360deg) translateX(46px) rotate(-360deg); } }
+@keyframes corePulse { 0%, 100% { transform: scale(1); } 50% { transform: scale(1.18); } }
+@keyframes badgeBob { 0%, 100% { transform: translateY(0); } 50% { transform: translateY(-3px); } }
+
+* { box-sizing: border-box; }
+body { margin: 0; }
+input:focus, button:focus, textarea:focus {
+  outline: var(--invoicecloud-focus-outline);
+  outline-offset: var(--invoicecloud-focus-outline-offset-s);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { animation-duration: 0.001ms !important; animation-iteration-count: 1 !important; }
+}
