@@ -4,6 +4,20 @@ Agent-native EBPP: a biller self-onboards through a chat agent, previews their o
 portal on fake data, "buys" the platform, and publishes it live. A payer then uses the live site,
 assisted by a payer-side agent team.
 
+## Why
+
+Three wins over today's model, where every biller gets a hand-built payer experience through a
+months-long onboarding:
+
+1. **Fully custom payer experiences.** Today's portals all follow the same general pattern.
+   Config-driven rendering means each biller can have exactly what they want, no shared template
+   constraint.
+2. **Self-service onboarding.** No three-month setup engagement — a biller can configure and go
+   live in about fifteen minutes, unassisted. Cuts sales cost and time-to-live dramatically.
+3. **A new market segment.** Small billers (~$200-300 MRR) never cleared the bar to justify a
+   three-month onboarding effort. Fifteen-minute self-service does — this opens up small
+   businesses and firms as viable customers, not just easier sales for existing targets.
+
 ## Flow (from high-level architecture)
 
 ```
