@@ -9,6 +9,9 @@ public interface IPurchaseStore
     Task AddAsync(PurchaseResponse purchase, CancellationToken cancellationToken = default);
 
     Task<PurchaseResponse?> FindAsync(string billerId, string purchaseId, CancellationToken cancellationToken = default);
+
+    /// <summary>Delete all purchases in a biller's partition (nonprod test-cleanup only).</summary>
+    Task PurgeByBillerAsync(string billerId, CancellationToken cancellationToken = default);
 }
 
 public sealed class InMemoryPurchaseStore : IPurchaseStore
@@ -39,5 +42,18 @@ public sealed class InMemoryPurchaseStore : IPurchaseStore
         {
             return Task.FromResult(purchases.GetValueOrDefault((billerId, purchaseId)));
         }
+    }
+
+    public Task PurgeByBillerAsync(string billerId, CancellationToken cancellationToken = default)
+    {
+        lock (gate)
+        {
+            foreach (var key in purchases.Keys.Where(k => k.BillerId == billerId).ToList())
+            {
+                purchases.Remove(key);
+            }
+        }
+
+        return Task.CompletedTask;
     }
 }

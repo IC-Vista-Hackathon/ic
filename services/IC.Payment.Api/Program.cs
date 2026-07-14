@@ -1,3 +1,4 @@
+using IC.Payment.Api;
 using IC.Payment.Api.Clients;
 using IC.Payment.Api.Storage;
 using IC.Persistence.Cosmos;
@@ -7,6 +8,8 @@ using Microsoft.Azure.Cosmos;
 var builder = WebApplication.CreateBuilder(args);
 
 builder.Services.AddServiceDefaults();
+builder.Services.Configure<MaintenanceOptions>(
+    builder.Configuration.GetSection(MaintenanceOptions.SectionName));
 
 var persistence = builder.Configuration
     .GetSection(CosmosPersistenceOptions.SectionName)

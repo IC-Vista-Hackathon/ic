@@ -7,6 +7,9 @@ public interface IPaymentStore
     Task AddAsync(PaymentResponse payment, CancellationToken cancellationToken = default);
 
     Task<PaymentResponse?> FindAsync(string billerId, string paymentId, CancellationToken cancellationToken = default);
+
+    /// <summary>Delete all payments in a biller's partition (nonprod test-cleanup only).</summary>
+    Task PurgeByBillerAsync(string billerId, CancellationToken cancellationToken = default);
 }
 
 public sealed class InMemoryPaymentStore : IPaymentStore
@@ -31,5 +34,18 @@ public sealed class InMemoryPaymentStore : IPaymentStore
         {
             return Task.FromResult(payments.GetValueOrDefault((billerId, paymentId)));
         }
+    }
+
+    public Task PurgeByBillerAsync(string billerId, CancellationToken cancellationToken = default)
+    {
+        lock (gate)
+        {
+            foreach (var key in payments.Keys.Where(k => k.BillerId == billerId).ToList())
+            {
+                payments.Remove(key);
+            }
+        }
+
+        return Task.CompletedTask;
     }
 }
