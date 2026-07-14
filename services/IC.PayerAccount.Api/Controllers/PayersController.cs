@@ -38,11 +38,11 @@ public sealed class PayersController : ControllerBase
                 PaymentDay: null));
         store.Add(payer);
 
-        return Created($"/payers/{payer.PayerId}?billerId={payer.BillerId}", payer);
+        return Created($"/payers/{payer.PayerId}?biller_id={payer.BillerId}", payer);
     }
 
     [HttpGet("{payerId}")]
-    public ActionResult<PayerResponse> Get(string payerId, [FromQuery] string billerId)
+    public ActionResult<PayerResponse> Get(string payerId, [FromQuery(Name = "biller_id")] string billerId)
         => store.Find(billerId, payerId)
             ?? throw ServiceException.NotFound("not_found", $"payer {payerId} not found");
 
@@ -52,7 +52,7 @@ public sealed class PayersController : ControllerBase
     /// </summary>
     [HttpPatch("{payerId}/preferences")]
     public ActionResult<PayerPreferences> UpdatePreferences(
-        string payerId, [FromQuery] string billerId, UpdatePayerPreferencesRequest request)
+        string payerId, [FromQuery(Name = "biller_id")] string billerId, UpdatePayerPreferencesRequest request)
     {
         var payer = store.Find(billerId, payerId)
             ?? throw ServiceException.NotFound("not_found", $"payer {payerId} not found");

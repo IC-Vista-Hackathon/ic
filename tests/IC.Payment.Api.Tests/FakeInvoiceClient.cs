@@ -13,15 +13,15 @@ public sealed class FakeInvoiceClient : IInvoiceClient
     public InvoiceResponse AddDueInvoice(string billerId, int amountCents)
     {
         var invoice = new InvoiceResponse(
-            InvoiceId: Guid.NewGuid().ToString(),
+            Id: Guid.NewGuid().ToString(),
             BillerId: billerId,
             AccountNumber: "ACCT-1",
             PayerName: "Test Payer",
             Description: "Test invoice",
             AmountCents: amountCents,
             DueDate: new DateOnly(2026, 7, 25),
-            Status: InvoiceStatus.Due);
-        invoices[(billerId, invoice.InvoiceId)] = invoice;
+            Status: "due");
+        invoices[(billerId, invoice.Id)] = invoice;
         return invoice;
     }
 
@@ -39,7 +39,7 @@ public sealed class FakeInvoiceClient : IInvoiceClient
         var invoice = invoices.GetValueOrDefault(key)
             ?? throw ServiceException.NotFound("not_found", $"invoice {invoiceId} not found");
 
-        if (invoice.Status == InvoiceStatus.Paid)
+        if (invoice.Status == "paid")
         {
             throw ServiceException.Conflict("already_paid", $"invoice {invoiceId} is already paid");
         }

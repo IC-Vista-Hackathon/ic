@@ -16,7 +16,8 @@ public sealed class PaymentsApiTests : IClassFixture<WebApplicationFactory<Progr
 {
     private static readonly JsonSerializerOptions Wire = new(JsonSerializerDefaults.Web)
     {
-        Converters = { new JsonStringEnumConverter() },
+        PropertyNamingPolicy = JsonNamingPolicy.SnakeCaseLower,
+        Converters = { new JsonStringEnumConverter(JsonNamingPolicy.SnakeCaseLower) },
     };
 
     private readonly FakeInvoiceClient fakeInvoices = new();
@@ -37,7 +38,7 @@ public sealed class PaymentsApiTests : IClassFixture<WebApplicationFactory<Progr
         var invoice = fakeInvoices.AddDueInvoice(billerId, amountCents: 8420);
 
         var response = await client.PostAsJsonAsync(
-            "payments", new CreatePaymentRequest(billerId, invoice.InvoiceId, "card"), Wire);
+            "payments", new CreatePaymentRequest(billerId, invoice.Id, "card"), Wire);
 
         Assert.Equal(HttpStatusCode.Created, response.StatusCode);
         var payment = await response.Content.ReadFromJsonAsync<PaymentResponse>(Wire);
@@ -49,7 +50,7 @@ public sealed class PaymentsApiTests : IClassFixture<WebApplicationFactory<Progr
         Assert.StartsWith("IC-", payment.Confirmation, StringComparison.Ordinal);
 
         var fetched = await client.GetFromJsonAsync<PaymentResponse>(
-            $"payments/{payment.PaymentId}?billerId={billerId}", Wire);
+            $"payments/{payment.PaymentId}?biller_id={billerId}", Wire);
         Assert.Equal(payment.PaymentId, fetched!.PaymentId);
     }
 
@@ -60,7 +61,7 @@ public sealed class PaymentsApiTests : IClassFixture<WebApplicationFactory<Progr
         var invoice = fakeInvoices.AddDueInvoice(billerId, amountCents: 10000);
 
         var response = await client.PostAsJsonAsync(
-            "payments", new CreatePaymentRequest(billerId, invoice.InvoiceId, "ach"), Wire);
+            "payments", new CreatePaymentRequest(billerId, invoice.Id, "ach"), Wire);
 
         var payment = await response.Content.ReadFromJsonAsync<PaymentResponse>(Wire);
         Assert.Equal(150, payment!.FeeCents);
@@ -76,7 +77,7 @@ public sealed class PaymentsApiTests : IClassFixture<WebApplicationFactory<Progr
         var response = await client.PostAsJsonAsync(
             "payments",
             new CreatePaymentRequest(
-                billerId, invoice.InvoiceId, "ach", ScheduledFor: new DateOnly(2026, 7, 24)),
+                billerId, invoice.Id, "ach", ScheduledFor: new DateOnly(2026, 7, 24)),
             Wire);
 
         var payment = await response.Content.ReadFromJsonAsync<PaymentResponse>(Wire);
@@ -90,10 +91,10 @@ public sealed class PaymentsApiTests : IClassFixture<WebApplicationFactory<Progr
         var billerId = Guid.NewGuid().ToString();
         var invoice = fakeInvoices.AddDueInvoice(billerId, amountCents: 5000);
         await client.PostAsJsonAsync(
-            "payments", new CreatePaymentRequest(billerId, invoice.InvoiceId, "card"), Wire);
+            "payments", new CreatePaymentRequest(billerId, invoice.Id, "card"), Wire);
 
         var second = await client.PostAsJsonAsync(
-            "payments", new CreatePaymentRequest(billerId, invoice.InvoiceId, "card"), Wire);
+            "payments", new CreatePaymentRequest(billerId, invoice.Id, "card"), Wire);
 
         Assert.Equal(HttpStatusCode.Conflict, second.StatusCode);
         Assert.Contains(
@@ -107,7 +108,7 @@ public sealed class PaymentsApiTests : IClassFixture<WebApplicationFactory<Progr
         var invoice = fakeInvoices.AddDueInvoice(billerId, amountCents: 5000);
 
         var response = await client.PostAsJsonAsync(
-            "payments", new CreatePaymentRequest(billerId, invoice.InvoiceId, "crypto"), Wire);
+            "payments", new CreatePaymentRequest(billerId, invoice.Id, "crypto"), Wire);
 
         Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
         Assert.Contains(

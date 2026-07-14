@@ -8,10 +8,11 @@ namespace IC.Payment.Contracts.Tests;
 
 public sealed class PurchaseContractsTests
 {
-    // Wire policy: camelCase + enums as strings (design/contracts.md).
+    // Wire policy: snake_case + lowercase string enums (design/contracts.md).
     private static readonly JsonSerializerOptions CaseInsensitive = new(JsonSerializerDefaults.Web)
     {
-        Converters = { new JsonStringEnumConverter() },
+        PropertyNamingPolicy = JsonNamingPolicy.SnakeCaseLower,
+        Converters = { new JsonStringEnumConverter(JsonNamingPolicy.SnakeCaseLower) },
     };
 
     [Fact]

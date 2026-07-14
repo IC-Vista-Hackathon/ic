@@ -7,10 +7,11 @@ namespace IC.Payment.Contracts.Tests;
 
 public sealed class PaymentContractsTests
 {
-    // Wire policy: camelCase + enums as strings (design/contracts.md).
+    // Wire policy: snake_case + lowercase string enums (design/contracts.md).
     private static readonly JsonSerializerOptions CaseInsensitive = new(JsonSerializerDefaults.Web)
     {
-        Converters = { new JsonStringEnumConverter() },
+        PropertyNamingPolicy = JsonNamingPolicy.SnakeCaseLower,
+        Converters = { new JsonStringEnumConverter(JsonNamingPolicy.SnakeCaseLower) },
     };
 
     [Fact]
@@ -53,7 +54,7 @@ public sealed class PaymentContractsTests
     public void CreatePaymentRequestDeserializesWithoutOptionalProperties()
     {
         const string json =
-            """{"billerId":"b-1","invoiceId":"i-1","method":"card"}""";
+            """{"biller_id":"b-1","invoice_id":"i-1","method":"card"}""";
 
         var request = JsonSerializer.Deserialize<CreatePaymentRequest>(json, CaseInsensitive);
 

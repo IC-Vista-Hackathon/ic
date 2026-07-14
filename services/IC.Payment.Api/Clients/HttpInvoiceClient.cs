@@ -1,7 +1,6 @@
 using System.Net;
 using System.Net.Http.Json;
 using System.Text.Json;
-using System.Text.Json.Serialization;
 using IC.Invoice.Contracts.V1.Invoices;
 using IC.ServiceDefaults.Errors;
 
@@ -9,9 +8,11 @@ namespace IC.Payment.Api.Clients;
 
 public sealed class HttpInvoiceClient : IInvoiceClient
 {
+    // Invoice Service wire format is snake_case (see IC.Invoice.Api Program.cs).
     private static readonly JsonSerializerOptions Wire = new(JsonSerializerDefaults.Web)
     {
-        Converters = { new JsonStringEnumConverter() },
+        PropertyNamingPolicy = JsonNamingPolicy.SnakeCaseLower,
+        DictionaryKeyPolicy = JsonNamingPolicy.SnakeCaseLower,
     };
 
     private readonly HttpClient http;

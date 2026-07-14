@@ -34,11 +34,11 @@ public sealed class PurchasesController : ControllerBase
         await billerAccounts.AdvanceToPurchasedAsync(request.BillerId, request.Plan, cancellationToken)
             .ConfigureAwait(false);
 
-        return Created($"/purchases/{purchase.PurchaseId}?billerId={purchase.BillerId}", purchase);
+        return Created($"/purchases/{purchase.PurchaseId}?biller_id={purchase.BillerId}", purchase);
     }
 
     [HttpGet("{purchaseId}")]
-    public ActionResult<PurchaseResponse> Get(string purchaseId, [FromQuery] string billerId)
+    public ActionResult<PurchaseResponse> Get(string purchaseId, [FromQuery(Name = "biller_id")] string billerId)
         => store.Find(billerId, purchaseId)
             ?? throw ServiceException.NotFound("not_found", $"purchase {purchaseId} not found");
 }

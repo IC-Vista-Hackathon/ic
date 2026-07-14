@@ -1,9 +1,10 @@
 # Contracts
 
 REST, JSON, integer cents. Errors: `{"error": {"code", "message"}}` with conventional HTTP status.
-Wire casing is **camelCase** with **enums as strings** (System.Text.Json web defaults +
-`JsonStringEnumConverter`, applied by `libraries/IC.ServiceDefaults`) — snake_case in the JSON
-examples below is historical; field names on the wire are the camelCase forms of the same names.
+Wire casing is **snake_case** with **lowercase string enums**, exactly as the JSON examples below
+show — implemented by `IC.Invoice.Api`'s JSON options and by `libraries/IC.ServiceDefaults`
+(`SnakeCaseLower` naming policy + `JsonStringEnumConverter`) for every other host. Query-string
+parameters are snake_case too (`?biller_id=`, `?account_number=`).
 IDs on the wire are Cosmos-generated GUID strings (`b_1a2b`, `i_77` etc. below are illustrative
 shorthand, not the literal format). Per entities.md's Cosmos conventions, most containers
 partition on `/biller_id` — endpoints below pass `biller_id` alongside a resource id wherever a

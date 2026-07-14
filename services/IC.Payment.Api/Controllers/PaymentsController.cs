@@ -42,7 +42,7 @@ public sealed class PaymentsController : ControllerBase
                 .ConfigureAwait(false)
             ?? throw ServiceException.NotFound("invoice_not_found", $"invoice {request.InvoiceId} not found");
 
-        if (invoice.Status == InvoiceStatus.Paid)
+        if (invoice.Status == "paid")
         {
             throw ServiceException.Conflict("already_paid", $"invoice {request.InvoiceId} is already paid");
         }
@@ -56,8 +56,7 @@ public sealed class PaymentsController : ControllerBase
         await invoices.UpdateStatusAsync(
             request.BillerId,
             request.InvoiceId,
-            new UpdateInvoiceStatusRequest(
-                scheduled ? InvoiceStatus.Scheduled : InvoiceStatus.Paid, paymentId),
+            new UpdateInvoiceStatusRequest(scheduled ? "scheduled" : "paid", paymentId),
             cancellationToken).ConfigureAwait(false);
 
         var payment = new PaymentResponse(
@@ -76,11 +75,11 @@ public sealed class PaymentsController : ControllerBase
             CreatedAt: DateTimeOffset.UtcNow);
         store.Add(payment);
 
-        return Created($"/payments/{payment.PaymentId}?billerId={payment.BillerId}", payment);
+        return Created($"/payments/{payment.PaymentId}?biller_id={payment.BillerId}", payment);
     }
 
     [HttpGet("{paymentId}")]
-    public ActionResult<PaymentResponse> Get(string paymentId, [FromQuery] string billerId)
+    public ActionResult<PaymentResponse> Get(string paymentId, [FromQuery(Name = "biller_id")] string billerId)
         => store.Find(billerId, paymentId)
             ?? throw ServiceException.NotFound("not_found", $"payment {paymentId} not found");
 

@@ -12,7 +12,8 @@ public sealed class PayersApiTests : IClassFixture<WebApplicationFactory<Program
 {
     private static readonly JsonSerializerOptions Wire = new(JsonSerializerDefaults.Web)
     {
-        Converters = { new JsonStringEnumConverter() },
+        PropertyNamingPolicy = JsonNamingPolicy.SnakeCaseLower,
+        Converters = { new JsonStringEnumConverter(JsonNamingPolicy.SnakeCaseLower) },
     };
 
     private readonly HttpClient client;
@@ -41,7 +42,7 @@ public sealed class PayersApiTests : IClassFixture<WebApplicationFactory<Program
         Assert.Null(payer.Preferences.PaymentDay);
 
         var fetched = await client.GetFromJsonAsync<PayerResponse>(
-            $"payers/{payer.PayerId}?billerId={billerId}", Wire);
+            $"payers/{payer.PayerId}?biller_id={billerId}", Wire);
         Assert.Equal(payer.PayerId, fetched!.PayerId);
     }
 
@@ -70,7 +71,7 @@ public sealed class PayersApiTests : IClassFixture<WebApplicationFactory<Program
         var payer = await RegisterPayerAsync();
 
         var response = await client.PatchAsJsonAsync(
-            $"payers/{payer.PayerId}/preferences?billerId={payer.BillerId}",
+            $"payers/{payer.PayerId}/preferences?biller_id={payer.BillerId}",
             new UpdatePayerPreferencesRequest(Autopay: true),
             Wire);
 
@@ -87,14 +88,14 @@ public sealed class PayersApiTests : IClassFixture<WebApplicationFactory<Program
         var payer = await RegisterPayerAsync();
 
         var enable = await client.PatchAsJsonAsync(
-            $"payers/{payer.PayerId}/preferences?billerId={payer.BillerId}",
+            $"payers/{payer.PayerId}/preferences?biller_id={payer.BillerId}",
             new UpdatePayerPreferencesRequest(Autopay: true, PaymentDay: 24),
             Wire);
         Assert.Equal(HttpStatusCode.OK, enable.StatusCode);
 
         // Partial PATCH: only paperless — autopay/day untouched.
         var partial = await client.PatchAsJsonAsync(
-            $"payers/{payer.PayerId}/preferences?billerId={payer.BillerId}",
+            $"payers/{payer.PayerId}/preferences?biller_id={payer.BillerId}",
             new UpdatePayerPreferencesRequest(Paperless: true),
             Wire);
         var preferences = await partial.Content.ReadFromJsonAsync<PayerPreferences>(Wire);
@@ -110,7 +111,7 @@ public sealed class PayersApiTests : IClassFixture<WebApplicationFactory<Program
         var payer = await RegisterPayerAsync();
 
         var response = await client.PatchAsJsonAsync(
-            $"payers/{payer.PayerId}/preferences?billerId={payer.BillerId}",
+            $"payers/{payer.PayerId}/preferences?biller_id={payer.BillerId}",
             new UpdatePayerPreferencesRequest(PaymentDay: 31),
             Wire);
 

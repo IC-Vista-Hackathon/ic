@@ -1,3 +1,4 @@
+using System.Text.Json;
 using System.Text.Json.Serialization;
 using IC.ServiceDefaults.Errors;
 using Microsoft.AspNetCore.Builder;
@@ -9,14 +10,20 @@ namespace IC.ServiceDefaults;
 public static class ServiceDefaultsExtensions
 {
     /// <summary>
-    /// Controllers + wire policy (camelCase, string enums), error envelope for model-binding
-    /// failures, and health checks. Every IC service host calls this.
+    /// Controllers + wire policy (snake_case, lowercase string enums — design/contracts.md,
+    /// matching IC.Invoice.Api), error envelope for model-binding failures, and health checks.
+    /// Every IC service host calls this.
     /// </summary>
     public static IServiceCollection AddServiceDefaults(this IServiceCollection services)
     {
         services.AddControllers()
             .AddJsonOptions(options =>
-                options.JsonSerializerOptions.Converters.Add(new JsonStringEnumConverter()))
+            {
+                options.JsonSerializerOptions.PropertyNamingPolicy = JsonNamingPolicy.SnakeCaseLower;
+                options.JsonSerializerOptions.DictionaryKeyPolicy = JsonNamingPolicy.SnakeCaseLower;
+                options.JsonSerializerOptions.Converters.Add(
+                    new JsonStringEnumConverter(JsonNamingPolicy.SnakeCaseLower));
+            })
             .ConfigureApiBehaviorOptions(options =>
                 options.InvalidModelStateResponseFactory = context =>
                 {

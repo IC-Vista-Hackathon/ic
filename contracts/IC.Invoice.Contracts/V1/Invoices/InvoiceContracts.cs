@@ -29,3 +29,16 @@ public sealed record InvoiceResponse(
     int AmountCents,
     DateOnly DueDate,
     string Status);
+
+/// <summary>Result of <c>GET /billers/{id}/invoices</c> — open invoices unless filtered.</summary>
+public sealed record InvoiceListResponse(
+    IReadOnlyList<InvoiceResponse> Invoices);
+
+/// <summary>
+/// Body for <c>POST /billers/{id}/invoices/{invoiceId}/status</c> (internal — Payment Service
+/// asserts <c>due→paid</c>, <c>due→scheduled</c>, or <c>scheduled→paid</c>). <see cref="Status"/>
+/// is the lowercase wire token; <see cref="PaymentId"/> makes the transition idempotent per payment.
+/// </summary>
+public sealed record UpdateInvoiceStatusRequest(
+    string Status,
+    string PaymentId);
