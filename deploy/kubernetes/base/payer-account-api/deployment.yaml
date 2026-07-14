@@ -1,10 +1,9 @@
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: ic-invoice-api
-  namespace: ic
+  name: ic-payer-account-api
   labels:
-    app: ic-invoice-api
+    app: ic-payer-account-api
     app.kubernetes.io/part-of: ic
 spec:
   # Cosmos-backed persistence (partition /biller_id) — state is shared, so this is
@@ -12,11 +11,11 @@ spec:
   replicas: 1
   selector:
     matchLabels:
-      app: ic-invoice-api
+      app: ic-payer-account-api
   template:
     metadata:
       labels:
-        app: ic-invoice-api
+        app: ic-payer-account-api
         # Opt this pod into the AKS workload-identity webhook (federated token for Cosmos).
         azure.workload.identity/use: "true"
     spec:
@@ -24,10 +23,8 @@ spec:
       # Cosmos via DefaultAzureCredential — no connection strings or keys.
       serviceAccountName: ic-workload
       containers:
-        - name: invoice-api
-          # Immutable release tag (git short SHA) — see deploy/kubernetes/README.md.
-          image: acrichackjk4zmntatjem4.azurecr.io/ic-invoice-api:b0e0c59
-          imagePullPolicy: IfNotPresent
+        - name: payer-account-api
+          image: acrichackjk4zmntatjem4.azurecr.io/ic-payer-account-api:latest
           ports:
             - name: http
               containerPort: 8080
@@ -39,7 +36,6 @@ spec:
               value: https://cosmos-ic-hack-jk4zmntatjem4.documents.azure.com:443/
             - name: Persistence__DatabaseName
               value: ic
-          # Endpoints added in IC.Invoice.Api specifically for k8s probing.
           readinessProbe:
             httpGet:
               path: /health/ready

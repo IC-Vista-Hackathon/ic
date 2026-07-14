@@ -1,10 +1,9 @@
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: ic-payer-account-api
-  namespace: ic
+  name: ic-invoice-api
   labels:
-    app: ic-payer-account-api
+    app: ic-invoice-api
     app.kubernetes.io/part-of: ic
 spec:
   # Cosmos-backed persistence (partition /biller_id) — state is shared, so this is
@@ -12,11 +11,11 @@ spec:
   replicas: 1
   selector:
     matchLabels:
-      app: ic-payer-account-api
+      app: ic-invoice-api
   template:
     metadata:
       labels:
-        app: ic-payer-account-api
+        app: ic-invoice-api
         # Opt this pod into the AKS workload-identity webhook (federated token for Cosmos).
         azure.workload.identity/use: "true"
     spec:
@@ -24,10 +23,8 @@ spec:
       # Cosmos via DefaultAzureCredential — no connection strings or keys.
       serviceAccountName: ic-workload
       containers:
-        - name: payer-account-api
-          # Immutable release tag (git short SHA) — see deploy/kubernetes/README.md.
-          image: acrichackjk4zmntatjem4.azurecr.io/ic-payer-account-api:b0e0c59
-          imagePullPolicy: IfNotPresent
+        - name: invoice-api
+          image: acrichackjk4zmntatjem4.azurecr.io/ic-invoice-api:latest
           ports:
             - name: http
               containerPort: 8080

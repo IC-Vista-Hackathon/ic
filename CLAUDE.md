@@ -154,8 +154,9 @@ is still just a placeholder README.
 - `IC.BillerExperience.Studio` and `IC.BillerPayments.Pwa` are small but functional React apps.
   The PWA currently runs against a local `DemoPaymentExperienceProvider`, not the real
   Payment/Invoice/PayerAccount services.
-- Test coverage is thin outside Invoice/Payment; `BillerExperience.IntegrationTests` and
-  `BillerExperience.Worker.Tests` have zero test files.
+- Test coverage is thin outside Invoice/Payment. `BillerExperience.IntegrationTests` now has
+  in-process integration tests for the Invoice API (health endpoints + seed-then-lookup flow),
+  added with the GitHub Actions CI/CD pipeline; `BillerExperience.Worker.Tests` remains sparse.
 - The public Gateway endpoint (`ic-hack.eastus2.cloudapp.azure.com`) is live and verified.
 
 Don't assume build/deploy tooling exists beyond what's described above — check before relying on

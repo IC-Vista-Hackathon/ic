@@ -1,0 +1,62 @@
+name: Deploy nonprod
+
+# On every PR: scan/build/test run via the other workflows; this one builds the
+# PR head's images, deploys them to the isolated `ic-nonprod` namespace on
+# aks-ic-hack, and runs functional/smoke tests against the deployment.
+
+on:
+  pull_request:
+    branches: [main]
+    types: [opened, synchronize, reopened]
+
+permissions:
+  contents: read
+
+concurrency:
+  # One nonprod deploy per PR; a new push cancels the in-flight one.
+  group: deploy-nonprod-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  build-images:
+    uses: ./.github/workflows/build-images.yml
+    with:
+      image_tag: ${{ github.event.pull_request.head.sha }}
+    secrets:
+      AZURE_CREDENTIALS: ${{ secrets.AZURE_CREDENTIALS }}
+
+  deploy:
+    name: Deploy & smoke-test (ic-nonprod)
+    needs: build-images
+    runs-on: ubuntu-latest
+    environment: nonprod
+    env:
+      IMAGE_TAG: ${{ github.event.pull_request.head.sha }}
+      REGISTRY: acrichackjk4zmntatjem4.azurecr.io
+      AKS_RG: ${{ vars.AKS_RG || 'rg-ic-hack' }}
+      AKS_NAME: ${{ vars.AKS_NAME || 'aks-ic-hack' }}
+      OVERLAY: deploy/kubernetes/overlays/nonprod
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Azure login
+        uses: azure/login@v2
+        with:
+          creds: ${{ secrets.AZURE_CREDENTIALS }}
+
+      - name: Get AKS credentials
+        run: |
+          az aks get-credentials \
+            --resource-group "$AKS_RG" --name "$AKS_NAME" \
+            --admin --overwrite-existing
+
+      - name: Pin image tags to the PR head SHA
+        run: |
+          sed -i "s/newTag: latest/newTag: ${IMAGE_TAG}/" "${OVERLAY}/kustomization.yaml"
+          grep 'newTag' "${OVERLAY}/kustomization.yaml"
+
+      - name: Deploy
+        run: kubectl apply -k "${OVERLAY}"
+
+      - name: Functional smoke tests
+        run: ./scripts/smoke-test.sh ic-nonprod
