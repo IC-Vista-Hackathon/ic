@@ -7,7 +7,10 @@
 2. **Gateway reachability** (HTTP) — each service answers through the public gateway. POST-only
    services (`/payments`, `/payers`) are expected to return `405` on a GET (proves the service
    answered; the method just isn't allowed).
-3. **Functional** (HTTP) — the Invoice seed endpoint returns a valid `201` with the expected shape.
+3. **Functional** (HTTP, read-only) — the Invoice lookup endpoint (`GET .../invoices?account_number=`)
+   returns a valid `200` with an `invoices` array. Intentionally a read, not the seed POST, so the
+   suite writes no data and is safe to run on a schedule. The seed/write path is covered by the
+   `IC.Invoice.Api` unit tests.
 
 Exit code is `0` when everything passes, non-zero otherwise — so it drops straight into CI or a cron.
 

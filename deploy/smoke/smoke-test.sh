@@ -5,7 +5,8 @@
 # Three layers:
 #   1. Deployment readiness  (kubectl) — every expected Deployment has all replicas available
 #   2. Gateway reachability  (HTTP)    — each service answers through the public gateway
-#   3. Functional            (HTTP)    — the Invoice seed endpoint returns a valid 201 payload
+#   3. Functional            (HTTP)    — the Invoice lookup endpoint returns a valid 200 payload
+#                                        (read-only — writes nothing, safe to run on a schedule)
 #
 # Exit code 0 = all checks passed, non-zero = at least one failed (CI/cron friendly).
 #
@@ -27,7 +28,10 @@ SKIP_KUBECTL="${SKIP_KUBECTL:-0}"
 GATEWAY_NS="kgateway-system"
 GATEWAY_NAME="ic-gateway"
 
-# Expected Deployments as "namespace/name".
+# Expected core platform Deployments as "namespace/name".
+# NOTE: per-biller payer sites (e.g. biller-city-of-vista in the biller-sites namespace) are
+# provisioned dynamically at publish time and torn down afterwards, so they are intentionally
+# NOT asserted here — doing so would make the suite flaky whenever none is currently published.
 EXPECTED_DEPLOYMENTS=(
   "ic/ic-biller-experience-api"
   "ic/ic-biller-experience-studio"
@@ -35,7 +39,6 @@ EXPECTED_DEPLOYMENTS=(
   "ic/ic-invoice-api"
   "ic/ic-payment-api"
   "ic/ic-payer-account-api"
-  "biller-sites/biller-city-of-vista"
 )
 
 # Gateway reachability as "path expected_http_code". 405 = POST-only endpoint that
@@ -110,33 +113,27 @@ for entry in "${HTTP_CHECKS[@]}"; do
   fi
 done
 
-# ---- Layer 3: Functional (Invoice seed) ----
-section "3. Functional — Invoice seed"
-seed_url="$BASE_URL/invoices/billers/smoke-test/invoices/seed"
-resp="$(curl -s -m "$HTTP_TIMEOUT" -w $'\n%{http_code}' -X POST "$seed_url" \
-  -H 'Content-Type: application/json' -d '{"count":2,"bill_type":"Utility"}' 2>/dev/null)"
+# ---- Layer 3: Functional (Invoice lookup — read-only) ----
+# Intentionally a READ, not the seed POST: a smoke test that may run on a cron must
+# not accumulate data. Looking up a nonexistent account still exercises the full path
+# (controller -> repository query -> serialization) and returns an empty list. The
+# write/seed path is covered by the IC.Invoice.Api unit tests.
+section "3. Functional — Invoice lookup (read-only)"
+lookup_url="$BASE_URL/invoices/billers/smoke-test/invoices?account_number=smoke-none"
+resp="$(curl -s -m "$HTTP_TIMEOUT" -w $'\n%{http_code}' "$lookup_url" 2>/dev/null)"
 code="${resp##*$'\n'}"
 body="${resp%$'\n'*}"
 
-if [[ "$code" != "201" ]]; then
-  fail "POST /invoices/.../seed -> $code (expected 201)"
+if [[ "$code" != "200" ]]; then
+  fail "GET /invoices/.../invoices?account_number= -> $code (expected 200)"
 else
-  pass "POST /invoices/.../seed -> 201"
-  seeded="$(printf '%s' "$body" | jq -r '.seeded // empty' 2>/dev/null)"
-  status="$(printf '%s' "$body" | jq -r '.invoices[0].status // empty' 2>/dev/null)"
-  amount="$(printf '%s' "$body" | jq -r '.invoices[0].amount_cents // empty' 2>/dev/null)"
-
-  [[ "$seeded" =~ ^[0-9]+$ && "$seeded" -ge 1 ]] \
-    && pass "response: seeded=$seeded (>=1)" \
-    || fail "response: seeded='$seeded' (expected integer >=1)"
-
-  [[ "$status" == "due" ]] \
-    && pass "response: invoices[0].status=due" \
-    || fail "response: invoices[0].status='$status' (expected due)"
-
-  [[ "$amount" =~ ^[0-9]+$ && "$amount" -gt 0 ]] \
-    && pass "response: invoices[0].amount_cents=$amount (integer cents)" \
-    || fail "response: invoices[0].amount_cents='$amount' (expected integer >0)"
+  pass "GET /invoices/.../invoices?account_number= -> 200"
+  if printf '%s' "$body" | jq -e '.invoices | type == "array"' >/dev/null 2>&1; then
+    count="$(printf '%s' "$body" | jq -r '.invoices | length')"
+    pass "response: .invoices is a JSON array (length $count)"
+  else
+    fail "response: .invoices missing or not an array"
+  fi
 fi
 
 # ---- Summary ----
