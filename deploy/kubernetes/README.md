@@ -18,6 +18,18 @@ The Biller Experience template is rendered at deploy time. Replace `ACR_LOGIN_SE
 `APPLICATIONINSIGHTS_CONNECTION_STRING` from the `ic-hack` subscription deployment outputs before
 passing it to `kubectl apply`. A single immutable image tag identifies the release.
 
+**Pivot in progress:** the template's `biller-city-of-vista` Deployment/Service/HTTPRoute is a
+stand-in for what will become one shared **Payer Site Router** workload instead of one Deployment
+per biller — published payer sites only serve static content, so per-biller compute is wasted
+spend. The target: `IC.BillerExperience.Worker` uploads each biller's built static PWA bundle into
+the `payer-experiences` blob container (`infra/bicep/modules/storage.bicep`, already provisioned),
+keyed by biller_id/slug prefix, and the router resolves the biller per request and serves the
+matching prefix behind a single `HTTPRoute`. `biller-publisher-role.yaml`'s Deployment/Service/HTTPRoute
+RBAC then only applies to the isolated (paid) tier, which still gets dedicated per-biller compute.
+Not yet built: the router
+workload itself and the Worker's blob-publish logic — see root `README.md`'s "AKS publication
+model".
+
 Workloads that need Cosmos/AI Foundry access should run under the `ic-workload` service account
 (`serviceAccountName: ic-workload` in the pod spec) to pick up the federated identity — no
 connection strings or API keys.

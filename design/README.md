@@ -51,6 +51,9 @@ Biller opens onboarding webapp
 - **Fake rails, real flows.** Payments are mocked, but every flow (preview, purchase, go-live,
   pay) is the genuine end-to-end path.
 - **Isolation is a tier.** Shared infrastructure by default; dedicated deployment as a paid upgrade.
+  Shared tier means a static per-biller bundle served from Blob Storage by one shared router
+  workload, not a dedicated Deployment per biller — see `services.md`'s Payer Site Router and
+  `README.md`'s "AKS publication model" for the current pivot in progress.
 
 ## Stretch
 

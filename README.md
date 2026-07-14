@@ -13,7 +13,14 @@ The disruption is onboarding speed and customization, not money movement.
 Phases 2 through 4 now provide a runnable local vertical slice: versioned controller contracts,
 agent-assisted onboarding with a deterministic fallback, Cosmos and in-memory repositories,
 approval and idempotent publication requests, the Biller Studio, and a configuration-driven payer
-PWA. Phase 5 will turn an accepted publication request into a healthy AKS deployment.
+PWA (currently backed by a local demo payment provider, not the real supporting services). Phase 5
+turns an accepted publication request into a live, reachable payer site — but the target
+architecture for that has changed: instead of provisioning a dedicated Kubernetes Deployment per
+biller, the Worker publishes a biller's built static PWA bundle to Blob Storage and a single shared
+router workload serves the correct bundle per request. `IC.BillerExperience.Worker` is currently
+just a no-op scaffold; the Storage Account it needs to publish to (`payer-experiences` blob
+container, `infra/bicep/modules/storage.bicep`) already exists. The router workload and the
+Worker's actual publish logic are the next things to build. See "AKS publication model" below.
 
 The documents under [`design/`](design/README.md) came from the original `main` branch and remain
 the source of truth for supporting service responsibilities, entities, REST behavior, and agent
@@ -56,21 +63,21 @@ IC.BillerExperience.Api
   └── durable publication request
           ▼
 IC.BillerExperience.Worker
-  │ fixed, validated Kubernetes operations
+  │ builds/uploads a biller's static PWA bundle
   ▼
-AKS / biller-sites namespace
-  │
-  ├── Deployment/biller-{slug}
-  ├── ConfigMap/biller-{slug}-r{revision}
-  ├── Service/biller-{slug}
-  └── HTTPRoute/biller-{slug}
+Blob Storage — container/prefix per biller_id
           │
           ▼
+Payer Site Router (single shared workload)
+  │ resolves biller from the request, serves the matching blob prefix
+  ▼
 Branded installable PWA
           │
           ▼
 Existing InvoiceCloud payment APIs and rails
 ```
+
+(Isolated-tier billers remain the exception — see "AKS publication model" below.)
 
 The generated artifact is a typed, versioned `BillerExperienceDefinition`. Agents may generate
 content and configuration, but they may not generate executable application code, container build
@@ -198,7 +205,7 @@ the existing entity-container model and adds a separate container only for orche
 | --- | --- | --- |
 | `billers` | `/id` | tenant-root `BillerAccount` documents |
 | `configs` | `/biller_id` | versioned biller experience configuration |
-| `deployments` | `/biller_id` | published deployment records |
+| `deployments` | `/biller_id` | published deployment records (target: includes the blob container/prefix a revision was published to, for shared-tier billers) |
 | `orchestration_runs` | `/biller_id` | sessions, checkpoints, sanitized interactions, publish jobs |
 
 Invoice, payment, purchase, payer-account, and notification containers remain owned by their
@@ -236,30 +243,39 @@ Two deliberately small frontends are planned:
 - integration only with existing InvoiceCloud payment APIs
 - no InvoiceCloud customer-facing branding
 
-Every published biller initially receives its own Kubernetes Deployment while sharing the same
-vetted image. A revision-specific ConfigMap or API-delivered definition supplies branding and
-content. A configuration hash on the pod template triggers safe rollouts.
+Every published biller (shared tier) gets a static PWA bundle rendered from its approved
+configuration and uploaded to Blob Storage under a `biller_id`-keyed container/prefix — not its
+own Kubernetes Deployment. A single shared router workload serves that bundle per request. Isolated
+tier billers (a paid upgrade) are the exception and still get dedicated compute.
 
 ## AKS publication model
 
-All biller workloads initially live in a restricted `biller-sites` namespace. The publishing
-worker receives a dedicated Kubernetes service account that can manage only the required resource
-types in that namespace. It must never receive cluster-admin access.
+**Target architecture (pivoting to now; router + Worker publish logic not yet built).** Because
+published payer sites only ever serve static content — no per-biller server-side logic — one
+shared router replaces what would otherwise be a Kubernetes Deployment/Service/HTTPRoute per
+biller:
 
-Publication requires:
+- `IC.BillerExperience.Worker` builds a biller's static PWA bundle from its approved configuration
+  and uploads it into the shared `payer-experiences` blob container (`infra/bicep/modules/storage.bicep`,
+  already provisioned), keyed by biller_id/slug prefix.
+- A single **Payer Site Router** workload (not yet built) resolves the target biller from the
+  incoming request (host/path) and serves the matching blob prefix. It runs under the same
+  `ic-workload` identity already used for Cosmos/AI Foundry, which has `Storage Blob Data
+  Contributor` on the storage account — one grant covers both the Worker's writes and the
+  router's reads, no separate identity per role.
+- One `HTTPRoute` in front of the router covers all billers; no per-biller Gateway API resources.
+- Publication still requires: idempotency on `billerId + revision`, validated DNS-safe/URL-safe
+  biller slugs, immutable published revisions with rollback (previous blob prefix retained),
+  status persistence, and a smoke test against the router before marking a revision active.
+- Isolated-tier billers (paid upgrade) are the exception: they still get a dedicated
+  Deployment/Service/HTTPRoute in `biller-sites`, following the RBAC/probes/resource-limit
+  requirements this section previously specified for every biller.
 
-- validated DNS-safe resource names derived from a stable biller slug
-- server-side apply using fixed resource templates
-- immutable image digests rather than `latest`
-- startup, readiness, and liveness probes
-- resource requests and limits
-- default-deny network policy and restricted pod security
-- rollout timeout, smoke test, and failure recording
-- idempotency on `billerId + revision`
-- retention of the preceding revision for rollback
-
-The first release uses one replica per published biller. We will measure pod count, utilization,
-and operational cost before choosing scale-to-zero or a shared multi-tenant data plane.
+**As implemented today** (superseded by the above, kept here until the pivot lands):
+`deploy/kubernetes/biller-experience.template.yaml` hardcodes one Deployment/Service/HTTPRoute per
+biller (see `biller-city-of-vista`) under a restricted `biller-sites` namespace, published via the
+`biller-publisher` service account. `IC.BillerExperience.Worker` doesn't actually drive this yet —
+`PublicationWorker.cs` is a no-op scaffold.
 
 ## Azure observability
 
@@ -326,17 +342,24 @@ readiness/restarts, Cosmos throttling, PWA availability, and payment-page reques
 - [x] Add a typed payment provider boundary with a local demo provider until the documented
   supporting payment and invoice services are available.
 
-### Phase 5 — AKS publication
+### Phase 5 — Payer site publication (pivoted to shared router + Blob Storage)
 
-- Implement fixed Kubernetes resource generation and server-side apply.
-- Add readiness waiting, route smoke test, status persistence, rollback, and reconciliation.
-- Add namespace RBAC, workload identity, network policy, and pod security.
+- [x] Add a Storage Account to `infra/bicep` (`payer-experiences` blob container, workload-identity
+  RBAC via the shared `ic-workload` identity's Blob Data Contributor grant).
+- [ ] Implement Worker publish logic: build a biller's static PWA bundle from its approved
+  configuration, upload to a `biller_id`-keyed blob container/prefix, retain the previous revision
+  for rollback, and persist publish status.
+- [ ] Build the shared Payer Site Router workload: resolve biller from the request, serve the
+  matching blob prefix, single `HTTPRoute` for all shared-tier billers.
+- [ ] Add rollout smoke test against the router and reconciliation.
+- [ ] Isolated tier (paid upgrade): keep the original per-biller Deployment/Service/HTTPRoute path
+  (namespace RBAC, network policy, pod security) for billers who pay for dedicated compute.
 
 ### Phase 6 — Azure platform and hardening
 
-- Provision AKS, ACR, Cosmos DB, Key Vault, Azure Monitor, Application Insights, managed
-  Prometheus, and Managed Grafana with Bicep.
-- Add dashboards, alerts, runbooks, audit retention, load tests, and failure exercises.
+- [x] Provision AKS, ACR, Cosmos DB, Storage Account, Application Insights, managed Prometheus, and
+  Managed Grafana with Bicep. Key Vault not yet started.
+- [ ] Add dashboards, alerts, runbooks, audit retention, load tests, and failure exercises.
 
 ## Definition of the first vertical slice
 
