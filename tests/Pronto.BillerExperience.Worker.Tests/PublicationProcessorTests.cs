@@ -141,6 +141,9 @@ public sealed class PublicationProcessorTests
         Assert.False(repository.WorkflowPublished);
     }
 
+    private static PublicationProcessor Processor(FakeRepository repository, FakePublisher publisher) =>
+        Processor(repository, publisher, new NoOpBundleBuilder());
+
     private static PublicationProcessor Processor(
         FakeRepository repository,
         FakePublisher publisher,
