@@ -46,6 +46,22 @@ public sealed class OrchestrationRunnerTests
     }
 
     [Fact]
+    public async Task ObservableStepCanPublishAResultSpecificCompletionState()
+    {
+        var sink = new CollectingSink();
+        var step = new ObservableOrchestrationStep<string, string>(
+            "research", "Research", "Searching",
+            static (input, _, _) => ValueTask.FromResult(input),
+            sink,
+            completion: _ => (OrchestrationEventStatus.Skipped, "No eligible provider.", "research.not_configured"));
+
+        await step.ExecuteAsync("request", OrchestrationContext.Create());
+
+        var skipped = Assert.Single(sink.Events, item => item.Status == OrchestrationEventStatus.Skipped);
+        Assert.Equal("research.not_configured", skipped.ErrorCode);
+    }
+
+    [Fact]
     public async Task ObservableStepPublishesSafeFailureDetails()
     {
         var sink = new CollectingSink();

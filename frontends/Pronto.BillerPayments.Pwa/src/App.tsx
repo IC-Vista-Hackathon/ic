@@ -110,7 +110,7 @@ export function App() {
           setPayer(profile);
           if (profile) setPayments(await provider.getPayments(profile.payer_id));
         } catch (caught) {
-          logError('pwa.account.refresh_failed', caught);
+          logError('pwa.payment.history_refresh_failed', caught, { method });
         }
       }
     } catch (caught) {
