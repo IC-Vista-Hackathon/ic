@@ -55,6 +55,62 @@ public sealed class FakeInvoiceFactoryTests
     }
 
     [Fact]
+    public void CreateSeedsCuratedInsuranceSetIgnoringCount()
+    {
+        var invoices = FakeInvoiceFactory.Create("b_1", "ACCT-1", count: 12, billType: "insurance", Today);
+
+        Assert.Equal(3, invoices.Count);
+        Assert.Collection(invoices,
+            auto =>
+            {
+                Assert.Equal("Auto", auto.Type);
+                Assert.Equal(new DateOnly(2026, 7, 14), auto.DueDate);
+                Assert.Equal("yellow", auto.StatusColor);
+                Assert.False(string.IsNullOrWhiteSpace(auto.Note));
+            },
+            home =>
+            {
+                Assert.Equal("Home", home.Type);
+                Assert.Equal(new DateOnly(2026, 8, 30), home.DueDate);
+                Assert.Equal("green", home.StatusColor);
+            },
+            life =>
+            {
+                Assert.Equal("Life", life.Type);
+                Assert.Equal(new DateOnly(2026, 12, 31), life.DueDate);
+                Assert.Equal("green", life.StatusColor);
+            });
+    }
+
+    [Fact]
+    public void CreateSeedsCuratedHoaSetForOtherBillType()
+    {
+        var invoices = FakeInvoiceFactory.Create("b_1", "ACCT-1", count: null, billType: "other", Today);
+
+        Assert.Equal(3, invoices.Count);
+        Assert.Equal("HOA Dues", invoices[0].Type);
+        Assert.Equal("Special Assessment (Pool)", invoices[1].Type);
+        Assert.True(invoices[1].NoteEmphasis);
+        Assert.True(invoices[1].AmountCents > invoices[0].AmountCents);
+        Assert.Equal("HOA Fine", invoices[2].Type);
+        Assert.Contains("All I Want for Christmas", invoices[2].Description, StringComparison.Ordinal);
+        Assert.All(invoices, i => Assert.Equal(InvoiceStatus.Due, i.Status));
+    }
+
+    [Fact]
+    public void CreateLeavesDemoHintsUnsetForGenericBillTypes()
+    {
+        var invoices = FakeInvoiceFactory.Create("b_1", "ACCT-1", count: 2, billType: "Utility", Today);
+
+        Assert.All(invoices, i =>
+        {
+            Assert.Null(i.Type);
+            Assert.Null(i.StatusColor);
+            Assert.Null(i.Note);
+        });
+    }
+
+    [Fact]
     public void CreateStampsBillerAccountAndDueStatusOnEveryInvoice()
     {
         var invoices = FakeInvoiceFactory.Create("b_42", "ACCT-9", count: 5, billType: null, Today);

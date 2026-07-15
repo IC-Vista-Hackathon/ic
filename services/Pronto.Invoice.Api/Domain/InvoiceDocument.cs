@@ -30,6 +30,18 @@ public sealed class InvoiceDocument
 
     public required InvoiceStatus Status { get; init; }
 
+    /// <summary>Demo presentation hint — invoice type label (e.g. "Auto", "HOA Dues"); null shows none.</summary>
+    public string? Type { get; init; }
+
+    /// <summary>Demo presentation hint — status color badge: "green" | "yellow"; null shows none.</summary>
+    public string? StatusColor { get; init; }
+
+    /// <summary>Demo presentation hint — free-text note shown under the bill; null shows none.</summary>
+    public string? Note { get; init; }
+
+    /// <summary>Demo presentation hint — render <see cref="Note"/> emphasized (bold).</summary>
+    public bool NoteEmphasis { get; init; }
+
     /// <summary>Id of the payment that produced the current status; null while due.</summary>
     public string? LastPaymentId { get; init; }
 }

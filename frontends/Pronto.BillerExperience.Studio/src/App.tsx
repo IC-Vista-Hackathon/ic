@@ -122,7 +122,7 @@ interface Brand extends Palette { initials: string; colorsFromLogo?: boolean; }
 interface Category { label: string; text: string; }
 interface Compliance { states: string[]; byState: Record<string, Category[]>; }
 interface Breakdown { key: string; amount: number; }
-interface Statement { id: string; period: string; date: string; due: string; status: string; amount: number; breakdown: Breakdown[]; }
+interface Statement { id: string; period: string; date: string; due: string; status: string; amount: number; breakdown: Breakdown[]; type?: string; statusColor?: 'green' | 'yellow'; note?: string; noteEmphasis?: boolean; }
 interface ScenarioResult { title: string; intent: string; lines: string[]; }
 interface ImportedField { label: string; value: string; }
 
@@ -302,6 +302,32 @@ const STATEMENTS: Statement[] = [
   { id: '240183', period: 'Jun 4 - Jul 3', date: 'Posted Jul 1', due: 'Due Aug 4', status: 'Due', amount: 128.42, breakdown: [{ key: 'base', amount: 98.0 }, { key: 'usage', amount: 22.42 }, { key: 'surcharge', amount: 8.0 }] },
   { id: '239022', period: 'May 4 - Jun 3', date: 'Posted Jun 1', due: 'Paid Jun 3', status: 'Paid', amount: 112.15, breakdown: [{ key: 'base', amount: 96.0 }, { key: 'usage', amount: 16.15 }] },
 ];
+
+// Curated demo statement sets keyed off the biller vertical, mirroring the Invoice API's
+// FakeInvoiceFactory seed. These make the payer preview show the real demo invoices (type +
+// green/yellow status + notes) instead of the generic placeholder set. Verticals without an
+// entry fall back to STATEMENTS.
+const VERTICAL_STATEMENTS: Partial<Record<VerticalId, Statement[]>> = {
+  insurance: [
+    { id: '778120', type: 'Auto', period: 'Jul 14, 2026 - Jul 14, 2027', date: 'Due Jul 14, 2026', due: 'Coverage Period', status: 'Due', amount: 142.5, statusColor: 'yellow',
+      note: 'Overdue but in the grace period — pay today to keep your policy active with no penalty.', noteEmphasis: true,
+      breakdown: [{ key: 'base', amount: 130.0 }, { key: 'surcharge', amount: 12.5 }] },
+    { id: '640318', type: 'Home', period: 'Aug 30, 2026 - Aug 30, 2027', date: 'Due Aug 30, 2026', due: 'Coverage Period', status: 'Due', amount: 89.0, statusColor: 'green',
+      breakdown: [{ key: 'base', amount: 82.0 }, { key: 'surcharge', amount: 7.0 }] },
+    { id: '905513', type: 'Life', period: 'Dec 31, 2026 - Dec 31, 2027', date: 'Due Dec 31, 2026', due: 'Coverage Period', status: 'Due', amount: 45.0, statusColor: 'green',
+      breakdown: [{ key: 'base', amount: 45.0 }] },
+  ],
+  other: [
+    { id: '100234', type: 'HOA Dues', period: 'Q3 2026', date: 'Due Jul 31, 2026', due: 'Billing Period', status: 'Due', amount: 350.0, statusColor: 'green',
+      breakdown: [{ key: 'base', amount: 350.0 }] },
+    { id: '100235', type: 'Special Assessment (Pool)', period: 'One-time assessment', date: 'Due Dec 31, 2026', due: 'Billing Period', status: 'Due', amount: 4500.0, statusColor: 'green',
+      note: 'This assessment is much larger than your other bills — a payment plan is recommended.', noteEmphasis: true,
+      breakdown: [{ key: 'base', amount: 4500.0 }] },
+    { id: '100236', type: 'HOA Fine', period: 'One-time fine', date: 'Due Jul 31, 2026', due: 'Billing Period', status: 'Due', amount: 100.0, statusColor: 'green',
+      note: '$100 fine for playing "All I Want for Christmas is You" during summer.',
+      breakdown: [{ key: 'base', amount: 100.0 }] },
+  ],
+};
 
 const CHAT_QUESTIONS = [
   'What are you billing people for? (the line items / categories)',
@@ -1387,7 +1413,11 @@ export function App() {
   const isFlorida = (compliance.states || []).includes('Florida');
   const complianceByState = (compliance.states || []).map((name) => ({ state: name, categories: (compliance.byState || {})[name] || [], expanded: s.expandedCompliance.includes(name), onToggle: () => toggleComplianceState(name) }));
 
-  const amount = s.amount;
+  const curatedStatements = VERTICAL_STATEMENTS[s.vertical ?? 'insurance'];
+  const statementSource = curatedStatements ?? STATEMENTS;
+  const primaryStatement = statementSource.find((st) => st.status === 'Due');
+  const amount = curatedStatements ? (primaryStatement?.amount ?? s.amount) : s.amount;
+  const heroDueText = curatedStatements ? (primaryStatement?.date ?? 'Due Aug 4') : 'Due Aug 4';
   // Payer sees a service fee only when the biller charges one; 'absorb'/'mixed'/'unsure' show none.
   const serviceFeeApplies = s.feeHandling === 'charge';
   const serviceFee = serviceFeeApplies ? SERVICE_FEE : 0;
@@ -1414,13 +1444,13 @@ export function App() {
   const shownMethodTypeIds = new Set(methodTypesBase.map((mt) => mt.id));
   const acceptedMethodChips = [{ id: 'applepay', label: 'Apple Pay' }, { id: 'googlepay', label: 'Google Pay' }, { id: 'paypal', label: 'PayPal' }, { id: 'other', label: 'Other' }].filter((c) => s.acceptedMethods.includes(c.id) && !shownMethodTypeIds.has(c.id as MethodType));
 
-  const statements = STATEMENTS.map((st) => ({ ...st, label: `${docLabels.numberLabel} ${docLabels.numberPrefix}${st.id}`, onClick: () => viewStatement(st.id), badgeBg: st.status === 'Due' ? 'var(--invoicecloud-intent-warning-background)' : 'var(--invoicecloud-intent-success-background)', badgeColor: st.status === 'Due' ? 'var(--invoicecloud-intent-warning)' : 'var(--invoicecloud-intent-success)' }));
+  const statements = statementSource.map((st) => ({ ...st, label: `${docLabels.numberLabel} ${docLabels.numberPrefix}${st.id}`, onClick: () => viewStatement(st.id), badgeBg: st.status === 'Due' ? 'var(--invoicecloud-intent-warning-background)' : 'var(--invoicecloud-intent-success-background)', badgeColor: st.status === 'Due' ? 'var(--invoicecloud-intent-warning)' : 'var(--invoicecloud-intent-success)' }));
   const currentStatements = statements.filter((st) => st.status === 'Due');
   const pastStatements = statements.filter((st) => st.status !== 'Due');
   const shownStatements = s.statementTab === 'current' ? currentStatements : pastStatements;
   const statementTabs = [{ id: 'current' as const, label: 'Current', count: currentStatements.length }, { id: 'past' as const, label: 'Past', count: pastStatements.length }].map((t) => ({ ...t, selected: s.statementTab === t.id, onSelect: () => setStatementTab(t.id) }));
   const viewingStatement = (() => {
-    const st = STATEMENTS.find((x) => x.id === s.viewingStatementId);
+    const st = statementSource.find((x) => x.id === s.viewingStatementId);
     if (!st) return null;
     const lineMap = lineLabels as unknown as Record<string, string>;
     return { ...st, docLabel: docLabels.docLabel, numberLabel: docLabels.numberLabel, personLabel: docLabels.personLabel, periodLabel: docLabels.periodLabel, totalLabel: docLabels.totalLabel, issuerLabel: docLabels.issuerLabel, numberDisplay: `${docLabels.numberPrefix}${st.id}`, amountFormatted: st.amount.toFixed(2), breakdown: st.breakdown.map((b) => ({ label: labelOf(lineMap, b.key), amountFormatted: b.amount.toFixed(2) })), isDue: st.status === 'Due' };
@@ -2438,7 +2468,7 @@ export function App() {
                   {s.previewScenario === 'payment' && (
                     <>
                       <div style={css(`border-radius:14px;padding:var(--invoicecloud-spacing-l);color:#fff;margin-bottom:var(--invoicecloud-spacing-l);background:${brand.primary}`)}>
-                        <div style={css('font-size:13px;opacity:.85;margin-bottom:4px')}>Amount due - Due Aug 4</div>
+                        <div style={css('font-size:13px;opacity:.85;margin-bottom:4px')}>{`Amount due · ${heroDueText}`}</div>
                         <div style={css('font-size:36px;font-weight:700;font-family:var(--invoicecloud-font-family-mono);margin-bottom:var(--invoicecloud-spacing-s)')}>${amount.toFixed(2)}</div>
                         <button type="button" onClick={payerGoPay} style={css(`background:#fff;border:none;border-radius:10px;padding:12px 28px;font-size:15px;font-weight:700;cursor:pointer;color:${brand.primary}`)}>{primaryActionLabel}</button>
                       </div>
@@ -2452,15 +2482,20 @@ export function App() {
                       </div>
                       {shownStatements.length === 0 && <div style={css('font-size:13px;color:var(--invoicecloud-utility-neutral-60);padding:var(--invoicecloud-spacing-s) 0')}>No {s.statementTab} statements.</div>}
                       {shownStatements.map((st) => (
-                        <div key={st.id} style={css('display:flex;justify-content:space-between;align-items:center;padding:var(--invoicecloud-spacing-s) 0;border-bottom:1px solid var(--invoicecloud-surface-default-border)')}>
-                          <div>
-                            <button type="button" onClick={st.onClick} style={css(`background:none;border:none;padding:0;cursor:pointer;text-align:left;font-weight:500;font-size:14px;text-decoration:underline;color:${brand.primary}`)}>{st.label}</button>
-                            <div style={css('font-size:12px;color:var(--invoicecloud-utility-neutral-60)')}>{st.date}</div>
+                        <div key={st.id} style={css('padding:var(--invoicecloud-spacing-s) 0;border-bottom:1px solid var(--invoicecloud-surface-default-border)')}>
+                          <div style={css('display:flex;justify-content:space-between;align-items:center')}>
+                            <div>
+                              {st.type && <span style={css(`display:inline-block;font-size:11px;font-weight:700;letter-spacing:.03em;text-transform:uppercase;padding:2px 8px;border-radius:999px;margin-bottom:4px;background:${brand.accent};color:${brand.primary}`)}>{st.type}</span>}
+                              <button type="button" onClick={st.onClick} style={css(`display:block;background:none;border:none;padding:0;cursor:pointer;text-align:left;font-weight:500;font-size:14px;text-decoration:underline;color:${brand.primary}`)}>{st.label}</button>
+                              <div style={css('font-size:12px;color:var(--invoicecloud-utility-neutral-60)')}>{st.date}</div>
+                            </div>
+                            <div style={css('display:flex;align-items:center;gap:var(--invoicecloud-spacing-s)')}>
+                              {st.statusColor && <span aria-hidden="true" style={css(`width:10px;height:10px;border-radius:50%;background:${st.statusColor === 'yellow' ? '#f5c542' : '#3ecf8e'}`)}></span>}
+                              <span style={css(`font-size:12px;font-weight:700;padding:4px 10px;border-radius:4px;background:${st.badgeBg};color:${st.badgeColor}`)}>{st.status}</span>
+                              <button type="button" onClick={st.onClick} aria-label="View invoice" style={css('background:none;border:none;cursor:pointer;padding:0;display:flex')}><img src={asset('assets/icons/ChevronRight.svg')} alt="" style={css('width:14px;height:14px')} /></button>
+                            </div>
                           </div>
-                          <div style={css('display:flex;align-items:center;gap:var(--invoicecloud-spacing-s)')}>
-                            <span style={css(`font-size:12px;font-weight:700;padding:4px 10px;border-radius:4px;background:${st.badgeBg};color:${st.badgeColor}`)}>{st.status}</span>
-                            <button type="button" onClick={st.onClick} aria-label="View invoice" style={css('background:none;border:none;cursor:pointer;padding:0;display:flex')}><img src={asset('assets/icons/ChevronRight.svg')} alt="" style={css('width:14px;height:14px')} /></button>
-                          </div>
+                          {st.note && <div style={css(`margin-top:6px;font-size:12px;line-height:1.4;color:var(--invoicecloud-utility-neutral-70);${st.noteEmphasis ? 'font-weight:700;color:var(--invoicecloud-utility-neutral-90)' : ''}`)}>{st.note}</div>}
                         </div>
                       ))}
 
@@ -2577,7 +2612,7 @@ export function App() {
                     <div style={css('border-radius:14px;overflow:hidden;margin-top:-8px')}>
                       <div style={css(`padding:var(--invoicecloud-spacing-l);background:${brand.primary};color:#fff;display:flex;justify-content:space-between;align-items:flex-start`)}>
                         <div>
-                          <div style={css('font-size:12px;text-transform:uppercase;letter-spacing:.06em;opacity:.8;margin-bottom:4px')}>{viewingStatement.docLabel}</div>
+                          <div style={css('font-size:12px;text-transform:uppercase;letter-spacing:.06em;opacity:.8;margin-bottom:4px')}>{viewingStatement.type ? `${viewingStatement.docLabel} · ${viewingStatement.type}` : viewingStatement.docLabel}</div>
                           <div style={css('font-size:22px;font-weight:700')}>{viewingStatement.numberDisplay}</div>
                         </div>
                         <span style={css(`font-size:12px;font-weight:700;padding:6px 12px;border-radius:4px;background:rgba(255,255,255,.9);color:${brand.primary}`)}>{viewingStatement.status}</span>
@@ -2589,6 +2624,7 @@ export function App() {
                           <div><div style={css('font-size:12px;color:var(--invoicecloud-utility-neutral-60);margin-bottom:2px')}>{viewingStatement.periodLabel}</div><div style={css('font-weight:500;font-family:var(--invoicecloud-font-family-mono)')}>{viewingStatement.period}</div></div>
                           <div><div style={css('font-size:12px;color:var(--invoicecloud-utility-neutral-60);margin-bottom:2px')}>{viewingStatement.due}</div><div style={css('font-weight:500')}>{viewingStatement.date}</div></div>
                         </div>
+                        {viewingStatement.note && <div style={css(`border-radius:10px;padding:var(--invoicecloud-spacing-m);margin-bottom:var(--invoicecloud-spacing-m);font-size:13px;line-height:1.45;background:${viewingStatement.statusColor === 'yellow' ? 'var(--invoicecloud-intent-warning-background)' : 'var(--invoicecloud-slate-10)'};${viewingStatement.noteEmphasis ? 'font-weight:700' : ''}`)}>{viewingStatement.note}</div>}
                         <div style={css('border:1px solid var(--invoicecloud-surface-default-border);border-radius:10px;padding:var(--invoicecloud-spacing-m);margin-bottom:var(--invoicecloud-spacing-m)')}>
                           {viewingStatement.breakdown.map((line, i) => (
                             <div key={i} style={css('display:flex;justify-content:space-between;font-size:14px;padding:8px 0;border-bottom:1px solid var(--invoicecloud-surface-default-border)')}>

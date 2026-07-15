@@ -151,7 +151,23 @@ export function App() {
   </div>;
 }
 
-function Bill({ invoice }: { invoice: Invoice }) { return <div className="bill"><div><span>{invoice.description}</span><small>Due {new Date(invoice.dueDate).toLocaleDateString()}</small></div><strong>{money(invoice.amountCents)}</strong></div>; }
+function Bill({ invoice }: { invoice: Invoice }) {
+  return <div className="bill">
+    <div className="bill-main">
+      <div className="bill-desc">
+        {invoice.type && <span className="bill-type" data-testid="bill-type">{invoice.type}</span>}
+        <span>{invoice.description}</span>
+        <small>Due {new Date(invoice.dueDate).toLocaleDateString()}</small>
+      </div>
+      <div className="bill-right">
+        {invoice.statusColor && <span className={`status-dot status-${invoice.statusColor}`} data-testid="status-dot" title={statusLabel(invoice.statusColor)} aria-label={statusLabel(invoice.statusColor)} />}
+        <strong>{money(invoice.amountCents)}</strong>
+      </div>
+    </div>
+    {invoice.note && <p className={`bill-note${invoice.noteEmphasis ? ' bill-note-strong' : ''}`} data-testid="bill-note">{invoice.note}</p>}
+  </div>;
+}
+function statusLabel(color: string) { return color === 'yellow' ? 'Overdue — in grace period' : color === 'green' ? 'Not yet due' : color === 'red' ? 'Past due' : color; }
 function experiencePreferences(config?: ExperienceDefinition): ExperiencePreferences { return config?.preferences ?? { guest_checkout_allowed: true, offer_autopay: true, enroll_during_payment: true, offer_paperless: true, reminder_channel: 'both', accepted_methods: config?.enabled_payment_capabilities ?? ['card', 'ach'], self_service_history: true, self_service_updates: true, fee_handling: 'mixed', preview: { default_device: 'desktop', enabled_scenarios: ['payment', 'history', 'communication', 'complex'] } }; }
 function quoteFeeText(quote: PaymentQuote | undefined, amountCents: number) {
   if (!quote) return '…';
