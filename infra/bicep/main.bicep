@@ -10,11 +10,16 @@ param workloadNamespace string = 'ic'
 param nonprodWorkloadNamespace string = 'ic-nonprod'
 param workloadServiceAccountName string = 'ic-workload'
 param publisherServiceAccountName string = 'biller-publisher'
+@description('Service-principal object IDs allowed to deploy Kubernetes workloads through Azure RBAC. These receive AKS Cluster User + AKS RBAC Writer, never cluster-admin.')
+param aksDeploymentPrincipalIds array = []
 param aksNodeCountMin int = 2
 param aksNodeCountMax int = 4
 param aksVmSize string = 'Standard_D2s_v3'
+@allowed([
+  false
+])
 param mcpConnectionEnabled bool = false
-param mcpServerUrl string = 'http://pronto.eastus2.cloudapp.azure.com/api/mcp'
+param mcpServerUrl string = ''
 @secure()
 param mcpApiKey string = ''
 
@@ -74,6 +79,21 @@ module publisherIdentity 'modules/workloadIdentity.bicep' = {
   }
 }
 
+// Dedicated identity for the nonprod (per-PR) environment. Kept separate from the prod
+// workload identity so a nonprod pod's token can NEVER reach prod Cosmos: this identity is
+// federated only to system:serviceaccount:ic-nonprod:ic-workload and granted data access only
+// on the nonprod Cosmos account. Separate identities also mean each has a single federated
+// credential, avoiding the ConcurrentFederatedIdentityCredentialsWritesForSingleManagedIdentity
+// error that forced serialized writes when both federations lived on one identity.
+module nonprodWorkloadIdentity 'modules/workloadIdentity.bicep' = {
+  name: 'nonprodWorkloadIdentity'
+  scope: rg
+  params: {
+    name: 'uami-${prefix}-nonprod-workload'
+    location: location
+  }
+}
+
 module storage 'modules/storage.bicep' = {
   name: 'storage'
   scope: rg
@@ -102,8 +122,9 @@ module cosmos 'modules/cosmos.bicep' = {
 }
 
 // Separate Cosmos account for the nonprod (per-PR) environment so smoke tests exercise real
-// Cosmos persistence without touching prod data. Same schema; only the workload API reader
-// identity needs data access here (the publisher/worker runs in prod only).
+// Cosmos persistence without touching prod data. Data access is granted ONLY to the dedicated
+// nonprod identity (not the shared prod workload identity), so this is the data-plane isolation
+// boundary: nonprod pods reach nonprod Cosmos, and only nonprod Cosmos.
 module cosmosNonprod 'modules/cosmos.bicep' = {
   name: 'cosmosNonprod'
   scope: rg
@@ -111,7 +132,7 @@ module cosmosNonprod 'modules/cosmos.bicep' = {
     name: 'cosmos-${prefix}-nonprod-${suffix}'
     location: location
     dataContributorPrincipalIds: [
-      workloadIdentity.outputs.principalId
+      nonprodWorkloadIdentity.outputs.principalId
     ]
   }
 }
@@ -164,12 +185,14 @@ module aks 'modules/aks.bicep' = {
     nodeCountMax: aksNodeCountMax
     vmSize: aksVmSize
     uamiName: workloadIdentity.outputs.name
+    nonprodUamiName: nonprodWorkloadIdentity.outputs.name
     workloadNamespace: workloadNamespace
     nonprodWorkloadNamespace: nonprodWorkloadNamespace
     workloadServiceAccountName: workloadServiceAccountName
     publisherUamiName: publisherIdentity.outputs.name
     publisherNamespace: workloadNamespace
     publisherServiceAccountName: publisherServiceAccountName
+    deploymentPrincipalIds: aksDeploymentPrincipalIds
     monitorWorkspaceId: monitorWorkspace.outputs.id
     monitorWorkspaceLocation: location
   }
@@ -204,6 +227,7 @@ output payerExperienceBlobEndpoint string = storage.outputs.blobEndpoint
 output payerExperienceContainer string = storage.outputs.containerName
 output aksClusterName string = aks.outputs.name
 output workloadIdentityClientId string = workloadIdentity.outputs.clientId
+output nonprodWorkloadIdentityClientId string = nonprodWorkloadIdentity.outputs.clientId
 output publisherIdentityClientId string = publisherIdentity.outputs.clientId
 output appInsightsConnectionString string = appInsights.outputs.connectionString
 output monitorWorkspaceId string = monitorWorkspace.outputs.id

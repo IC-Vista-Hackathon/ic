@@ -22,6 +22,7 @@ jobs:
     uses: ./.github/workflows/build-images.yml
     with:
       image_tag: ${{ github.sha }}
+      source_ref: ${{ github.sha }}
     secrets:
       AZURE_CREDENTIALS: ${{ secrets.AZURE_CREDENTIALS }}
 
@@ -44,51 +45,68 @@ jobs:
         with:
           creds: ${{ secrets.AZURE_CREDENTIALS }}
 
+      - name: Set up kubelogin
+        uses: azure/use-kubelogin@v1
+        with:
+          kubelogin-version: v0.2.19
+
+      - name: Verify least-privilege AKS authentication
+        run: |
+          mapfile -t auth < <(az aks show \
+            --resource-group "$AKS_RG" --name "$AKS_NAME" \
+            --query '[aadProfile.managed, aadProfile.enableAzureRbac]' -o tsv)
+          if [[ "${auth[0]:-}" != "true" || "${auth[1]:-}" != "true" ]]; then
+            echo "ERROR: AKS must use managed Entra ID and Azure RBAC; refusing local system:masters credentials." >&2
+            exit 1
+          fi
+
       - name: Get AKS credentials
         run: |
           az aks get-credentials \
             --resource-group "$AKS_RG" --name "$AKS_NAME" \
-            --admin --overwrite-existing
+            --overwrite-existing
+          kubelogin convert-kubeconfig -l azurecli
 
       - name: Pin image tags to the merged SHA
         run: |
           sed -i "s/newTag: latest/newTag: ${IMAGE_TAG}/" "${OVERLAY}/kustomization.yaml"
           grep 'newTag' "${OVERLAY}/kustomization.yaml"
 
-      # The biller-experience API/Worker export traces and metrics to Application
-      # Insights when APPLICATIONINSIGHTS_CONNECTION_STRING is set. Resolve it from
-      # Azure (not committed — it is a connection string) and substitute the single
-      # placeholder in the prod overlay so the deployed pods keep sending telemetry.
-      - name: Inject Application Insights connection string
+      - name: Validate rendered manifests
         run: |
-          APPLICATIONINSIGHTS_CONNECTION_STRING="$(az monitor app-insights component show \
-            --resource-group "$AKS_RG" --app appi-ic-hack \
-            --query connectionString -o tsv)"
-          export APPLICATIONINSIGHTS_CONNECTION_STRING
-          # Pin the bundle-build Job image (a Worker env value, not a kustomize-managed
-          # container image) to the same merged SHA the matrix build pushed.
-          export BUILDER_IMAGE_TAG="${IMAGE_TAG}"
-          for f in "${OVERLAY}/biller-experience.yaml" "${OVERLAY}/biller-experience-api-env-patch.yaml"; do
-            # shellcheck disable=SC2016
-            envsubst '${APPLICATIONINSIGHTS_CONNECTION_STRING} ${BUILDER_IMAGE_TAG}' < "$f" > "$f.tmp" && mv "$f.tmp" "$f"
-          done
+          rendered="$(kubectl kustomize "${OVERLAY}")"
+          if grep -n '\${[^}]*}' <<<"$rendered"; then
+            echo "ERROR: unresolved placeholder in rendered manifests" >&2
+            exit 1
+          fi
 
       - name: Deploy
         run: kubectl apply -k "${OVERLAY}"
 
-      - name: Configure correlated Azure telemetry
+      - name: Configure runtime deployment values
         run: |
           APPINSIGHTS=$(az deployment sub show --name ic-hack --query 'properties.outputs.appInsightsConnectionString.value' -o tsv)
+          [[ -n "$APPINSIGHTS" && "$APPINSIGHTS" != "null" ]] \
+            || { echo "ERROR: Application Insights connection string output is unavailable." >&2; exit 1; }
           kubectl -n ic set env \
             deployment/ic-biller-experience-api \
             deployment/ic-invoice-api \
             deployment/ic-payment-api \
             deployment/ic-payer-account-api \
             APPLICATIONINSIGHTS_CONNECTION_STRING="$APPINSIGHTS"
+          kubectl -n ic set env \
+            deployment/ic-biller-experience-worker \
+            APPLICATIONINSIGHTS_CONNECTION_STRING="$APPINSIGHTS" \
+            BundleBuild__BuilderImage="${REGISTRY}/ic-payer-experience-builder:${IMAGE_TAG}"
+          kubectl -n ic set env \
+            deployment/ic-payer-experience-router \
+            APPLICATIONINSIGHTS_CONNECTION_STRING="$APPINSIGHTS"
           kubectl -n ic rollout status deployment/ic-biller-experience-api --timeout=180s
           kubectl -n ic rollout status deployment/ic-invoice-api --timeout=180s
           kubectl -n ic rollout status deployment/ic-payment-api --timeout=180s
           kubectl -n ic rollout status deployment/ic-payer-account-api --timeout=180s
+          kubectl -n ic rollout status deployment/ic-biller-experience-worker --timeout=180s
+          kubectl -n ic rollout status deployment/ic-payer-experience-router --timeout=180s
 
       - name: Remove superseded Biller Experience routes
         run: |
@@ -100,3 +118,9 @@ jobs:
 
       - name: Functional smoke tests
         run: ./scripts/smoke-test.sh ic
+
+      - name: Public gateway and publication smoke tests
+        env:
+          BASE_URL: http://pronto.eastus2.cloudapp.azure.com
+          PUBLISHED_EXPERIENCE_SLUG: ${{ vars.SMOKE_PUBLISHED_EXPERIENCE_SLUG }}
+        run: ./deploy/smoke/smoke-test.sh

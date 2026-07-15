@@ -65,7 +65,7 @@ public sealed class PublicationWorkerTests
             repository,
             new PublicationArtifactPlanFactory(options),
             new AlwaysSucceedsPublisher(),
-            new NoOpBundleBuilder(),
+            new AlwaysSucceedsBuilder(),
             options,
             NullLogger<PublicationProcessor>.Instance);
         return new PublicationWorker(
@@ -87,6 +87,14 @@ public sealed class PublicationWorkerTests
     {
         public ValueTask PublishAsync(PublicationArtifactPlan plan, CancellationToken cancellationToken)
             => ValueTask.CompletedTask;
+    }
+
+    private sealed class AlwaysSucceedsBuilder : IExperienceBundleBuilder
+    {
+        public bool Enabled => true;
+
+        public ValueTask BuildAsync(BundleBuildRequest request, CancellationToken cancellationToken) =>
+            ValueTask.CompletedTask;
     }
 
     private sealed class QueueRepository : IPublicationRepository

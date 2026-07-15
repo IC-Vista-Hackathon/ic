@@ -138,6 +138,15 @@ public sealed partial class CompliancePolicyEngine(IOptions<BillerExperienceOpti
                     $"ui.actions[{action.Id}].label"));
             }
 
+            if (!Enum.IsDefined(action.Action))
+            {
+                findings.Add(Blocking(
+                    "ACTION_TYPE_INVALID",
+                    "Actions must use a supported action type.",
+                    $"ui.actions[{action.Id}].action"));
+                continue;
+            }
+
             if (action.Action == ExperienceActionType.SchedulePayment &&
                 !definition.EnabledPaymentCapabilities.Any(IsRecurringPaymentMethod))
             {

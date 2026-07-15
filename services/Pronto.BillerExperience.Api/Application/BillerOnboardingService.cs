@@ -63,19 +63,27 @@ public sealed partial class BillerOnboardingService(
             ["review_brand", "review_legal_links", "review_payment_methods"],
             now);
 
-        var savedExperience = await repository.SaveExperienceAsync(experience, null, cancellationToken);
-        var savedRun = await repository.SaveRunAsync(run, null, cancellationToken);
-        if (agentContextService is not null)
+        try
         {
-            await agentContextService.EnsureAsync(
-                id,
-                savedRun.Id,
-                $"Create, review, approve, and publish a safe branded payment experience for {biller.Name}.",
-                cancellationToken);
+            var savedExperience = await repository.SaveExperienceAsync(experience, null, cancellationToken);
+            var savedRun = await repository.SaveRunAsync(run, null, cancellationToken);
+            if (agentContextService is not null)
+            {
+                await agentContextService.EnsureAsync(
+                    id,
+                    savedRun.Id,
+                    $"Create, review, approve, and publish a safe branded payment experience for {biller.Name}.",
+                    cancellationToken);
+            }
+            await (invoiceSeeder ?? new NullInvoiceSeeder()).SeedAsync(id, biller.BillType, cancellationToken);
+            LogBillerCreated(logger, id, savedRun.Id, draftGenerator.Provider);
+            return (Map(biller), Map(savedRun), Map(savedExperience));
         }
-        await (invoiceSeeder ?? new NullInvoiceSeeder()).SeedAsync(id, biller.BillType, cancellationToken);
-        LogBillerCreated(logger, id, savedRun.Id, draftGenerator.Provider);
-        return (Map(biller), Map(savedRun), Map(savedExperience));
+        catch (Exception exception) when (!IsCriticalException(exception))
+        {
+            await CleanupFailedCreationAsync(id);
+            throw;
+        }
     }
 
     public async ValueTask<BillerResponse> GetBillerAsync(string billerId, CancellationToken cancellationToken)
@@ -101,6 +109,12 @@ public sealed partial class BillerOnboardingService(
         var biller = await GetRequiredBillerAsync(billerId, cancellationToken);
         var run = await GetRequiredRunAsync(billerId, cancellationToken);
         var experience = await GetRequiredExperienceAsync(billerId, cancellationToken);
+        if (experience.State != ExperienceRevisionState.Draft)
+        {
+            LogValidationError(logger, billerId, "state", "Only draft experiences can be changed through chat.");
+            throw new ArgumentException("Only draft experiences can be changed through chat.");
+        }
+
         var userMessage = new OnboardingChatMessage("user", request.Message.Trim(), DateTimeOffset.UtcNow);
         var messages = run.Messages.Append(userMessage).ToArray();
         var orchestrationContext = new OrchestrationContext(
@@ -266,7 +280,10 @@ public sealed partial class BillerOnboardingService(
         var now = DateTimeOffset.UtcNow;
         var existing = await repository.GetDeploymentAsync(billerId, deploymentId, cancellationToken);
         IReadOnlyList<ComplianceFinding>? publishFindings = null;
-        if (experience.State == ExperienceRevisionState.Approved)
+        var requeuingFailedPublication =
+            experience.State == ExperienceRevisionState.Failed &&
+            existing?.Status == "failed";
+        if (experience.State == ExperienceRevisionState.Approved || requeuingFailedPublication)
         {
             publishFindings = await _compliance.ReviewAsync(
                 biller,
@@ -293,6 +310,37 @@ public sealed partial class BillerOnboardingService(
         {
             LogDuplicatePublication(logger, billerId, request.Revision, deploymentId);
             deployment = existing;
+            if (existing.Status == "failed")
+            {
+                try
+                {
+                    deployment = await repository.SaveDeploymentAsync(
+                        existing with
+                        {
+                            Status = "requested",
+                            UpdatedAt = now,
+                            PublishedUrl = null,
+                            FailureCode = null,
+                            FailureMessage = null,
+                            Traceparent = FormatTraceparent(Activity.Current),
+                            ClaimedAt = null,
+                            LeaseExpiresAt = null
+                        },
+                        existing.ETag,
+                        cancellationToken);
+                }
+                catch (ConcurrencyException)
+                {
+                    var concurrent = await repository.GetDeploymentAsync(billerId, deploymentId, cancellationToken);
+                    if (concurrent is null || concurrent.Status == "failed")
+                    {
+                        throw;
+                    }
+
+                    deployment = concurrent;
+                }
+                LogPublicationRequested(logger, billerId, experience.Id, deployment.Id);
+            }
         }
         else
         {
@@ -312,9 +360,10 @@ public sealed partial class BillerOnboardingService(
         // The deployment record is the durable source of truth for a publication request; advancing
         // the experience/run to Publishing is a separate, idempotent step so a retry after a failure
         // between the writes converges the states to match the deployment instead of leaving them
-        // stuck at Approved. Only Approved states are advanced, so a worker that has already moved
-        // the records past Publishing (published/failed) is never regressed.
-        if (experience.State == ExperienceRevisionState.Approved)
+        // stuck at Approved or Failed. Terminal deployments never regress workflow state.
+        var publicationInProgress = deployment.Status is "requested" or "applying" or "verifying";
+        if (publicationInProgress &&
+            experience.State is ExperienceRevisionState.Approved or ExperienceRevisionState.Failed)
         {
             await repository.SaveExperienceAsync(
                 experience with
@@ -325,7 +374,8 @@ public sealed partial class BillerOnboardingService(
                 experience.ETag,
                 cancellationToken);
         }
-        if (run.State == OnboardingSessionState.Approved)
+        if (publicationInProgress &&
+            run.State is OnboardingSessionState.Approved or OnboardingSessionState.Failed)
         {
             await repository.SaveRunAsync(run with { State = OnboardingSessionState.Publishing, UpdatedAt = now }, run.ETag, cancellationToken);
             RecordTransition(run.State, OnboardingSessionState.Publishing);
@@ -445,6 +495,27 @@ public sealed partial class BillerOnboardingService(
 
         return candidate;
     }
+
+    private async ValueTask CleanupFailedCreationAsync(string billerId)
+    {
+        try
+        {
+            await repository.PurgeByBillerAsync(billerId, CancellationToken.None);
+        }
+        catch (Exception exception) when (!IsCriticalException(exception))
+        {
+            LogCreationCleanupFailed(logger, billerId, "purge", exception);
+        }
+    }
+
+    private static bool IsCriticalException(Exception exception) =>
+        exception is OutOfMemoryException
+            or StackOverflowException
+            or AccessViolationException
+            or AppDomainUnloadedException
+            or BadImageFormatException
+            or CannotUnloadAppDomainException
+            or InvalidProgramException;
 
     /// <summary>
     /// Appends -2, -3, … while keeping the result DNS-safe: the base is truncated so the
@@ -668,11 +739,17 @@ public sealed partial class BillerOnboardingService(
         string revision,
         string findingCode,
         string findingMessage);
-
     [LoggerMessage(1904, LogLevel.Error, "Compensating approval rollback failed for biller {BillerId}, revision {Revision}; state may be inconsistent")]
     private static partial void LogCompensationFailed(
         ILogger logger,
         string billerId,
         string revision,
+        Exception exception);
+
+    [LoggerMessage(1905, LogLevel.Error, "Creation cleanup operation {Operation} failed for biller {BillerId}")]
+    private static partial void LogCreationCleanupFailed(
+        ILogger logger,
+        string billerId,
+        string operation,
         Exception exception);
 }

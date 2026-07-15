@@ -53,6 +53,26 @@ public sealed class ComplianceReviewTests
     }
 
     [Fact]
+    public void DeterministicPolicyRejectsUnsupportedActionTypes()
+    {
+        var engine = new CompliancePolicyEngine(Options(false));
+        var definition = Definition() with
+        {
+            Ui = Definition().Ui! with
+            {
+                Actions = [new ExperienceAction("unsupported", "Continue", (ExperienceActionType)999)]
+            }
+        };
+
+        var finding = Assert.Single(
+            engine.Evaluate(definition),
+            candidate => candidate.Code == "ACTION_TYPE_INVALID");
+
+        Assert.Equal("ui.actions[unsupported].action", finding.FieldPath);
+        Assert.Equal("test-policy", finding.PolicyVersion);
+    }
+
+    [Fact]
     public async Task RequiredKnowledgeReviewFailsClosedWhenReviewerIsUnavailable()
     {
         var service = new ComplianceReviewService(
