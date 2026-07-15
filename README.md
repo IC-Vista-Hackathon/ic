@@ -354,8 +354,8 @@ readiness/restarts, Cosmos throttling, PWA availability, and payment-page reques
 
 ### Phase 5 — Payer site publication (pivoted to shared router + Blob Storage)
 
-- [x] Add a Storage Account to `infra/bicep` (`payer-experiences` blob container, workload-identity
-  RBAC via the shared `ic-workload` identity's Blob Data Contributor grant).
+- [x] Add a Storage Account to `infra/bicep` (`payer-experiences` blob container, Blob Reader for
+  `ic-workload`, and Blob Contributor for the separate `biller-publisher` identity).
 - [ ] Implement Worker publish logic: build a biller's static PWA bundle from its approved
   configuration, upload to a `biller_id`-keyed blob container/prefix, retain the previous revision
   for rollback, and persist publish status.

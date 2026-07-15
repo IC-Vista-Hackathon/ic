@@ -13,6 +13,7 @@ param workloadServiceAccountName string
 param publisherUamiName string
 param publisherNamespace string
 param publisherServiceAccountName string
+param deploymentPrincipalIds array
 param monitorWorkspaceId string
 param monitorWorkspaceLocation string
 
@@ -42,6 +43,10 @@ resource aks 'Microsoft.ContainerService/managedClusters@2024-02-01' = {
     oidcIssuerProfile: { enabled: true }
     securityProfile: {
       workloadIdentity: { enabled: true }
+    }
+    aadProfile: {
+      managed: true
+      enableAzureRBAC: true
     }
     addonProfiles: {
       omsagent: {
@@ -83,6 +88,28 @@ resource acrPullRoleAssignment 'Microsoft.Authorization/roleAssignments@2022-04-
     roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', '7f951dda-4ed3-4680-a7ca-43fe172d538d')
   }
 }
+
+// CI deploy identities authenticate as normal cluster users and can update workloads, but cannot
+// create RBAC bindings or use the system:masters administrator certificate.
+resource deploymentClusterUserRoleAssignments 'Microsoft.Authorization/roleAssignments@2022-04-01' = [for principalId in deploymentPrincipalIds: {
+  name: guid(aks.id, string(principalId), 'AksClusterUser')
+  scope: aks
+  properties: {
+    principalId: string(principalId)
+    principalType: 'ServicePrincipal'
+    roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', '4abbcc35-e782-43d8-92c5-2d3f1bd2253f')
+  }
+}]
+
+resource deploymentWriterRoleAssignments 'Microsoft.Authorization/roleAssignments@2022-04-01' = [for principalId in deploymentPrincipalIds: {
+  name: guid(aks.id, string(principalId), 'AksRbacWriter')
+  scope: aks
+  properties: {
+    principalId: string(principalId)
+    principalType: 'ServicePrincipal'
+    roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', 'a7ffa36f-339b-4b5c-8bdf-e2c188b2c0eb')
+  }
+}]
 
 // Federates the workload identity to a specific namespace/service account — services running
 // as this service account can request Azure AD tokens with no secret, via workload identity.
