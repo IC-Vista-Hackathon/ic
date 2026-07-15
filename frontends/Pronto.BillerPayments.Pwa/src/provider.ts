@@ -21,8 +21,8 @@ export class ServicePaymentExperienceProvider implements PaymentExperienceProvid
 
   getInvoices(accountNumber: string) { return observed('pwa.invoice.lookup', async () => {
     const response = await fetchWithTimeout(`/invoices/billers/${encodeURIComponent(this.billerId)}/invoices?account_number=${encodeURIComponent(accountNumber)}&include_closed=true`, { headers: this.headers() });
-    const payload = await read<{ invoices: Array<{ id: string; account_number: string; payer_name: string; amount_cents: number; due_date: string; description: string; status: string }> }>(response);
-    return payload.invoices.map(invoice => ({ id: invoice.id, accountNumber: invoice.account_number, payerName: invoice.payer_name, amountCents: invoice.amount_cents, dueDate: invoice.due_date, description: invoice.description, status: invoice.status }));
+    const payload = await read<{ invoices: Array<{ id: string; account_number: string; payer_name: string; amount_cents: number; due_date: string; description: string; status: string; type?: string | null; status_color?: string | null; note?: string | null; note_emphasis?: boolean }> }>(response);
+    return payload.invoices.map(invoice => ({ id: invoice.id, accountNumber: invoice.account_number, payerName: invoice.payer_name, amountCents: invoice.amount_cents, dueDate: invoice.due_date, description: invoice.description, status: invoice.status, type: invoice.type ?? undefined, statusColor: invoice.status_color ?? undefined, note: invoice.note ?? undefined, noteEmphasis: invoice.note_emphasis ?? false }));
   }); }
 
   // Server-side quote: the same fee policy the payment itself will apply — never computed client-side.

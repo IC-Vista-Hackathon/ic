@@ -48,6 +48,9 @@ public sealed record SeedInvoicesResponse(
 /// <summary>
 /// Wire shape of an invoice. Money is integer cents; <see cref="DueDate"/> is a plain date;
 /// <see cref="Status"/> serializes as its lowercase token (see design/entities.md Invoice).
+/// <see cref="Type"/>, <see cref="StatusColor"/>, <see cref="Note"/>, and
+/// <see cref="NoteEmphasis"/> are demo presentation hints (optional) layered on top of the
+/// payment lifecycle <see cref="Status"/> — they don't affect money movement.
 /// </summary>
 public sealed record InvoiceResponse(
     string Id,
@@ -57,7 +60,11 @@ public sealed record InvoiceResponse(
     string Description,
     int AmountCents,
     DateOnly DueDate,
-    InvoiceStatus Status);
+    InvoiceStatus Status,
+    string? Type = null,
+    string? StatusColor = null,
+    string? Note = null,
+    bool NoteEmphasis = false);
 
 /// <summary>Result of <c>GET /billers/{id}/invoices</c> — open invoices unless filtered.</summary>
 public sealed record InvoiceListResponse(

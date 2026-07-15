@@ -188,7 +188,11 @@ public sealed partial class InvoicesController : ControllerBase
         invoice.Description,
         invoice.AmountCents,
         invoice.DueDate,
-        invoice.Status.ToWire());
+        invoice.Status.ToWire(),
+        invoice.Type,
+        invoice.StatusColor,
+        invoice.Note,
+        invoice.NoteEmphasis);
 
     private static string GenerateAccountNumber() =>
         "ACCT-" + Guid.NewGuid().ToString("N")[..6].ToUpperInvariant();
