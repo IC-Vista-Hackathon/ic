@@ -2,6 +2,7 @@ using System.Diagnostics;
 using Pronto.BillerExperience.Contracts.V1.Experiences;
 using Pronto.BillerExperience.Worker;
 using Pronto.BillerExperience.Worker.Artifacts;
+using Pronto.BillerExperience.Worker.Building;
 using Pronto.BillerExperience.Worker.Persistence;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
@@ -70,7 +71,8 @@ public sealed class PublicationProcessorTests
     {
         var repository = new FakeRepository();
         var publisher = new FakePublisher();
-        var processor = Processor(repository, publisher);
+        var builder = new FakeBundleBuilder();
+        var processor = Processor(repository, publisher, builder);
 
         await processor.ProcessAsync(repository.Deployment, CancellationToken.None);
 
@@ -81,33 +83,136 @@ public sealed class PublicationProcessorTests
     }
 
     [Fact]
+    public async Task BundleIsBuiltBeforeActivePointerIsPublished()
+    {
+        var repository = new FakeRepository();
+        var publisher = new FakePublisher();
+        var builder = new FakeBundleBuilder();
+        var processor = Processor(repository, publisher, builder);
+
+        await processor.ProcessAsync(repository.Deployment, CancellationToken.None);
+
+        Assert.Equal("config-1", builder.Request?.Revision);
+        Assert.Equal("city", builder.Request?.Slug);
+        // The site must be uploaded (build) before the config publisher flips active.json.
+        Assert.True(builder.BuiltAt < publisher.PublishedAt);
+    }
+
+    [Fact]
+    public async Task BundleBuildFailureIsPersistedAndBlocksPublish()
+    {
+        var repository = new FakeRepository();
+        var publisher = new FakePublisher();
+        var builder = new FakeBundleBuilder { Failure = new BundleBuildException("vite build failed") };
+        var processor = Processor(repository, publisher, builder);
+
+        await processor.ProcessAsync(repository.Deployment, CancellationToken.None);
+
+        Assert.False(publisher.WasCalled);
+        Assert.Equal(PublicationStates.Failed, repository.Saved?.Status);
+        Assert.Equal("BUNDLE_BUILD_FAILED", repository.Saved?.FailureCode);
+        Assert.Equal("The payer site could not be built. Please try publishing again.", repository.Saved?.FailureMessage);
+        Assert.DoesNotContain("vite build failed", repository.Saved?.FailureMessage, StringComparison.Ordinal);
+        Assert.False(repository.WorkflowPublished);
+    }
+
+    [Fact]
+    public async Task DisabledBuilderSkipsBundleAndStillPublishesConfig()
+    {
+        var repository = new FakeRepository();
+        var publisher = new FakePublisher();
+        var processor = Processor(repository, publisher, new NoOpBundleBuilder());
+
+        await processor.ProcessAsync(repository.Deployment, CancellationToken.None);
+
+        Assert.True(publisher.WasCalled);
+        Assert.Equal(PublicationStates.Ready, repository.Saved?.Status);
+    }
+
+    [Fact]
+    public async Task InfrastructureFailureDoesNotPersistRawExceptionDetails()
+    {
+        const string rawMessage = "jobs.batch \"ic-payer-build-city\" is forbidden: service account cannot get jobs/status";
+        var repository = new FakeRepository();
+        var publisher = new FakePublisher();
+        var builder = new FakeBundleBuilder { Failure = new UnauthorizedAccessException(rawMessage) };
+        var processor = Processor(repository, publisher, builder);
+
+        await processor.ProcessAsync(repository.Deployment, CancellationToken.None);
+
+        Assert.False(publisher.WasCalled);
+        Assert.Equal(PublicationStates.Failed, repository.Saved?.Status);
+        Assert.Equal("PUBLICATION_FAILED", repository.Saved?.FailureCode);
+        Assert.Equal("The payer site could not be published. Please try again.", repository.Saved?.FailureMessage);
+        Assert.DoesNotContain(rawMessage, repository.Saved?.FailureMessage, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public async Task ArtifactFailureIsPersistedWithoutCrashingPollingLoop()
     {
         var repository = new FakeRepository();
         var publisher = new FakePublisher { Failure = new InvalidOperationException("invalid artifact") };
-        var processor = Processor(repository, publisher);
+        var processor = Processor(repository, publisher, new FakeBundleBuilder());
 
         await processor.ProcessAsync(repository.Deployment, CancellationToken.None);
 
         Assert.Equal(PublicationStates.Failed, repository.Saved?.Status);
         Assert.Equal("INVALID_PUBLICATION", repository.Saved?.FailureCode);
+        Assert.Equal(
+            "The payer site configuration could not be published. Please review it and try again.",
+            repository.Saved?.FailureMessage);
+        Assert.DoesNotContain("invalid artifact", repository.Saved?.FailureMessage, StringComparison.Ordinal);
         Assert.False(repository.WorkflowPublished);
     }
 
-    private static PublicationProcessor Processor(FakeRepository repository, FakePublisher publisher) => new(
-        repository,
-        new PublicationArtifactPlanFactory(Options.Create(new PublicationOptions { PublicBaseUrl = "https://pay.example.test" })),
-        publisher,
-        NullLogger<PublicationProcessor>.Instance);
+    private static PublicationProcessor Processor(FakeRepository repository, FakePublisher publisher) =>
+        Processor(repository, publisher, new NoOpBundleBuilder());
+
+    private static PublicationProcessor Processor(
+        FakeRepository repository,
+        FakePublisher publisher,
+        IExperienceBundleBuilder bundleBuilder)
+    {
+        var options = Options.Create(new PublicationOptions
+        {
+            PublicBaseUrl = "https://pay.example.test",
+            StorageEndpoint = "https://blob.example.test/",
+            ContainerName = "payer-experiences",
+        });
+        return new PublicationProcessor(
+            repository,
+            new PublicationArtifactPlanFactory(options),
+            publisher,
+            bundleBuilder,
+            options,
+            NullLogger<PublicationProcessor>.Instance);
+    }
 
     private sealed class FakePublisher : IExperienceArtifactPublisher
     {
         public Exception? Failure { get; init; }
         public bool WasCalled { get; private set; }
+        public long PublishedAt { get; private set; }
 
         public ValueTask PublishAsync(PublicationArtifactPlan plan, CancellationToken cancellationToken)
         {
             WasCalled = true;
+            PublishedAt = Stopwatch.GetTimestamp();
+            return Failure is null ? ValueTask.CompletedTask : ValueTask.FromException(Failure);
+        }
+    }
+
+    private sealed class FakeBundleBuilder : IExperienceBundleBuilder
+    {
+        public Exception? Failure { get; init; }
+        public bool Enabled => true;
+        public BundleBuildRequest? Request { get; private set; }
+        public long BuiltAt { get; private set; }
+
+        public ValueTask BuildAsync(BundleBuildRequest request, CancellationToken cancellationToken)
+        {
+            Request = request;
+            BuiltAt = Stopwatch.GetTimestamp();
             return Failure is null ? ValueTask.CompletedTask : ValueTask.FromException(Failure);
         }
     }

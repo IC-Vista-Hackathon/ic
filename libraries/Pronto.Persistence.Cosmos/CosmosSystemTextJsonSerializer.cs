@@ -26,12 +26,27 @@ public sealed class CosmosSystemTextJsonSerializer : CosmosSerializer
 
         using (stream)
         {
-            if (stream.CanSeek && stream.Length == 0)
+            if (stream.CanSeek)
+            {
+                if (stream.Length == 0)
+                {
+                    return default!;
+                }
+
+                return JsonSerializer.Deserialize<T>(stream, options)!;
+            }
+
+            // Non-seekable streams have no Length, so buffer to distinguish an empty
+            // body (return default) from content (deserialize) without throwing on empty.
+            using var buffer = new MemoryStream();
+            stream.CopyTo(buffer);
+            if (buffer.Length == 0)
             {
                 return default!;
             }
 
-            return JsonSerializer.Deserialize<T>(stream, options)!;
+            buffer.Position = 0;
+            return JsonSerializer.Deserialize<T>(buffer, options)!;
         }
     }
 

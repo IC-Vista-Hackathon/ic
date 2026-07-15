@@ -19,6 +19,39 @@ metadata:
   labels:
     azure.workload.identity/use: "true"
 ---
+# Lets the Worker (biller-publisher) launch and watch per-biller bundle build Jobs, and read
+# their pods/logs for diagnostics. Namespace-scoped and limited to Jobs + pod reads — no
+# cluster-wide access, no permission to touch other workloads.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: ic-bundle-build-runner
+rules:
+  - apiGroups: ["batch"]
+    resources: ["jobs"]
+    verbs: ["create", "get", "list", "watch", "delete"]
+  - apiGroups: ["batch"]
+    resources: ["jobs/status"]
+    verbs: ["get"]
+  - apiGroups: [""]
+    resources: ["pods"]
+    verbs: ["get", "list"]
+  - apiGroups: [""]
+    resources: ["pods/log"]
+    verbs: ["get"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: ic-bundle-build-runner
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: ic-bundle-build-runner
+subjects:
+  - kind: ServiceAccount
+    name: biller-publisher
+---
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -52,6 +85,18 @@ spec:
             - { name: Publication__StorageEndpoint, value: "https://stichackjk4zmntatjem4.blob.core.windows.net/" }
             - { name: Publication__ContainerName, value: payer-experiences }
             - { name: Publication__PublicBaseUrl, value: "http://pronto.eastus2.cloudapp.azure.com/" }
+            # Bundle build Job: setting BuilderImage enables the generate→build→validate→publish
+            # Job per publication; empty keeps config-only publishing. The Job runs as
+            # biller-publisher (same workload identity that writes blobs).
+            # ${BUILDER_IMAGE_TAG} is substituted with the merged SHA by the deploy workflow
+            # (kustomize's image transformer only rewrites container image: fields, not env).
+            - { name: BundleBuild__BuilderImage, value: "acrichackjk4zmntatjem4.azurecr.io/ic-payer-experience-builder:${BUILDER_IMAGE_TAG}" }
+            - { name: BundleBuild__ServiceAccountName, value: biller-publisher }
+            - { name: BundleBuild__GeneratorMode, value: deterministic }
+            - name: BundleBuild__Namespace
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.namespace
             # Resolved from Azure and substituted by the deploy workflow (envsubst); empty
             # locally, in which case the service simply does not export to Azure Monitor.
             - { name: APPLICATIONINSIGHTS_CONNECTION_STRING, value: "${APPLICATIONINSIGHTS_CONNECTION_STRING}" }
@@ -180,6 +225,79 @@ metadata:
 spec:
   selector:
     app.kubernetes.io/name: ic-biller-payments-pwa
+  ports:
+    - name: http
+      port: 8080
+      targetPort: http
+---
+# Shared Payer Experience router: resolves the biller from /pay/{slug} and serves that
+# biller's published static bundle straight from the payer-experiences blob container.
+# Reads blob with workload identity (ic-workload has Storage Blob Data Contributor), so
+# one router replaces the old per-biller Deployments. Stateless — safe to scale out.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: ic-payer-experience-router
+  labels:
+    app.kubernetes.io/name: ic-payer-experience-router
+    app.kubernetes.io/part-of: ic-biller-experience
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: ic-payer-experience-router
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: ic-payer-experience-router
+        app.kubernetes.io/part-of: ic-biller-experience
+        azure.workload.identity/use: "true"
+    spec:
+      serviceAccountName: ic-workload
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1654
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: router
+          image: acrichackjk4zmntatjem4.azurecr.io/ic-payer-experience-router:latest
+          ports:
+            - name: http
+              containerPort: 8080
+          env:
+            - { name: ASPNETCORE_URLS, value: "http://+:8080" }
+            - { name: Router__StorageEndpoint, value: "https://stichackjk4zmntatjem4.blob.core.windows.net/" }
+            - { name: Router__ContainerName, value: payer-experiences }
+            - { name: APPLICATIONINSIGHTS_CONNECTION_STRING, value: "${APPLICATIONINSIGHTS_CONNECTION_STRING}" }
+          readinessProbe:
+            httpGet: { path: /health/ready, port: http }
+            initialDelaySeconds: 2
+            periodSeconds: 5
+          livenessProbe:
+            httpGet: { path: /health/live, port: http }
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          resources:
+            requests: { cpu: 25m, memory: 64Mi }
+            limits: { cpu: 250m, memory: 128Mi }
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 1654
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+            seccompProfile:
+              type: RuntimeDefault
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: ic-payer-experience-router
+spec:
+  selector:
+    app.kubernetes.io/name: ic-payer-experience-router
   ports:
     - name: http
       port: 8080

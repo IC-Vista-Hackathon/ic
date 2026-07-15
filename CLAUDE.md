@@ -109,10 +109,15 @@ Docs to read before making non-trivial changes:
   static content, not per-biller logic, one router replaces N per-biller Deployments. The Storage
   Account (`modules/storage.bicep`) is live: `ic-workload` — the same identity already used for
   Cosmos/AI Foundry — has `Storage Blob Data Contributor` on it, covering both the Worker's writes
-  and the router's reads; no separate identity per role. Still to build: the router workload
-  itself and the Worker logic that builds/uploads a biller's bundle and updates publish status.
-  See `design/services.md`'s Deployment Service and Payer Experience rows, and `README.md`'s "AKS
-  publication model" section, both updated for this target.
+  and the router's reads; no separate identity per role. The router workload now exists:
+  `services/Pronto.PayerExperience.Router` resolves the biller from `/pay/{slug}`, reads
+  `billers/{slug}/active.json`, and serves that revision's `site/` prefix with SPA fallback +
+  content types (deployed via `deploy/kubernetes/overlays/prod/biller-experience.yaml`, and the
+  `/pay` HTTPRoute points at it without stripping the prefix). The bespoke bundle build/validate/
+  publish pipeline lives in `frontends/Pronto.PayerExperience.Builder`. Still to build: wiring the
+  Worker to invoke the builder pipeline (today it uploads JSON config artifacts, not the built
+  bundle) and surfacing publish/build status in the Studio. See `design/services.md`'s Deployment
+  Service and Payer Experience rows, and `README.md`'s "AKS publication model" section.
 
 ## Git workflow
 
@@ -159,7 +164,8 @@ is still just a placeholder README.
   `frontends/Pronto.BillerPayments.Pwa/README.md`, "Browser observability"): runtime config comes
   from the Biller Experience API's `GET /public/telemetry`, PII is structurally excluded via
   `src/telemetryPolicy.ts`, and the nonprod deploy workflow runs a Playwright smoke test that
-  confirms an event round-trips into App Insights (`tests/browser-smoke/`).
+  confirms the browser SDK sends the expected event and flow id and the App Insights ingestion
+  endpoint accepts it (`tests/browser-smoke/`).
 - Test coverage is thin outside Invoice/Payment. `BillerExperience.IntegrationTests` now has
   in-process integration tests for the Invoice API (health endpoints + seed-then-lookup flow),
   added with the GitHub Actions CI/CD pipeline; `BillerExperience.Worker.Tests` remains sparse.

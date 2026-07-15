@@ -13,7 +13,10 @@ public static class CosmosJson
     public static JsonSerializerOptions CreateOptions() => new()
     {
         PropertyNamingPolicy = JsonNamingPolicy.SnakeCaseLower,
-        DictionaryKeyPolicy = JsonNamingPolicy.SnakeCaseLower,
+
+        // Deliberately no DictionaryKeyPolicy: System.Text.Json applies it on write but
+        // never reverses it on read, so any non-snake_case key would fail to round-trip.
+        // Dictionary keys are data and are persisted verbatim.
         DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull,
         Converters =
         {

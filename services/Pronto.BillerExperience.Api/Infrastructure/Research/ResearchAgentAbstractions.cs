@@ -66,7 +66,10 @@ public sealed class SameSiteResearchAgentDispatcher(IBillerWebsiteResearcher res
         ResearchAgentDescriptor agent,
         BillerResearchRequest request,
         ResearchAgentInvocationContext? invocationContext,
-        CancellationToken cancellationToken) => researcher.ResearchAsync(request, cancellationToken);
+        CancellationToken cancellationToken) => request.Website is null
+            ? Task.FromResult(new BillerResearchResponse(
+                ResearchOutcome.Skipped, [], [], ["research.website_missing"], "research.website_missing"))
+            : researcher.ResearchAsync(request, cancellationToken);
 }
 
 public sealed class LocalResearchAgentCatalog : IResearchAgentCatalog

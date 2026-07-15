@@ -1,3 +1,5 @@
+using System.Text.Json.Serialization;
+
 namespace Pronto.BillerExperience.Contracts.V1.Experiences;
 
 public sealed record BillerExperienceDefinition(
@@ -8,7 +10,22 @@ public sealed record BillerExperienceDefinition(
     PwaConfiguration Pwa,
     IReadOnlyList<string> EnabledPaymentCapabilities,
     ExperienceUi? Ui = null,
-    ExperiencePreferences? Preferences = null);
+    ExperiencePreferences? Preferences = null,
+    DesignBrief? Brief = null);
+
+// The bounded creative input the bespoke-skin generator (Claude Opus) is allowed to
+// author against. Deliberately separate from the functional contract
+// (EnabledPaymentCapabilities/Preferences), which the generated code must honor but
+// never change. Optional so existing revisions and the draft generator stay valid.
+public sealed record DesignBrief(
+    string VoiceAndTone,
+    string VisualStyle,
+    IReadOnlyList<string> BrandKeywords,
+    IReadOnlyList<BrandAsset> Assets,
+    Uri? ReferenceUrl = null,
+    string? LayoutIntent = null);
+
+public sealed record BrandAsset(string Kind, Uri Url, string? Description = null);
 
 public sealed record ExperiencePreferences(
     bool GuestCheckoutAllowed,
@@ -65,7 +82,9 @@ public enum ExperienceActionType
     ContactSupport
 }
 
-public sealed record UpdateExperienceRequest(BillerExperienceDefinition Definition, string? ExpectedETag);
+public sealed record UpdateExperienceRequest(
+    BillerExperienceDefinition Definition,
+    [property: JsonPropertyName("expected_etag")] string? ExpectedETag);
 
 public sealed record ExperienceBrand(
     string DisplayName,

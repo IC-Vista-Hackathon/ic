@@ -12,7 +12,8 @@ public sealed record OnboardingChatMessage(
 public sealed record OnboardingChatResponse(
     string Reply,
     OnboardingSessionResponse Session,
-    Experiences.ExperienceRevisionResponse? Draft);
+    Experiences.ExperienceRevisionResponse? Draft,
+    string? GenerationMode = null);
 
 public sealed record AgentActivityEvent(
     string EventId,
@@ -38,7 +39,8 @@ public enum AgentActivityStatus
     NeedsInput,
     Failed,
     Retrying,
-    Degraded
+    Degraded,
+    Skipped
 }
 
 public sealed record OnboardingSessionResponse(

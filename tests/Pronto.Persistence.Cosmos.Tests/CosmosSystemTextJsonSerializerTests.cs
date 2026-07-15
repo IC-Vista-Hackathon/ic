@@ -49,6 +49,32 @@ public sealed class CosmosSystemTextJsonSerializerTests
     }
 
     [Fact]
+    public void FromStreamReturnsDefaultForEmptyNonSeekableStream()
+    {
+        using var stream = new NonSeekableStream([]);
+
+        var result = Serializer().FromStream<Doc>(stream);
+
+        Assert.Null(result);
+    }
+
+    [Fact]
+    public void FromStreamDeserializesNonSeekableContent()
+    {
+        var serializer = Serializer();
+        byte[] payload;
+        using (var buffer = (MemoryStream)serializer.ToStream(new Doc("b-1", 8420)))
+        {
+            payload = buffer.ToArray();
+        }
+
+        using var stream = new NonSeekableStream(payload);
+        var result = serializer.FromStream<Doc>(stream);
+
+        Assert.Equal(new Doc("b-1", 8420), result);
+    }
+
+    [Fact]
     public void FromStreamDisposesTheSourceStream()
     {
         var serializer = Serializer();
@@ -57,5 +83,26 @@ public sealed class CosmosSystemTextJsonSerializerTests
         _ = serializer.FromStream<Doc>(stream);
 
         Assert.False(stream.CanRead);
+    }
+
+    private sealed class NonSeekableStream(byte[] data) : Stream
+    {
+        private readonly MemoryStream inner = new(data);
+
+        public override bool CanRead => true;
+        public override bool CanSeek => false;
+        public override bool CanWrite => false;
+        public override long Length => throw new NotSupportedException();
+        public override long Position
+        {
+            get => throw new NotSupportedException();
+            set => throw new NotSupportedException();
+        }
+
+        public override int Read(byte[] buffer, int offset, int count) => inner.Read(buffer, offset, count);
+        public override void Flush() { }
+        public override long Seek(long offset, SeekOrigin origin) => throw new NotSupportedException();
+        public override void SetLength(long value) => throw new NotSupportedException();
+        public override void Write(byte[] buffer, int offset, int count) => throw new NotSupportedException();
     }
 }

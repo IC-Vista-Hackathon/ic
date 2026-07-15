@@ -1,5 +1,8 @@
 using System.Diagnostics;
+using System.Text.Json;
+using Microsoft.Extensions.Options;
 using Pronto.BillerExperience.Worker.Artifacts;
+using Pronto.BillerExperience.Worker.Building;
 using Pronto.BillerExperience.Worker.Persistence;
 
 namespace Pronto.BillerExperience.Worker;
@@ -8,8 +11,12 @@ public sealed partial class PublicationProcessor(
     IPublicationRepository repository,
     PublicationArtifactPlanFactory planFactory,
     IExperienceArtifactPublisher publisher,
+    IExperienceBundleBuilder bundleBuilder,
+    IOptions<PublicationOptions> publicationOptions,
     ILogger<PublicationProcessor> logger)
 {
+    private readonly PublicationOptions _options = publicationOptions.Value;
+
     public async ValueTask ProcessAsync(PublicationDeployment deployment, CancellationToken cancellationToken)
     {
         // Asynchronous publish is queued work: the originating API request's context is attached as
@@ -33,6 +40,9 @@ public sealed partial class PublicationProcessor(
             var experience = await repository.GetExperienceAsync(deployment.BillerId, deployment.ConfigVersion, cancellationToken);
             var plan = planFactory.Create(deployment, biller, experience);
 
+            // Build + upload the bespoke static bundle first (no active.json), then let the config
+            // publisher flip active.json last — so the site is fully uploaded before it's served.
+            await BuildBundleAsync(plan, experience, cancellationToken);
             await publisher.PublishAsync(plan, cancellationToken);
             deployment = await repository.SaveAsync(deployment with
             {
@@ -77,20 +87,48 @@ public sealed partial class PublicationProcessor(
         }
     }
 
+    private async ValueTask BuildBundleAsync(
+        PublicationArtifactPlan plan,
+        PublicationExperience experience,
+        CancellationToken cancellationToken)
+    {
+        if (!bundleBuilder.Enabled)
+        {
+            LogBundleBuildSkipped(logger, plan.BillerId, plan.Revision);
+            return;
+        }
+
+        var definitionJson = JsonSerializer.Serialize(experience.Definition, PublicationArtifactPlanFactory.JsonOptions);
+        await bundleBuilder.BuildAsync(
+            new BundleBuildRequest(
+                plan.BillerId,
+                plan.Slug,
+                plan.Revision,
+                definitionJson,
+                _options.StorageEndpoint,
+                _options.ContainerName),
+            cancellationToken);
+    }
+
     private static string FailureCode(Exception exception) => exception switch
     {
+        BundleBuildException => "BUNDLE_BUILD_FAILED",
         InvalidOperationException => "INVALID_PUBLICATION",
         _ => "PUBLICATION_FAILED"
     };
 
-    private static string SafeFailureMessage(Exception exception)
+    private static string SafeFailureMessage(Exception exception) => exception switch
     {
-        var message = exception.Message.ReplaceLineEndings(" ");
-        return message.Length <= 500 ? message : message[..500];
-    }
+        BundleBuildException => "The payer site could not be built. Please try publishing again.",
+        InvalidOperationException => "The payer site configuration could not be published. Please review it and try again.",
+        _ => "The payer site could not be published. Please try again."
+    };
 
     [LoggerMessage(1002, LogLevel.Information, "Publishing config version {ConfigVersion} for biller {BillerId}, deployment {DeploymentId}; trace {TraceId}")]
     private static partial void LogPublicationStarted(ILogger logger, string billerId, string deploymentId, int configVersion, string? traceId);
+
+    [LoggerMessage(1005, LogLevel.Information, "Bundle build disabled (no builder image); publishing config only for biller {BillerId}, revision {Revision}")]
+    private static partial void LogBundleBuildSkipped(ILogger logger, string billerId, string revision);
 
     [LoggerMessage(1003, LogLevel.Information, "Published deployment {DeploymentId} for biller {BillerId} at {PublishedUrl}; trace {TraceId}")]
     private static partial void LogPublicationReady(ILogger logger, string billerId, string deploymentId, Uri publishedUrl, string? traceId);
