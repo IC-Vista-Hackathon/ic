@@ -426,6 +426,10 @@ function initialsFrom(name: string): string { return (name || '').trim().split(/
 function initialsFromEmail(email: string): string { const local = (email || '').trim().split('@')[0] || ''; const parts = local.split(/[^a-zA-Z0-9]+/).filter(Boolean); const initials = parts.slice(0, 2).map((p) => p[0]?.toUpperCase() || '').join(''); return initials || 'YB'; }
 const MIN_PASSWORD_LENGTH = 8;
 function domainFromWebsite(url: string): string { if (!url) return ''; return url.trim().toLowerCase().replace(/^https?:\/\//, '').replace(/^www\./, '').split('/')[0]; }
+// Resolve a public logo/favicon for a domain. Clearbit's Logo API (logo.clearbit.com)
+// was discontinued and its host no longer resolves, so we use Google's favicon service,
+// which returns the site's real brand mark at a usable size.
+function logoUrlForDomain(domain: string): string { return domain ? `https://www.google.com/s2/favicons?domain=${encodeURIComponent(domain)}&sz=128` : ''; }
 
 function extractColorsFromImage(img: HTMLImageElement): string[] {
   const size = 32;
@@ -818,17 +822,24 @@ export function App() {
   const checkLogoFetch = (website: string, skip: boolean) => {
     const domain = domainFromWebsite(website);
     if (!domain || skip) { patch({ logoFetchOk: false, extractedColors: null }); return; }
-    const img = new Image();
-    img.crossOrigin = 'anonymous';
-    img.onload = () => {
-      patch({ logoFetchOk: true });
+    const url = logoUrlForDomain(domain);
+    // Whether we can show the logo only depends on the image rendering, so load it without CORS.
+    const display = new Image();
+    display.onload = () => patch({ logoFetchOk: true });
+    display.onerror = () => patch({ logoFetchOk: false, extractedColors: null });
+    display.src = url;
+    // Color sampling reads pixels off a canvas, which requires a CORS-clean image. When the host
+    // doesn't allow it the load fails and we keep the simulated palette rather than blocking the logo.
+    const sample = new Image();
+    sample.crossOrigin = 'anonymous';
+    sample.onload = () => {
       try {
-        const colors = extractColorsFromImage(img);
+        const colors = extractColorsFromImage(sample);
         patch({ extractedColors: colors.length ? colors : null });
       } catch { patch({ extractedColors: null }); }
     };
-    img.onerror = () => patch({ logoFetchOk: false, extractedColors: null });
-    img.src = `https://logo.clearbit.com/${domain}`;
+    sample.onerror = () => patch({ extractedColors: null });
+    sample.src = url;
   };
 
   // ---- handlers ----
@@ -1369,7 +1380,7 @@ export function App() {
 
   const swatches = [brand.primary, brand.secondary, brand.accent, '#1c1c1c'];
   const domain = domainFromWebsite(s.website);
-  const logoFetchUrl = domain ? `https://logo.clearbit.com/${domain}` : '';
+  const logoFetchUrl = logoUrlForDomain(domain);
   const showUploadedLogo = !!s.logoDataUrl;
   const showFetchedLogo = !showUploadedLogo && s.logoFetchOk === true && !s.skipWebsite;
   const showInitialsLogo = !showUploadedLogo && !showFetchedLogo;
