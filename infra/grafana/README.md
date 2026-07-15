@@ -69,7 +69,9 @@ deployer. `ce34e7e5-…` is the Azure Managed Grafana first-party app id used fo
 |---|---|---|
 | `ic-hack-pwa-payment-failed-spike` | `pwa.payment_failed` count > `paymentFailedThreshold` (default 5) | 15m / 5m |
 | `ic-hack-publish-failures` | any `ic.biller.publication.results` with `outcome == "failed"` | 15m / 5m |
-| `ic-hack-telemetry-silence` | `requests` are flowing but zero `customEvents` for the lookback window (default 1h) | 1h / 15m |
+| `ic-hack-telemetry-silence` | at least `telemetrySilenceMinRequests` (default 20) non-health `requests` are flowing but zero `customEvents` for the lookback window (default 1h) | 1h / 15m |
+
+The telemetry-silence rule excludes health/readiness probe requests (`url has "/health/"` or `name has "health"`) and requires a minimum non-health request count so it doesn't false-fire on probe-only traffic during genuine off-hours.
 
 The action group is created **with no receivers** unless you pass an email. Add one at deploy time:
 

@@ -19,6 +19,9 @@ param paymentFailedThreshold int = 5
 @description('Lookback window, in hours, for the telemetry-silence alert.')
 param telemetrySilenceLookbackHours int = 1
 
+@description('Minimum non-health request count over the lookback window before the telemetry-silence alert can fire. Guards against firing on health-probe-only traffic during genuine off-hours.')
+param telemetrySilenceMinRequests int = 20
+
 var emailReceivers = empty(alertEmailAddress)
   ? []
   : [
@@ -123,7 +126,7 @@ resource telemetrySilence 'Microsoft.Insights/scheduledQueryRules@2023-12-01' = 
     criteria: {
       allOf: [
         {
-          query: 'let lookback = ${telemetrySilenceLookbackHours}h;\nlet event_count = toscalar(customEvents | where timestamp > ago(lookback) | count);\nlet request_count = toscalar(requests | where timestamp > ago(lookback) | count);\nprint silent = iff(request_count > 0 and event_count == 0, 1, 0)\n| where silent == 1'
+          query: 'let lookback = ${telemetrySilenceLookbackHours}h;\nlet event_count = toscalar(customEvents | where timestamp > ago(lookback) | count);\nlet request_count = toscalar(requests | where timestamp > ago(lookback) | where url !has "/health/" and name !has "health" | count);\nprint silent = iff(request_count >= ${telemetrySilenceMinRequests} and event_count == 0, 1, 0)\n| where silent == 1'
           timeAggregation: 'Count'
           operator: 'GreaterThan'
           threshold: 0
