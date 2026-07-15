@@ -19,10 +19,15 @@ resources:
   - frontends.yaml
 
 # Cosmos-backed persistence + workload-identity opt-in for the foundation services, pointed at
-# the dedicated nonprod Cosmos account. The workload identity is federated to
-# system:serviceaccount:ic-nonprod:ic-workload (infra/bicep), so these pods authenticate here too.
+# the dedicated nonprod Cosmos account. The dedicated nonprod identity
+# (uami-ic-hack-nonprod-workload) is federated to system:serviceaccount:ic-nonprod:ic-workload
+# (infra/bicep) and holds data access on nonprod Cosmos only, so these pods authenticate here
+# without any path to prod Cosmos.
 patches:
   - path: cosmos-persistence.yaml
+  # Nonprod-only: point the ic-workload service account at the DEDICATED nonprod workload
+  # identity so its pods can reach only the nonprod Cosmos account (data-plane isolation).
+  - path: service-account.yaml
   # Nonprod-only: enable the test-data purge endpoint so per-PR functional tests clean up.
   - path: purge-flag.yaml
 

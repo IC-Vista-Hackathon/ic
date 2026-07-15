@@ -56,7 +56,7 @@ Re-run the same command to apply changes; Bicep is idempotent (ARM incremental d
 | Cosmos DB (serverless), two accounts | `cosmos-ic-hack-<suffix>` (prod) and `cosmos-ic-hack-nonprod-<suffix>` (per-PR nonprod) — same containers per entities.md, partitioned `/biller_id` (`/id` for `billers`), so nonprod smoke tests never touch prod data |
 | AI Foundry account + project | Hosts agents and an optional authenticated `ic-shared-context-mcp` project connection (services.md's "AI Foundry" plane) |
 | AKS (2-4 node autoscale, kubenet) | Runs services + agents |
-| User-assigned managed identities | `ic-workload` authenticates to Cosmos, AI Foundry, and Blob read; `biller-publisher` authenticates to Cosmos and Blob write with no secrets |
+| User-assigned managed identities | `uami-ic-hack-workload` authenticates to **prod** Cosmos, AI Foundry, and Blob read; `uami-ic-hack-nonprod-workload` authenticates to **nonprod** Cosmos only (per-env data-plane isolation — a nonprod pod can never reach prod Cosmos); `uami-ic-hack-publisher` authenticates to Cosmos and Blob write. All secret-less |
 | Application Insights (workspace-based, on `log-ic-hack`) | Correlated traces/logs for services using the Azure Monitor OpenTelemetry Distro — just needs the `appInsightsConnectionString` output, no in-cluster OTEL collector |
 | Azure Monitor workspace | Metrics backend for Azure Monitor managed Prometheus |
 | AKS managed Prometheus (`azureMonitorProfile.metrics` + DCE/DCR/DCRA) | Scrapes Kubernetes + `kube-state-metrics`; app metrics can be added later by exposing a Prometheus-format `/metrics` endpoint (OTEL's Prometheus exporter) — no scrape-config wiring included yet |
@@ -69,6 +69,11 @@ Re-run the same command to apply changes; Bicep is idempotent (ARM incremental d
   different values via `-p workloadNamespace=... workloadServiceAccountName=...`) to pick up the
   federated identity — annotate that service account with the workload identity's client ID
   (`workloadIdentityClientId` output) per [AKS Workload Identity](https://learn.microsoft.com/azure/aks/workload-identity-overview).
+- The nonprod (`ic-nonprod`) `ic-workload` service account uses a **separate** identity: annotate
+  it with the `nonprodWorkloadIdentityClientId` output (this is done in
+  `deploy/kubernetes/overlays/nonprod/service-account.yaml`, which ships a placeholder that must be
+  replaced with the output value after apply). This keeps nonprod data access scoped to the nonprod
+  Cosmos account only.
 - The publication worker runs as `biller-publisher`; annotate it with the
   `publisherIdentityClientId` output. It intentionally receives no AI Foundry or Kubernetes
   mutation permissions.
