@@ -1,11 +1,13 @@
 using System.Diagnostics;
 using System.Text.RegularExpressions;
 using Pronto.Agentic.Orchestration.Abstractions;
-using Pronto.Agentic.Orchestration.Execution;
+using Pronto.BillerExperience.Api.Application.Orchestration;
+using Pronto.BillerExperience.Api.Application.Agents;
 using Pronto.BillerExperience.Api.Domain;
 using Pronto.BillerExperience.Api.Infrastructure;
 using Pronto.BillerExperience.Api.Infrastructure.AI;
 using Pronto.BillerExperience.Api.Infrastructure.Persistence;
+using Pronto.BillerExperience.Api.Infrastructure.Research;
 using Pronto.BillerExperience.Api.Infrastructure.SupportingServices;
 using Pronto.BillerExperience.Contracts.V1.Billers;
 using Pronto.BillerExperience.Contracts.V1.Deployments;
@@ -17,8 +19,11 @@ namespace Pronto.BillerExperience.Api.Application;
 public sealed partial class BillerOnboardingService(
     IBillerExperienceRepository repository,
     IExperienceDraftGenerator draftGenerator,
+    IOrchestrationRunner orchestrationRunner,
     ILogger<BillerOnboardingService> logger,
-    IInvoiceSeeder? invoiceSeeder = null)
+    IBillerResearchCoordinator? researchCoordinator = null,
+    IInvoiceSeeder? invoiceSeeder = null,
+    AgentContextService? agentContextService = null)
 {
     private const string RunId = "onboarding";
 
@@ -27,14 +32,18 @@ public sealed partial class BillerOnboardingService(
         CancellationToken cancellationToken)
     {
         using var activity = StartActivity("biller.create");
-        ValidateCreateRequest(request);
+        // Forgive-and-normalize: casing/whitespace are fixed for the caller; validation then
+        // rejects only what normalization can't repair (bad characters, bad length).
+        var normalizedSlug = request.Slug.Trim().ToLowerInvariant();
+        ValidateCreateRequest(request with { Slug = normalizedSlug });
         var id = Guid.NewGuid().ToString("N");
         activity?.SetTag("ic.biller_id", id);
         var now = DateTimeOffset.UtcNow;
+        var slug = await ReserveSlugAsync(normalizedSlug, cancellationToken);
         var biller = new BillerRecord(
             id,
             request.DisplayName.Trim(),
-            request.Slug.Trim().ToLowerInvariant(),
+            slug,
             request.BillType.Trim(),
             request.PostalCode.Trim(),
             request.Website,
@@ -63,8 +72,18 @@ public sealed partial class BillerOnboardingService(
             now);
 
         await repository.CreateBillerAsync(biller, cancellationToken);
+        // Note: check-then-create, not an atomic reservation — adequate while onboarding
+        // volume is demo-scale; a slug reservation document makes this race-free later.
         var savedExperience = await repository.SaveExperienceAsync(experience, null, cancellationToken);
         var savedRun = await repository.SaveRunAsync(run, null, cancellationToken);
+        if (agentContextService is not null)
+        {
+            await agentContextService.EnsureAsync(
+                id,
+                savedRun.Id,
+                $"Create, review, approve, and publish a safe branded payment experience for {biller.Name}.",
+                cancellationToken);
+        }
         await (invoiceSeeder ?? new NullInvoiceSeeder()).SeedAsync(id, biller.BillType, cancellationToken);
         LogBillerCreated(logger, id, savedRun.Id, draftGenerator.Provider);
         return (Map(biller), Map(savedRun), Map(savedExperience));
@@ -101,31 +120,18 @@ public sealed partial class BillerOnboardingService(
             billerId,
             run.Id);
         var eventSink = new AgentActivityRepositorySink(repository, billerId, run.Id, logger);
-        var researchStep = new ObservableOrchestrationStep<BillerRecord, BillerRecord>(
-            "biller-research", "Biller Research", "Reviewing the supplied biller profile and brand context",
-            static (input, _, _) => ValueTask.FromResult(input), eventSink);
-        await researchStep.ExecuteAsync(biller, orchestrationContext, cancellationToken);
-
-        var designStep = new ObservableOrchestrationStep<ExperienceRecord, DraftGenerationResult>(
-            "experience-designer", "Experience Designer", "Applying copy, layout, and action changes to the live preview",
-            (input, _, token) => draftGenerator.GenerateAsync(biller, input, messages, token), eventSink);
-        var generated = await designStep.ExecuteAsync(experience, orchestrationContext, cancellationToken);
-
-        var accessibilityStep = new ObservableOrchestrationStep<DraftGenerationResult, DraftGenerationResult>(
-            "accessibility", "Accessibility", "Checking colors, hierarchy, and action clarity",
-            static (input, _, _) => ValueTask.FromResult(input), eventSink);
-        generated = await accessibilityStep.ExecuteAsync(generated, orchestrationContext, cancellationToken);
-
-        var complianceStep = new ObservableOrchestrationStep<DraftGenerationResult, DraftGenerationResult>(
-            "compliance", "Compliance", "Checking payment capabilities and required review guidance",
-            (input, _, _) => ValueTask.FromResult(input with
-            {
-                Findings = input.Findings.Concat(ValidateDefinition(billerId, input.Definition))
-                    .GroupBy(finding => finding.Code, StringComparer.Ordinal)
-                    .Select(group => group.First())
-                    .ToArray()
-            }), eventSink);
-        generated = await complianceStep.ExecuteAsync(generated, orchestrationContext, cancellationToken);
+        var workflow = new BillerExperienceChatWorkflow(
+            new ExperienceDesignAgent(draftGenerator),
+            new AccessibilityReviewAgent(),
+            new ComplianceReviewAgent(ValidateDefinition),
+            researchCoordinator,
+            logger,
+            researchRequired: false);
+        var generated = await orchestrationRunner.RunAsync(
+            workflow,
+            new BillerExperienceChatWorkflowInput(biller, experience, messages, eventSink),
+            orchestrationContext,
+            cancellationToken);
         var assistantMessage = new OnboardingChatMessage("assistant", generated.Reply, DateTimeOffset.UtcNow);
         var nextState = generated.MissingFields.Count == 0
             ? OnboardingSessionState.DraftReady
@@ -265,7 +271,16 @@ public sealed partial class BillerOnboardingService(
         CancellationToken cancellationToken)
     {
         var run = await GetRequiredRunAsync(billerId, cancellationToken);
-        return (Map(run), run.AgentActivity ?? []);
+        var appendedActivity = await repository.GetAgentActivityAsync(billerId, run.Id, cancellationToken);
+        var activity = (run.AgentActivity ?? [])
+            .Concat(appendedActivity)
+            .GroupBy(item => item.EventId, StringComparer.Ordinal)
+            .Select(group => group.OrderByDescending(item => item.OccurredAt).First())
+            .OrderBy(item => item.Sequence)
+            .ThenBy(item => item.OccurredAt)
+            .TakeLast(100)
+            .ToArray();
+        return (Map(run), activity);
     }
 
     public async ValueTask<DeploymentStatusResponse> GetDeploymentAsync(
@@ -274,6 +289,42 @@ public sealed partial class BillerOnboardingService(
         CancellationToken cancellationToken) =>
         Map(await repository.GetDeploymentAsync(billerId, deploymentId, cancellationToken)
             ?? throw new KeyNotFoundException($"Deployment '{deploymentId}' was not found for biller '{billerId}'."));
+
+    /// <summary>
+    /// Published artifacts and public reads are keyed by slug, so two billers must never
+    /// share one. Appends -2, -3, … until free.
+    /// </summary>
+    private async ValueTask<string> ReserveSlugAsync(string requested, CancellationToken cancellationToken)
+    {
+        var candidate = requested;
+        for (var suffix = 2; await repository.SlugExistsAsync(candidate, cancellationToken); suffix++)
+        {
+            candidate = SuffixSlug(requested, suffix);
+            if (!SlugRegex().IsMatch(candidate))
+            {
+                LogValidationError(logger, null, "slug", "Slug cannot be auto-deduplicated.");
+                throw new ArgumentException(
+                    $"Slug '{requested}' cannot be auto-deduplicated within the 63-character limit.");
+            }
+        }
+
+        return candidate;
+    }
+
+    /// <summary>
+    /// Appends -2, -3, … while keeping the result DNS-safe: the base is truncated so the
+    /// total stays within 63 characters, and a hyphen exposed by the cut is trimmed so the
+    /// suffix never produces a double hyphen or a dangling one.
+    /// </summary>
+    private static string SuffixSlug(string baseSlug, int suffix)
+    {
+        var tail = $"-{suffix}";
+        var maxBaseLength = 63 - tail.Length;
+        var trimmedBase = baseSlug.Length <= maxBaseLength
+            ? baseSlug
+            : baseSlug[..maxBaseLength].TrimEnd('-');
+        return $"{trimmedBase}{tail}";
+    }
 
     private async ValueTask<BillerRecord> GetRequiredBillerAsync(string billerId, CancellationToken cancellationToken) =>
         await repository.GetBillerAsync(billerId, cancellationToken)

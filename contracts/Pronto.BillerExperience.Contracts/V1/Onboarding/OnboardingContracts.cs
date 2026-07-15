@@ -23,15 +23,22 @@ public sealed record AgentActivityEvent(
     AgentActivityStatus Status,
     string Summary,
     DateTimeOffset OccurredAt,
-    string? TraceId = null);
+    string? TraceId = null,
+    string? ErrorCode = null,
+    bool Retryable = false,
+    int Attempt = 1,
+    double? DurationMs = null);
 
 public enum AgentActivityStatus
 {
+    Discovered,
     Queued,
     Running,
     Completed,
     NeedsInput,
-    Failed
+    Failed,
+    Retrying,
+    Degraded
 }
 
 public sealed record OnboardingSessionResponse(

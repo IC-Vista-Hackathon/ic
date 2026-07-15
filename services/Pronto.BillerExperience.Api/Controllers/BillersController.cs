@@ -95,8 +95,13 @@ public sealed partial class BillersController(
     {
         Response.ContentType = "text/event-stream";
         Response.Headers.CacheControl = "no-cache";
+        Response.Headers["X-Accel-Buffering"] = "no";
+        await Response.WriteAsync("retry: 2000\n\n", cancellationToken);
+        await Response.Body.FlushAsync(cancellationToken);
         var previousState = string.Empty;
-        var sentActivityIds = new HashSet<string>(StringComparer.Ordinal);
+        var lastSequence = long.TryParse(Request.Headers["Last-Event-ID"].FirstOrDefault(), out var parsedSequence)
+            ? parsedSequence
+            : 0;
         try
         {
             for (var index = 0; index < 240 && !cancellationToken.IsCancellationRequested; index++)
@@ -110,13 +115,14 @@ public sealed partial class BillersController(
                     await Response.Body.FlushAsync(cancellationToken);
                     previousState = state;
                 }
-                foreach (var item in activity.Where(item => sentActivityIds.Add(item.EventId)))
+                foreach (var item in activity.Where(item => item.Sequence > lastSequence).OrderBy(item => item.Sequence))
                 {
                     var payload = JsonSerializer.Serialize(item, jsonOptions.Value.JsonSerializerOptions);
-                    await Response.WriteAsync($"event: agent_activity\ndata: {payload}\n\n", cancellationToken);
+                    await Response.WriteAsync($"id: {item.Sequence}\nevent: agent_activity\ndata: {payload}\n\n", cancellationToken);
                     await Response.Body.FlushAsync(cancellationToken);
+                    lastSequence = item.Sequence;
                 }
-                await Task.Delay(TimeSpan.FromMilliseconds(500), cancellationToken);
+                await Task.Delay(TimeSpan.FromMilliseconds(750), cancellationToken);
             }
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
@@ -125,8 +131,20 @@ public sealed partial class BillersController(
         }
         catch (Exception exception)
         {
-            LogStreamError(logger, billerId, Activity.Current?.TraceId.ToString(), exception);
-            throw;
+            var traceId = Activity.Current?.TraceId.ToString();
+            LogStreamError(logger, billerId, traceId, exception);
+            if (!Response.HttpContext.RequestAborted.IsCancellationRequested)
+            {
+                var payload = JsonSerializer.Serialize(new
+                {
+                    code = "agent_stream_failed",
+                    message = "Agent activity is temporarily unavailable.",
+                    trace_id = traceId,
+                    retryable = true
+                }, jsonOptions.Value.JsonSerializerOptions);
+                await Response.WriteAsync($"event: stream_error\ndata: {payload}\n\n", CancellationToken.None);
+                await Response.Body.FlushAsync(CancellationToken.None);
+            }
         }
     }
 

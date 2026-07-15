@@ -29,10 +29,14 @@ test('payer completes lookup -> method -> review -> pay', async ({ page }) => {
     route.fulfill({ contentType: 'application/json', body: JSON.stringify({ invoices: [invoice] }) }),
   );
   await page.route(/\/payers(\?|\/|$)/, route => route.fulfill({ status: 404, contentType: 'application/json', body: '{}' }));
+  // Server-side quote drives the enabled pay button; mock it before the generic /payments route.
+  await page.route(/\/payments\/quote/, route =>
+    route.fulfill({ contentType: 'application/json', body: JSON.stringify({ fee_cents: 250, total_cents: 12750 }) }),
+  );
   await page.route(/\/payments(\?|$)/, route =>
     route.fulfill({
       contentType: 'application/json',
-      body: JSON.stringify({ confirmation: 'PRONTO-ABC123', amount_cents: 12500, fee_cents: 250, status: 'succeeded' }),
+      body: JSON.stringify({ confirmation: 'PRONTO-ABC123', amount_cents: 12500, fee_cents: 250, total_cents: 12750, status: 'succeeded' }),
     }),
   );
 
