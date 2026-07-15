@@ -1,5 +1,6 @@
 using System.Security.Cryptography;
 using System.Text;
+using System.Text.Json;
 using Azure.AI.Projects;
 using Azure.AI.Projects.Agents;
 using Microsoft.Extensions.Options;
@@ -137,9 +138,31 @@ public sealed class FoundryAgentAdministrationGateway(AIProjectClient project, I
 
     private bool IsRequiredMcpTool(object tool)
     {
-        if (tool.GetType().Name != "InternalMCPTool") return false;
         var connection = tool.GetType().GetProperty("ProjectConnectionId")?.GetValue(tool) as string;
         var label = tool.GetType().GetProperty("ServerLabel")?.GetValue(tool) as string;
-        return string.Equals(connection, configuration.McpConnectionId, StringComparison.OrdinalIgnoreCase) && label == "ic_shared_context";
+        if (IsExpectedConnection(connection) && string.Equals(label, "ic_shared_context", StringComparison.OrdinalIgnoreCase))
+            return true;
+
+        try
+        {
+            using var document = JsonDocument.Parse(ModelReaderWriter.Write(tool, ModelReaderWriterOptions.Json));
+            var root = document.RootElement;
+            var serializedConnection = root.TryGetProperty("project_connection_id", out var connectionProperty)
+                ? connectionProperty.GetString()
+                : null;
+            var serializedLabel = root.TryGetProperty("server_label", out var labelProperty)
+                ? labelProperty.GetString()
+                : null;
+            return IsExpectedConnection(serializedConnection) &&
+                   string.Equals(serializedLabel, "ic_shared_context", StringComparison.OrdinalIgnoreCase);
+        }
+        catch (Exception)
+        {
+            return false;
+        }
     }
+
+    private bool IsExpectedConnection(string? connection) =>
+        string.Equals(connection, configuration.McpConnectionId, StringComparison.OrdinalIgnoreCase) ||
+        connection?.EndsWith($"/{configuration.McpConnectionId}", StringComparison.OrdinalIgnoreCase) == true;
 }
