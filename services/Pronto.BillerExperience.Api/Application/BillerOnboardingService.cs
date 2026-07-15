@@ -231,6 +231,9 @@ public sealed partial class BillerOnboardingService(
                 discoveryTurn = billingDiscovery.ApplyAnswer(billerId, run.BillingProfile, request.Message.Trim());
             }
         }
+        var effectiveBillingProfile = discoveryTurn?.State.Profile ?? run.BillingProfile ?? BillingProfile.Empty;
+        activity?.SetTag("ic.billing.category_count", effectiveBillingProfile.Categories.Count);
+        activity?.SetTag("ic.billing.discovery_complete", billingDiscovery?.Inspect(effectiveBillingProfile).Progress.IsComplete ?? false);
         var orchestrationContext = new OrchestrationContext(
             run.Id,
             Activity.Current?.TraceId.ToString() ?? Guid.NewGuid().ToString("N"),
@@ -246,7 +249,7 @@ public sealed partial class BillerOnboardingService(
             researchRequired: false);
         var generated = await orchestrationRunner.RunAsync(
             workflow,
-            new BillerExperienceChatWorkflowInput(biller, experience, messages, eventSink),
+            new BillerExperienceChatWorkflowInput(biller, experience, messages, effectiveBillingProfile, eventSink),
             orchestrationContext,
             cancellationToken);
         var boundedReply = discoveryTurn is null
@@ -261,7 +264,12 @@ public sealed partial class BillerOnboardingService(
         {
             // The draft generator's schema doesn't own the design brief; carry it forward
             // so the bespoke-skin input survives each onboarding turn.
-            Definition = generated.Definition with { BillerId = billerId, Brief = generated.Definition.Brief ?? experience.Definition.Brief },
+            Definition = generated.Definition with
+            {
+                BillerId = billerId,
+                Brief = generated.Definition.Brief ?? experience.Definition.Brief,
+                Billing = BillingProfilePresentation.Project(effectiveBillingProfile)
+            },
             Findings = generated.Findings
         };
         var latestRun = await GetRequiredRunAsync(billerId, cancellationToken);
@@ -271,7 +279,7 @@ public sealed partial class BillerOnboardingService(
             Step = run.Step + 1,
             Messages = messages.Append(assistantMessage).ToArray(),
             MissingFields = missingFields,
-            BillingProfile = discoveryTurn?.State.Profile ?? run.BillingProfile,
+            BillingProfile = effectiveBillingProfile,
             UpdatedAt = DateTimeOffset.UtcNow
         };
 

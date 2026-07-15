@@ -109,6 +109,12 @@ function css(text: string): CSSProperties {
   return style as CSSProperties;
 }
 
+function paymentTermsLabel(mode: string | number | null | undefined, maximum?: number | null): string {
+  const installments = mode === 'installments_allowed' || mode === 1;
+  if (!installments) return 'Pay in full';
+  return maximum ? `Up to ${maximum} installments` : 'Installments available';
+}
+
 type VerticalId = 'insurance' | 'utilities' | 'tax' | 'other';
 type MethodType = 'card' | 'bank' | 'applepay' | 'googlepay' | 'paypal';
 
@@ -1293,6 +1299,7 @@ export function App() {
   // reflected in the preview once accepted — keeping the preview and the proposal summary in agreement.
   const previewHeading = s.backendDraft?.definition.content.heading?.trim() ?? '';
   const primaryActionLabel = s.backendDraft?.definition.ui?.actions?.[0]?.label?.trim() || 'Pay Now';
+  const billingCategories = s.backendDraft?.definition.billing?.categories ?? [];
 
   const guestCheckoutAllowedLabel = s.guestCheckoutAllowed ? 'Allowed' : 'Not allowed';
   const offerAutopayLabel = s.offerAutopay ? 'Yes' : 'No';
@@ -2235,6 +2242,22 @@ export function App() {
 
               {s.payerStep === 0 && previewHeading && (
                 <h2 style={css('font-size:22px;font-weight:700;margin-bottom:var(--invoicecloud-spacing-m)')}>{previewHeading}</h2>
+              )}
+
+              {s.payerStep === 0 && billingCategories.length > 0 && (
+                <section aria-label="Billing options" style={css('margin-bottom:var(--invoicecloud-spacing-l);border:1px solid var(--invoicecloud-surface-default-border);border-radius:12px;padding:var(--invoicecloud-spacing-m)')}>
+                  <div style={css('font-size:13px;font-weight:700;margin-bottom:var(--invoicecloud-spacing-s)')}>What you can pay</div>
+                  <div style={css('display:grid;grid-template-columns:repeat(auto-fit,minmax(190px,1fr));gap:var(--invoicecloud-spacing-s)')}>
+                    {billingCategories.map(category => (
+                      <article key={category.id} style={css('background:var(--invoicecloud-slate-10);border-radius:10px;padding:var(--invoicecloud-spacing-s)')}>
+                        <div style={css('font-size:14px;font-weight:700')}>{category.display_name}</div>
+                        <div style={css('font-size:12px;color:var(--invoicecloud-utility-neutral-70);margin-top:3px')}>{category.cadence_label}</div>
+                        <div style={css('font-size:12px;margin-top:6px')}>{paymentTermsLabel(category.payment_mode, category.maximum_installments)}</div>
+                        <div style={css('font-size:11px;color:var(--invoicecloud-utility-neutral-60);margin-top:4px')}>{category.state_summary}</div>
+                      </article>
+                    ))}
+                  </div>
+                </section>
               )}
 
               {s.payerStep === 0 && (

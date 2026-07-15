@@ -9,6 +9,19 @@ export interface ExperienceDefinition {
   enabled_payment_capabilities: string[];
   ui?: ExperienceUi;
   preferences?: ExperiencePreferences;
+  billing?: BillingPresentation;
+}
+
+export interface BillingPresentation {
+  categories: Array<{
+    id: string;
+    display_name: string;
+    cadence?: string | number | null;
+    cadence_label: string;
+    state_summary: string;
+    payment_mode?: 'pay_in_full'|'installments_allowed'|number|null;
+    maximum_installments?: number|null;
+  }>;
 }
 
 export interface ExperienceUi { layout: string; theme: { density: string; radius: string; surface: string }; sections: Array<{ id: string; type: string; variant: string; visible: boolean }>; actions: Array<{ id: string; label: string; action: number | string; variant: string }> }

@@ -3,6 +3,7 @@ using System.Text.RegularExpressions;
 using Pronto.BillerExperience.Api.Domain;
 using Pronto.BillerExperience.Api.Infrastructure;
 using Pronto.BillerExperience.Contracts.V1.Experiences;
+using Pronto.BillerExperience.Contracts.V1.Billing;
 using Pronto.BillerExperience.Contracts.V1.Onboarding;
 using Pronto.BillerExperience.Contracts.V1.Research;
 
@@ -17,6 +18,7 @@ public sealed partial class DeterministicExperienceDraftGenerator(
         BillerRecord biller,
         ExperienceRecord current,
         IReadOnlyList<OnboardingChatMessage> messages,
+        BillingProfile billingProfile,
         BillerResearchResponse research,
         CancellationToken cancellationToken)
     {

@@ -106,6 +106,23 @@ public sealed class BillingDiscoveryEngineTests
     }
 
     [Fact]
+    public void FourBaseAnswersAreCapturedBeforeDerivedClarifications()
+    {
+        var state = _engine.ApplyAnswer("renata", null, "Dues and special assessment").State;
+        state = _engine.ApplyAnswer("renata", state.Profile, "Dues quarterly and special assessment one-time").State;
+        state = _engine.ApplyAnswer("renata", state.Profile,
+            "Dues have a 10-day grace period, no state change for special assessment").State;
+
+        Assert.Equal(BillingDiscoveryDimension.PaymentTerms, state.CurrentQuestion?.Dimension);
+
+        state = _engine.ApplyAnswer("renata", state.Profile,
+            "Special assessment allows up to 4 installments, dues are pay-in-full").State;
+
+        Assert.All(state.Profile.Categories, category => Assert.NotNull(category.PaymentTerms));
+        Assert.Equal("state_transition_gap", state.CurrentQuestion?.ReasonCode);
+    }
+
+    [Fact]
     public void ReopeningAnAnswerInvalidatesConfirmationAndDependentReadiness()
     {
         var profile = new BillingProfile("1.0",
@@ -163,5 +180,14 @@ public sealed class BillingDiscoveryEngineTests
         Assert.Equal(SettlementMode.InstallmentsAllowed, assessment.PaymentTerms?.Mode);
         Assert.Equal(4, assessment.PaymentTerms?.MaximumInstallments);
         Assert.Equal(BillingDiscoveryDimension.Confirmation, response.Session.CurrentQuestion?.Dimension);
+        var draft = Assert.IsType<ExperienceRevisionResponse>(response.Draft);
+        Assert.Equal(3, draft.Definition.Billing?.Categories.Count);
+        Assert.Equal("Up to 4 installments", DescribeTerms(
+            Assert.Single(draft.Definition.Billing!.Categories, category => category.DisplayName == "Special Assessment")));
     }
+
+    private static string DescribeTerms(BillingPresentationCategory category) =>
+        category.PaymentMode == SettlementMode.InstallmentsAllowed
+            ? $"Up to {category.MaximumInstallments} installments"
+            : "Pay in full";
 }

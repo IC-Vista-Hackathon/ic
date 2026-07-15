@@ -1,4 +1,5 @@
 using System.Text.Json.Serialization;
+using Pronto.BillerExperience.Contracts.V1.Billing;
 
 namespace Pronto.BillerExperience.Contracts.V1.Experiences;
 
@@ -11,7 +12,24 @@ public sealed record BillerExperienceDefinition(
     IReadOnlyList<string> EnabledPaymentCapabilities,
     ExperienceUi? Ui = null,
     ExperiencePreferences? Preferences = null,
-    DesignBrief? Brief = null);
+    DesignBrief? Brief = null,
+    BillingPresentation? Billing = null);
+
+/// <summary>
+/// Public-safe projection of the server-owned billing policy. It contains only the details
+/// needed to explain the biller's experience; operational services remain the authority for
+/// invoice state transitions and payment eligibility.
+/// </summary>
+public sealed record BillingPresentation(IReadOnlyList<BillingPresentationCategory> Categories);
+
+public sealed record BillingPresentationCategory(
+    string Id,
+    string DisplayName,
+    BillingCadenceKind? Cadence,
+    string CadenceLabel,
+    string StateSummary,
+    SettlementMode? PaymentMode,
+    int? MaximumInstallments = null);
 
 // The bounded creative input the bespoke-skin generator (Claude Opus) is allowed to
 // author against. Deliberately separate from the functional contract

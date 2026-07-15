@@ -2,6 +2,7 @@ using Pronto.BillerExperience.Api.Domain;
 using Pronto.BillerExperience.Api.Application.Compliance;
 using Pronto.BillerExperience.Api.Infrastructure.AI;
 using Pronto.BillerExperience.Contracts.V1.Experiences;
+using Pronto.BillerExperience.Contracts.V1.Billing;
 using Pronto.BillerExperience.Contracts.V1.Onboarding;
 using Pronto.BillerExperience.Contracts.V1.Research;
 
@@ -17,6 +18,7 @@ internal interface IExperienceDesignAgent
         BillerRecord biller,
         ExperienceRecord experience,
         IReadOnlyList<OnboardingChatMessage> messages,
+        BillingProfile billingProfile,
         BillerResearchResponse research,
         CancellationToken cancellationToken);
 }
@@ -42,9 +44,10 @@ internal sealed class ExperienceDesignAgent(IExperienceDraftGenerator generator)
         BillerRecord biller,
         ExperienceRecord experience,
         IReadOnlyList<OnboardingChatMessage> messages,
+        BillingProfile billingProfile,
         BillerResearchResponse research,
         CancellationToken cancellationToken) =>
-        generator.GenerateAsync(biller, experience, messages, research, cancellationToken);
+        generator.GenerateAsync(biller, experience, messages, billingProfile, research, cancellationToken);
 }
 
 internal sealed class AccessibilityReviewAgent : IAccessibilityReviewAgent

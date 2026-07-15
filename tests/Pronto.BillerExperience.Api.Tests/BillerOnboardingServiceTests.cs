@@ -12,6 +12,7 @@ using Pronto.BillerExperience.Api.Infrastructure.Persistence;
 using Pronto.BillerExperience.Api.Infrastructure.Research;
 using Pronto.BillerExperience.Api.Infrastructure.SupportingServices;
 using Pronto.BillerExperience.Contracts.V1.Billers;
+using Pronto.BillerExperience.Contracts.V1.Billing;
 using Pronto.BillerExperience.Contracts.V1.Deployments;
 using Pronto.BillerExperience.Contracts.V1.Experiences;
 using Pronto.BillerExperience.Contracts.V1.Onboarding;
@@ -609,6 +610,7 @@ public sealed class BillerOnboardingServiceTests
             Pronto.BillerExperience.Api.Domain.BillerRecord biller,
             Pronto.BillerExperience.Api.Domain.ExperienceRecord current,
             IReadOnlyList<OnboardingChatMessage> messages,
+            BillingProfile billingProfile,
             BillerResearchResponse research,
             CancellationToken cancellationToken) =>
             ValueTask.FromException<DraftGenerationResult>(new InvalidOperationException("designer failed"));
@@ -626,11 +628,12 @@ public sealed class BillerOnboardingServiceTests
             Pronto.BillerExperience.Api.Domain.BillerRecord biller,
             Pronto.BillerExperience.Api.Domain.ExperienceRecord current,
             IReadOnlyList<OnboardingChatMessage> messages,
+            BillingProfile billingProfile,
             BillerResearchResponse research,
             CancellationToken cancellationToken)
         {
             Research = research;
-            return inner.GenerateAsync(biller, current, messages, research, cancellationToken);
+            return inner.GenerateAsync(biller, current, messages, billingProfile, research, cancellationToken);
         }
     }
 

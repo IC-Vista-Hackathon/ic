@@ -173,6 +173,19 @@ public sealed partial class BillingDiscoveryEngine(ILogger<BillingDiscoveryEngin
                     .Any(word => word.Length > 3 && clause.Contains(word, StringComparison.OrdinalIgnoreCase))).ToArray();
             foreach (var category in matched) assignments[category.Id] = rule;
         }
+        // Commas often separate category assignments, but can also be part of one rule. Slice
+        // from each named category to the next named category instead of splitting every comma.
+        var positioned = profile.Categories
+            .Select(category => (Category: category, Index: CategoryIndex(text, category)))
+            .Where(item => item.Index >= 0)
+            .OrderBy(item => item.Index)
+            .ToArray();
+        for (var index = 0; index < positioned.Length; index++)
+        {
+            var start = positioned[index].Index;
+            var end = index + 1 < positioned.Length ? positioned[index + 1].Index : text.Length;
+            if (TryStateRule(text[start..end], out var rule)) assignments[positioned[index].Category.Id] = rule;
+        }
         if (assignments.Count == 0 && TryStateRule(text, out var single)) assignments[current.CategoryId!] = single;
         if (assignments.Count == 0) return profile;
         return profile with
@@ -247,12 +260,14 @@ public sealed partial class BillingDiscoveryEngine(ILogger<BillingDiscoveryEngin
         foreach (var category in profile.Categories)
             questions.Add(new($"billing.category.{category.Id}.state_rules", BillingDiscoveryDimension.StateRules,
                 $"For {category.DisplayName}, what rules decide when payment is late or the policy/account changes state? Include any grace period and resulting state. Say 'none' explicitly if no rule applies.", category.Id, category.DisplayName, sequence++));
-        foreach (var category in profile.Categories.Where(NeedsResultingState))
-            questions.Add(new($"billing.category.{category.Id}.resulting_state", BillingDiscoveryDimension.StateRules,
-                $"You described when {category.DisplayName} changes, but not the resulting policy/account state. Does it become late, delinquent, lapsed, suspended, cancelled, or another state?", category.Id, category.DisplayName, sequence++, "state_transition_gap"));
         foreach (var category in profile.Categories)
             questions.Add(new($"billing.category.{category.Id}.payment_terms", BillingDiscoveryDimension.PaymentTerms,
                 $"Can {category.DisplayName} be paid in installments, or must it be paid in full?", category.Id, category.DisplayName, sequence++));
+        // Complete the four base discovery dimensions before asking bounded, derived follow-ups.
+        // This keeps guided clients stable while still requiring every policy gap to be resolved.
+        foreach (var category in profile.Categories.Where(NeedsResultingState))
+            questions.Add(new($"billing.category.{category.Id}.resulting_state", BillingDiscoveryDimension.StateRules,
+                $"You described when {category.DisplayName} changes, but not the resulting policy/account state. Does it become late, delinquent, lapsed, suspended, cancelled, or another state?", category.Id, category.DisplayName, sequence++, "state_transition_gap"));
         foreach (var category in profile.Categories.Where(category => category.PaymentTerms is { Mode: SettlementMode.InstallmentsAllowed, LimitsConfirmed: false }))
             questions.Add(new($"billing.category.{category.Id}.installment_limits", BillingDiscoveryDimension.PaymentTerms,
                 $"What is the maximum number of installments for {category.DisplayName}? Say 'no fixed maximum' if it is decided case by case.", category.Id, category.DisplayName, sequence++, "missing_installment_limit"));
@@ -279,6 +294,18 @@ public sealed partial class BillingDiscoveryEngine(ILogger<BillingDiscoveryEngin
         : source with { Categories = source.Categories ?? [] };
 
     private static BillingCategory? Find(BillingProfile profile, string id) => profile.Categories.FirstOrDefault(category => category.Id == id);
+
+    private static int CategoryIndex(string text, BillingCategory category)
+    {
+        var index = text.IndexOf(category.DisplayName, StringComparison.OrdinalIgnoreCase);
+        if (index >= 0) return index;
+        return category.DisplayName.Split(' ', StringSplitOptions.RemoveEmptyEntries)
+            .Where(word => word.Length > 3)
+            .Select(word => text.IndexOf(word, StringComparison.OrdinalIgnoreCase))
+            .Where(value => value >= 0)
+            .DefaultIfEmpty(-1)
+            .Min();
+    }
 
     private static BillingProfile UpdateCategory(BillingProfile profile, string id, Func<BillingCategory, BillingCategory> update) =>
         profile with { Categories = profile.Categories.Select(category => category.Id == id ? update(category) : category).ToArray() };

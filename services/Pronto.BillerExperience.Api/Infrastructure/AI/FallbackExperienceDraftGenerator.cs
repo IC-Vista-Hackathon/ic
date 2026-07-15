@@ -1,6 +1,7 @@
 using Pronto.BillerExperience.Api.Domain;
 using Pronto.BillerExperience.Contracts.V1.Onboarding;
 using Pronto.BillerExperience.Contracts.V1.Research;
+using Pronto.BillerExperience.Contracts.V1.Billing;
 
 namespace Pronto.BillerExperience.Api.Infrastructure.AI;
 
@@ -15,12 +16,13 @@ public sealed partial class FallbackExperienceDraftGenerator(
         BillerRecord biller,
         ExperienceRecord current,
         IReadOnlyList<OnboardingChatMessage> messages,
+        BillingProfile billingProfile,
         BillerResearchResponse research,
         CancellationToken cancellationToken)
     {
         try
         {
-            return await primary.GenerateAsync(biller, current, messages, research, cancellationToken);
+            return await primary.GenerateAsync(biller, current, messages, billingProfile, research, cancellationToken);
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
@@ -29,7 +31,7 @@ public sealed partial class FallbackExperienceDraftGenerator(
         catch (Exception exception)
         {
             LogFallback(logger, biller.Id, exception);
-            var result = await fallback.GenerateAsync(biller, current, messages, research, cancellationToken);
+            var result = await fallback.GenerateAsync(biller, current, messages, billingProfile, research, cancellationToken);
             return result with { GenerationMode = GenerationModes.OfflineFallback };
         }
     }

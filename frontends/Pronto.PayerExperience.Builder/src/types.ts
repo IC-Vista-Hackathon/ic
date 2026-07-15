@@ -27,6 +27,17 @@ export interface ExperienceDefinition {
   enabled_payment_capabilities: string[];
   ui?: unknown;
   preferences?: unknown;
+  billing?: {
+    categories: Array<{
+      id: string;
+      display_name: string;
+      cadence?: string | number | null;
+      cadence_label: string;
+      state_summary: string;
+      payment_mode?: string | number | null;
+      maximum_installments?: number | null;
+    }>;
+  };
   // Persisted design brief (DesignBrief contract) when the onboarding agents produced one.
   brief?: {
     voice_and_tone: string;
