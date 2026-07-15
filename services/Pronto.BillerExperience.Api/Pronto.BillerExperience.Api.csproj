@@ -22,4 +22,7 @@
     <ProjectReference Include="..\..\libraries\Pronto.Agentic.Orchestration\Pronto.Agentic.Orchestration.csproj" />
     <ProjectReference Include="..\..\libraries\Pronto.ServiceDefaults\Pronto.ServiceDefaults.csproj" />
   </ItemGroup>
+  <ItemGroup>
+    <Content Include="..\..\agents\**\*.md" Link="agents\%(RecursiveDir)%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
 </Project>

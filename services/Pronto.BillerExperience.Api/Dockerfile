@@ -12,6 +12,7 @@ COPY contracts/Pronto.BillerExperience.Contracts/ contracts/Pronto.BillerExperie
 COPY contracts/Pronto.Invoice.Contracts/ contracts/Pronto.Invoice.Contracts/
 COPY libraries/Pronto.Agentic.Orchestration/ libraries/Pronto.Agentic.Orchestration/
 COPY libraries/Pronto.ServiceDefaults/ libraries/Pronto.ServiceDefaults/
+COPY agents/ agents/
 COPY services/Pronto.BillerExperience.Api/ services/Pronto.BillerExperience.Api/
 RUN dotnet publish services/Pronto.BillerExperience.Api/Pronto.BillerExperience.Api.csproj -c Release --no-restore -o /app/publish
 
