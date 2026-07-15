@@ -24,7 +24,7 @@ h1, h2, h3 { font-style: italic; letter-spacing: -0.01em; }
 * { box-sizing: border-box; }
 body { margin: 0; }
 button, input, select, textarea { font: inherit; }
-button:disabled { cursor: not-allowed !important; }
+button:disabled { cursor: not-allowed; }
 input:focus, button:focus, textarea:focus {
   outline: var(--invoicecloud-focus-outline);
   outline-offset: var(--invoicecloud-focus-outline-offset-s);
