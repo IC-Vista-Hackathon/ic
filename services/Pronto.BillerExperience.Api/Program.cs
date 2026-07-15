@@ -148,3 +148,10 @@ app.MapHealthChecks("/health/live");
 app.MapHealthChecks("/health/ready");
 
 app.Run();
+
+// Host bootstrap - configuration/DI wiring, only executable against live Azure.
+// Excluded from coverage metrics; behavior is exercised by the functional tests.
+[System.Diagnostics.CodeAnalysis.ExcludeFromCodeCoverage]
+public partial class Program
+{
+}

@@ -31,4 +31,9 @@ app.MapGet("/", () => Results.Ok(new ServiceInfo("Pronto.Invoice.Api", "foundati
 app.UseServiceDefaults();
 app.Run();
 
-public partial class Program { }
+// Host bootstrap - configuration/DI wiring. Excluded from coverage metrics;
+// behavior is exercised by integration and functional tests.
+[System.Diagnostics.CodeAnalysis.ExcludeFromCodeCoverage]
+public partial class Program
+{
+}
