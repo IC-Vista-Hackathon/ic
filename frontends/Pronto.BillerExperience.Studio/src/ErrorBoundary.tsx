@@ -1,7 +1,6 @@
 import { Component, type ErrorInfo, type ReactNode } from 'react';
 import { logError } from './telemetry';
 import { trackEvent } from './insights';
-import { categorizeError } from './telemetryPolicy';
 
 export class ErrorBoundary extends Component<{ children: ReactNode }, { error?: Error }> {
   state: { error?: Error } = {};
@@ -10,7 +9,7 @@ export class ErrorBoundary extends Component<{ children: ReactNode }, { error?: 
     logError('studio.render.failed', error, { component_stack: info.componentStack });
     // Allowlisted crash signal for Application Insights — only the error bucket leaves the
     // browser; the message and component stack stay in the console log above.
-    trackEvent('studio.client_error', { error_category: categorizeError(error) });
+    trackEvent('studio.client_error', { error_category: 'unknown' });
   }
   render() {
     if (!this.state.error) return this.props.children;
