@@ -144,18 +144,14 @@ spec:
           kind: Service
           name: ic-biller-experience-studio
           port: 8080
+    # The router needs the full /pay/{slug}/... path to resolve the biller and blob
+    # key, so this rule intentionally does NOT rewrite the prefix (unlike the API routes).
     - matches:
         - path:
             type: PathPrefix
             value: /pay
-      filters:
-        - type: URLRewrite
-          urlRewrite:
-            path:
-              type: ReplacePrefixMatch
-              replacePrefixMatch: /
       backendRefs:
         - group: ""
           kind: Service
-          name: ic-biller-payments-pwa
+          name: ic-payer-experience-router
           port: 8080

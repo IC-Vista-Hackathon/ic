@@ -1,0 +1,90 @@
+name: Deploy Grafana dashboards
+
+# Imports the checked-in Grafana dashboards (infra/grafana/dashboards/*.json) into the Azure
+# Managed Grafana instance (graf-ic-hack). Managed Grafana has no ARM resource for dashboard
+# *content*, so Bicep can't provision them — CD imports them instead. Runs on any push to main
+# that touches a dashboard JSON, and on-demand via workflow_dispatch. Import is idempotent
+# (--overwrite), so re-running is always safe.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - infra/grafana/dashboards/**
+      - .github/workflows/deploy-dashboards.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  # Serialize dashboard imports so parallel main pushes don't race each other into Grafana.
+  group: deploy-dashboards
+  cancel-in-progress: false
+
+env:
+  GRAFANA_NAME: graf-ic-hack
+  GRAFANA_RG: ${{ vars.AKS_RG || 'rg-ic-hack' }}
+
+jobs:
+  import-dashboards:
+    name: Import dashboards into graf-ic-hack
+    runs-on: ubuntu-latest
+    environment: production
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Azure login
+        uses: azure/login@v2
+        with:
+          creds: ${{ secrets.AZURE_CREDENTIALS }}
+
+      - name: Install the Azure Managed Grafana CLI extension
+        run: az extension add --name amg --only-show-errors
+
+      # The `amg` extension handles Grafana's Entra ID auth itself. If the CD service principal
+      # lacks a Grafana role the API returns 401/403 — surface that as an explicit, actionable
+      # failure (grant the SP "Grafana Editor" on the instance) rather than a cryptic az error.
+      - name: Import dashboards
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          files=(infra/grafana/dashboards/*.json)
+          if [ ${#files[@]} -eq 0 ]; then
+            echo "::error::No dashboard JSON files found under infra/grafana/dashboards/"
+            exit 1
+          fi
+          for f in "${files[@]}"; do
+            echo "Importing ${f}"
+            if ! output=$(az grafana dashboard import \
+                  --name "$GRAFANA_NAME" --resource-group "$GRAFANA_RG" \
+                  --definition "$f" --overwrite --only-show-errors 2>&1); then
+              echo "$output"
+              if echo "$output" | grep -qiE '\b(401|403|Unauthorized|Forbidden|does not have access|AccessDenied)\b'; then
+                echo "::error::The CD service principal (AZURE_CREDENTIALS) cannot write to Grafana '${GRAFANA_NAME}'. Grant it the 'Grafana Editor' role on the instance (Azure Portal → ${GRAFANA_NAME} → Access control (IAM), or 'az role assignment create --assignee <sp-object-id> --role \"Grafana Editor\" --scope <grafana-resource-id>'), then re-run."
+              fi
+              exit 1
+            fi
+            echo "$output"
+          done
+
+      # Assert every dashboard we ship is actually present in Grafana; fail loudly if one is missing
+      # so a silently-dropped import can't pass CD.
+      - name: Verify dashboards are present
+        run: |
+          set -euo pipefail
+          present=$(az grafana dashboard list \
+            --name "$GRAFANA_NAME" --resource-group "$GRAFANA_RG" \
+            --query "[].title" -o tsv)
+          echo "Dashboards currently in ${GRAFANA_NAME}:"
+          echo "$present"
+          missing=0
+          for f in infra/grafana/dashboards/*.json; do
+            title=$(jq -r '.title // .dashboard.title' "$f")
+            if ! grep -qxF "$title" <<<"$present"; then
+              echo "::error::Dashboard '${title}' (from ${f}) is not present in ${GRAFANA_NAME} after import."
+              missing=1
+            fi
+          done
+          [ "$missing" -eq 0 ] || exit 1
+          echo "All shipped dashboards are present."

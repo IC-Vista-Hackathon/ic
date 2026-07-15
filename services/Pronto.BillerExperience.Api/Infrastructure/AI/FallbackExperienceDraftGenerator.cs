@@ -29,7 +29,8 @@ public sealed partial class FallbackExperienceDraftGenerator(
         catch (Exception exception)
         {
             LogFallback(logger, biller.Id, exception);
-            return await fallback.GenerateAsync(biller, current, messages, research, cancellationToken);
+            var result = await fallback.GenerateAsync(biller, current, messages, research, cancellationToken);
+            return result with { GenerationMode = GenerationModes.OfflineFallback };
         }
     }
 

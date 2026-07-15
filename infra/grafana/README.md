@@ -44,8 +44,29 @@ restructuring required.
 
 ### Importing a dashboard
 
-Grafana UI: **Dashboards → New → Import → Upload JSON file**, then select the Azure Monitor data
-source when prompted. Or via the Grafana API:
+**CD is the primary path.** `.github/workflows/deploy-dashboards.yml` imports every
+`dashboards/*.json` into `graf-ic-hack` on any push to `main` that touches a dashboard JSON (and
+on-demand via **Actions → Deploy Grafana dashboards → Run workflow**). It authenticates as the CD
+service principal (`AZURE_CREDENTIALS`), imports with `--overwrite` (idempotent — a no-op merge
+that doesn't touch a dashboard doesn't run it), and then verifies both dashboard titles are present,
+failing the job otherwise. No human needs a Grafana role — just edit a JSON and merge.
+
+The workflow uses the `amg` az extension, which handles Grafana's Entra ID auth itself:
+
+```sh
+az extension add -n amg --only-show-errors
+for f in infra/grafana/dashboards/*.json; do
+  az grafana dashboard import -n graf-ic-hack -g rg-ic-hack --definition "$f" --overwrite
+done
+```
+
+If the CD service principal lacks a Grafana role the import returns 401/403 and the job fails with
+an explicit message to grant it **Grafana Editor** on the instance (`az role assignment create
+--assignee <sp-object-id> --role "Grafana Editor" --scope <grafana-resource-id>`).
+
+**Manual fallback** (only if you can't use CD — e.g. iterating locally). Grafana UI: **Dashboards →
+New → Import → Upload JSON file**, then select the Azure Monitor data source when prompted. Or via
+the Grafana API:
 
 ```sh
 GRAFANA=$(az deployment sub show --name ic-hack --query properties.outputs.grafanaEndpoint.value -o tsv)
@@ -57,8 +78,9 @@ for f in infra/grafana/dashboards/*.json; do
 done
 ```
 
-(You need the Grafana Admin/Editor role on `graf-ic-hack`; grant yourself if you weren't the
-deployer. `ce34e7e5-…` is the Azure Managed Grafana first-party app id used for AAD tokens.)
+(For the manual path you need the Grafana Admin/Editor role on `graf-ic-hack`; grant yourself if you
+weren't the deployer. `ce34e7e5-…` is the Azure Managed Grafana first-party app id used for AAD
+tokens.)
 
 ## Alerts
 
@@ -82,6 +104,14 @@ az deployment sub create --name ic-hack --location eastus2 \
 ```
 
 Set `deployObservabilityAlerts=false` to skip the alerts entirely.
+
+> ⚠️ **`observabilityAlertEmailAddress` is not defaulted in `main.bicep` (empty string).** The
+> action group's email receiver is *declarative* — any `az deployment sub create` of `main.bicep`
+> that omits this parameter re-creates `ag-ic-hack-observability` with **no receivers**, silently
+> wiping any address added out-of-band (e.g. a receiver added by hand in the portal). Always pass
+> `observabilityAlertEmailAddress=<address>` on every infra (re)deploy, or the alerts will fire into
+> a void. If/when infra deploys move to CD, that pipeline must supply this parameter (e.g. from a
+> repo/environment variable or secret).
 
 ## Deploy / apply status
 

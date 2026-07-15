@@ -81,7 +81,7 @@ public sealed partial class AzureExperienceDraftGenerator(
             var result = JsonSerializer.Deserialize<DraftGenerationResult>(json, SerializerOptions)
                 ?? throw new InvalidOperationException("Azure AI returned an invalid structured draft.");
             BillerExperienceTelemetry.ModelCalls.Add(1, new("provider", Provider), new("outcome", "success"));
-            return result;
+            return result with { GenerationMode = GenerationModes.AzureAi };
         }
         catch (Exception exception)
         {
