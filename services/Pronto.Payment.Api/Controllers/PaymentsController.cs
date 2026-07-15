@@ -15,6 +15,7 @@ namespace Pronto.Payment.Api.Controllers;
 public sealed partial class PaymentsController : ControllerBase
 {
     private const string ConfirmationAlphabet = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
+    private const string IdempotencyKeyHeader = "Idempotency-Key";
 
     private readonly IPaymentStore store;
     private readonly IInvoiceClient invoices;
@@ -33,6 +34,21 @@ public sealed partial class PaymentsController : ControllerBase
     public async Task<ActionResult<PaymentResponse>> Create(
         CreatePaymentRequest request, CancellationToken cancellationToken)
     {
+        var idempotencyKey = ReadIdempotencyKey();
+        if (idempotencyKey is not null)
+        {
+            // Replay short-circuit: a repeat with a key we've already seen returns the ORIGINAL
+            // result verbatim — before any conflict/validation check, so a client retry after a
+            // network blip never double-charges or 409s on an invoice its first call already paid.
+            var original = await store.FindByIdempotencyKeyAsync(request.BillerId, idempotencyKey, cancellationToken)
+                .ConfigureAwait(false);
+            if (original is not null)
+            {
+                LogPaymentReplayed(logger, original.PaymentId, original.BillerId, idempotencyKey, Activity.Current?.TraceId.ToString());
+                return Ok(original);
+            }
+        }
+
         var config = await configs.GetAsync(request.BillerId, cancellationToken).ConfigureAwait(false);
 
         if (!config.PaymentMethods.Contains(request.Method))
@@ -54,16 +70,10 @@ public sealed partial class PaymentsController : ControllerBase
         var paymentId = Guid.NewGuid().ToString();
         var scheduled = request.ScheduledFor is not null;
 
-        // The Invoice Service transition is the atomicity authority: a concurrent duplicate
-        // pay attempt loses here with 409 before any payment is persisted.
-        await invoices.UpdateStatusAsync(
-            request.BillerId,
-            request.InvoiceId,
-            new UpdateInvoiceStatusRequest(
-                scheduled ? InvoiceStatus.Scheduled : InvoiceStatus.Paid, paymentId),
-            cancellationToken).ConfigureAwait(false);
-
-        var payment = new PaymentResponse(
+        // 1. PERSIST BEFORE MARK: durably write the payment in a recoverable Pending state (and
+        //    reserve the idempotency key) BEFORE asserting the invoice transition. A crash after
+        //    this point always leaves an auditable payment row, never an orphaned Paid invoice.
+        var pending = new PaymentResponse(
             PaymentId: paymentId,
             BillerId: request.BillerId,
             InvoiceId: request.InvoiceId,
@@ -73,14 +83,52 @@ public sealed partial class PaymentsController : ControllerBase
             FeeCents: feeCents,
             TotalCents: totalCents,
             Confirmation: MintConfirmation(),
-            Status: scheduled ? PaymentStatus.Scheduled : PaymentStatus.Succeeded,
+            Status: PaymentStatus.Pending,
             ScheduledFor: request.ScheduledFor,
             ReceiptMessage: config.ReceiptMessage,
             CreatedAt: DateTimeOffset.UtcNow);
-        await store.AddAsync(payment, cancellationToken).ConfigureAwait(false);
+
+        var creation = await store.CreatePendingAsync(pending, idempotencyKey, cancellationToken)
+            .ConfigureAwait(false);
+        if (creation.IsReplay)
+        {
+            // Same idempotency key seen before: return the ORIGINAL result, never a new charge/409.
+            LogPaymentReplayed(logger, creation.Payment.PaymentId, creation.Payment.BillerId, idempotencyKey, Activity.Current?.TraceId.ToString());
+            return Ok(creation.Payment);
+        }
+
+        // 2. The Invoice Service transition is the atomicity authority: a concurrent duplicate
+        //    pay attempt loses here with 409, leaving only a recoverable Pending payment row.
+        await invoices.UpdateStatusAsync(
+            request.BillerId,
+            request.InvoiceId,
+            new UpdateInvoiceStatusRequest(
+                scheduled ? InvoiceStatus.Scheduled : InvoiceStatus.Paid, paymentId),
+            cancellationToken).ConfigureAwait(false);
+
+        // 3. Mark the payment terminal only after the invoice transition committed.
+        var payment = pending with
+        {
+            Status = scheduled ? PaymentStatus.Scheduled : PaymentStatus.Succeeded,
+        };
+        await store.UpdateAsync(payment, cancellationToken).ConfigureAwait(false);
         LogPaymentCreated(logger, payment.PaymentId, payment.BillerId, payment.InvoiceId, payment.Status, payment.TotalCents, Activity.Current?.TraceId.ToString());
 
         return Created($"/payments/{payment.PaymentId}?biller_id={payment.BillerId}", payment);
+    }
+
+    private string? ReadIdempotencyKey()
+    {
+        if (Request.Headers.TryGetValue(IdempotencyKeyHeader, out var values))
+        {
+            var key = values.ToString().Trim();
+            if (!string.IsNullOrEmpty(key))
+            {
+                return key;
+            }
+        }
+
+        return null;
     }
 
     /// <summary>
@@ -158,6 +206,8 @@ public sealed partial class PaymentsController : ControllerBase
 
     [LoggerMessage(4100, LogLevel.Information, "Created payment {PaymentId} for biller {BillerId}, invoice {InvoiceId}, status {Status}, total {TotalCents}; trace {TraceId}")]
     private static partial void LogPaymentCreated(ILogger logger, string paymentId, string billerId, string invoiceId, PaymentStatus status, int totalCents, string? traceId);
+    [LoggerMessage(4102, LogLevel.Information, "Idempotent replay returned payment {PaymentId} for biller {BillerId}, key {IdempotencyKey}; trace {TraceId}")]
+    private static partial void LogPaymentReplayed(ILogger logger, string paymentId, string billerId, string? idempotencyKey, string? traceId);
     [LoggerMessage(4101, LogLevel.Information, "Listed {PaymentCount} payments for biller {BillerId}, payer {PayerAccountId}, invoice {InvoiceId}; trace {TraceId}")]
     private static partial void LogPaymentsListed(ILogger logger, string billerId, string? payerAccountId, string? invoiceId, int paymentCount, string? traceId);
 }

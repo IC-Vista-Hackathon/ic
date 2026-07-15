@@ -10,6 +10,16 @@ public sealed class FakeInvoiceClient : IInvoiceClient
 {
     private readonly object gate = new();
     private readonly ConcurrentDictionary<(string BillerId, string InvoiceId), InvoiceResponse> invoices = new();
+    private int updateStatusCalls;
+
+    /// <summary>Number of times <see cref="UpdateStatusAsync"/> has been invoked (idempotency checks).</summary>
+    public int UpdateStatusCalls => Volatile.Read(ref updateStatusCalls);
+
+    /// <summary>When set, the next <see cref="UpdateStatusAsync"/> throws it (simulates a crash/contention).</summary>
+    public Exception? UpdateStatusFault { get; set; }
+
+    public InvoiceStatus? StatusOf(string billerId, string invoiceId)
+        => invoices.TryGetValue((billerId, invoiceId), out var invoice) ? invoice.Status : null;
 
     public InvoiceResponse AddDueInvoice(string billerId, int amountCents)
     {
@@ -39,6 +49,13 @@ public sealed class FakeInvoiceClient : IInvoiceClient
         // Check-and-set under one lock, matching the real repository's atomicity guarantee.
         lock (gate)
         {
+            Interlocked.Increment(ref updateStatusCalls);
+            if (UpdateStatusFault is { } fault)
+            {
+                UpdateStatusFault = null;
+                throw fault;
+            }
+
             var key = (billerId, invoiceId);
             var invoice = invoices.GetValueOrDefault(key)
                 ?? throw ServiceException.NotFound("not_found", $"invoice {invoiceId} not found");
