@@ -148,12 +148,35 @@ public sealed class InMemoryBillerExperienceRepository : IBillerExperienceReposi
     public ValueTask<DeploymentRecord> CreateDeploymentAsync(DeploymentRecord deployment, CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
-        if (!_deployments.TryAdd($"{deployment.BillerId}:{deployment.Id}", deployment))
+        var saved = deployment with { ETag = Guid.NewGuid().ToString("N") };
+        if (!_deployments.TryAdd($"{deployment.BillerId}:{deployment.Id}", saved))
         {
             throw new ConcurrencyException("This revision already has a publication request.");
         }
 
-        return ValueTask.FromResult(deployment);
+        return ValueTask.FromResult(saved);
+    }
+
+    public ValueTask<DeploymentRecord> SaveDeploymentAsync(
+        DeploymentRecord deployment,
+        string? expectedETag,
+        CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        var key = $"{deployment.BillerId}:{deployment.Id}";
+        if (!_deployments.TryGetValue(key, out var current) ||
+            (expectedETag is not null && current.ETag != expectedETag))
+        {
+            throw new ConcurrencyException("This publication request was modified by another request.");
+        }
+
+        var saved = deployment with { ETag = Guid.NewGuid().ToString("N") };
+        if (!_deployments.TryUpdate(key, saved, current))
+        {
+            throw new ConcurrencyException("This publication request was modified by another request.");
+        }
+
+        return ValueTask.FromResult(saved);
     }
 
     public ValueTask<DeploymentRecord?> GetDeploymentAsync(string billerId, string deploymentId, CancellationToken cancellationToken)

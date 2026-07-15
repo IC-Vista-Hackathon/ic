@@ -55,14 +55,23 @@ export async function publishBundle({
     const rel = relative(distDir, file).split(sep).join('/');
     const blobName = `${sitePrefix}/${rel}`;
     const body = await readFile(file);
-    const isEntry = rel === 'index.html';
-    await container.getBlockBlobClient(blobName).uploadData(body, {
-      blobHTTPHeaders: {
-        blobContentType: contentTypeFor(rel),
-        // Hashed assets are immutable; the SPA entry must always revalidate.
-        blobCacheControl: isEntry ? 'no-cache, no-store, must-revalidate' : 'public, max-age=31536000, immutable',
-      },
-    });
+    const blob = container.getBlockBlobClient(blobName);
+    try {
+      await blob.uploadData(body, {
+        blobHTTPHeaders: {
+          blobContentType: contentTypeFor(rel),
+          blobCacheControl: cacheControlFor(rel),
+        },
+        conditions: { ifNoneMatch: '*' },
+      });
+    } catch (error) {
+      const statusCode = getStatusCode(error);
+      if (statusCode !== 409 && statusCode !== 412) throw error;
+      const existing = await blob.downloadToBuffer();
+      if (!existing.equals(body)) {
+        throw new Error(`Immutable site artifact already exists with different content: ${blobName}`);
+      }
+    }
   }
 
   if (!writeActive) {
@@ -94,4 +103,18 @@ async function walk(dir: string): Promise<string[]> {
 function contentTypeFor(rel: string): string {
   const ext = rel.slice(rel.lastIndexOf('.') + 1).toLowerCase();
   return CONTENT_TYPES[ext] ?? 'application/octet-stream';
+}
+
+function cacheControlFor(rel: string): string {
+  const file = rel.split('/').pop() ?? rel;
+  const stem = file.includes('.') ? file.slice(0, file.lastIndexOf('.')) : file;
+  return rel.startsWith('assets/') && stem.includes('-')
+    ? 'public, max-age=31536000, immutable'
+    : 'no-cache, no-store, must-revalidate';
+}
+
+function getStatusCode(error: unknown): number | undefined {
+  if (typeof error !== 'object' || error === null || !('statusCode' in error)) return undefined;
+  const statusCode = error.statusCode;
+  return typeof statusCode === 'number' ? statusCode : undefined;
 }

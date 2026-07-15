@@ -10,6 +10,7 @@ public sealed class PayerSitePathsTests
     [InlineData("/pay/acme/", "acme", "index.html")]
     [InlineData("/pay/acme/assets/index-abc.js", "acme", "assets/index-abc.js")]
     [InlineData("/pay/city-of-vista/history", "city-of-vista", "history")]
+    [InlineData("/pay/city-of-vista/history/", "city-of-vista", "history")]
     public void ParsesSlugAndRelativePath(string path, string expectedSlug, string expectedRelative)
     {
         var parsed = PayerSitePaths.Parse(path);
@@ -48,10 +49,14 @@ public sealed class PayerSitePathsTests
         Assert.Equal(expected, PayerSitePaths.ContentType(relative));
 
     [Fact]
-    public void EntryRevalidatesWhileAssetsAreImmutable()
+    public void OnlyHashedAssetsAreImmutable()
     {
         Assert.Contains("no-cache", PayerSitePaths.CacheControl("index.html"));
-        Assert.Contains("immutable", PayerSitePaths.CacheControl("assets/x.js"));
+        Assert.Contains("no-cache", PayerSitePaths.CacheControl("sw.js"));
+        Assert.Contains("no-cache", PayerSitePaths.CacheControl("manifest.webmanifest"));
+        Assert.Contains("no-cache", PayerSitePaths.CacheControl("config.json"));
+        Assert.Contains("no-cache", PayerSitePaths.CacheControl("assets/x.js"));
+        Assert.Contains("immutable", PayerSitePaths.CacheControl("assets/index-abc123.js"));
     }
 
     [Fact]

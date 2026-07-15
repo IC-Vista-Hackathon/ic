@@ -251,7 +251,51 @@ public sealed partial class BillerOnboardingService(
         if (existing is not null)
         {
             LogDuplicatePublication(logger, billerId, request.Revision, deploymentId);
-            return Map(existing);
+            if (existing.Status != "failed")
+            {
+                return Map(existing);
+            }
+
+            var retryAt = DateTimeOffset.UtcNow;
+            DeploymentRecord retry;
+            try
+            {
+                retry = await repository.SaveDeploymentAsync(
+                    existing with
+                    {
+                        Status = "requested",
+                        UpdatedAt = retryAt,
+                        PublishedUrl = null,
+                        FailureCode = null,
+                        FailureMessage = null,
+                        Traceparent = FormatTraceparent(Activity.Current),
+                        ClaimedAt = null,
+                        LeaseExpiresAt = null
+                    },
+                    existing.ETag,
+                    cancellationToken);
+            }
+            catch (ConcurrencyException)
+            {
+                var concurrent = await repository.GetDeploymentAsync(billerId, deploymentId, cancellationToken);
+                if (concurrent is not null && concurrent.Status != "failed")
+                {
+                    return Map(concurrent);
+                }
+
+                throw;
+            }
+            await repository.SaveExperienceAsync(
+                experience with { State = ExperienceRevisionState.Publishing },
+                experience.ETag,
+                cancellationToken);
+            await repository.SaveRunAsync(
+                run with { State = OnboardingSessionState.Publishing, UpdatedAt = retryAt },
+                run.ETag,
+                cancellationToken);
+            RecordTransition(run.State, OnboardingSessionState.Publishing);
+            LogPublicationRequested(logger, billerId, experience.Id, retry.Id);
+            return Map(retry);
         }
 
         if (experience.State != ExperienceRevisionState.Approved)

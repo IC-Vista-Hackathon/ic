@@ -223,6 +223,29 @@ public sealed partial class CosmosBillerExperienceRepository(
             }
         });
 
+    public ValueTask<DeploymentRecord> SaveDeploymentAsync(
+        DeploymentRecord deployment,
+        string? expectedETag,
+        CancellationToken cancellationToken) =>
+        ObserveAsync("replace", "deployments", deployment.BillerId, async () =>
+        {
+            try
+            {
+                var options = expectedETag is null ? null : new ItemRequestOptions { IfMatchEtag = expectedETag };
+                var response = await Deployments.ReplaceItemAsync(
+                    deployment,
+                    deployment.Id,
+                    new PartitionKey(deployment.BillerId),
+                    options,
+                    cancellationToken);
+                return response.Resource with { ETag = response.ETag };
+            }
+            catch (CosmosException exception) when (exception.StatusCode == HttpStatusCode.PreconditionFailed)
+            {
+                throw new ConcurrencyException("This publication request was modified by another request.");
+            }
+        });
+
     public ValueTask<DeploymentRecord?> GetDeploymentAsync(string billerId, string deploymentId, CancellationToken cancellationToken) =>
         ObserveAsync<DeploymentRecord?>("read", "deployments", billerId, async () =>
         {

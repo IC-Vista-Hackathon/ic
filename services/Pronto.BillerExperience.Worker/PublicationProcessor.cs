@@ -33,6 +33,7 @@ public sealed partial class PublicationProcessor(
         activity?.SetTag("ic.biller_id", deployment.BillerId);
         activity?.SetTag("ic.deployment_id", deployment.Id);
         var startedAt = Stopwatch.GetTimestamp();
+        var activated = false;
         try
         {
             LogPublicationStarted(logger, deployment.BillerId, deployment.Id, deployment.ConfigVersion, activity?.TraceId.ToString());
@@ -40,17 +41,20 @@ public sealed partial class PublicationProcessor(
             var experience = await repository.GetExperienceAsync(deployment.BillerId, deployment.ConfigVersion, cancellationToken);
             var plan = planFactory.Create(deployment, biller, experience);
 
-            // Build + upload the bespoke static bundle first (no active.json), then let the config
-            // publisher flip active.json last — so the site is fully uploaded before it's served.
-            await BuildBundleAsync(plan, experience, cancellationToken);
-            await publisher.PublishAsync(plan, cancellationToken);
-            deployment = await repository.SaveAsync(deployment with
+            if (deployment.Status != PublicationStates.Verifying)
             {
-                Status = PublicationStates.Ready,
-                PublishedUrl = plan.PublishedUrl,
-                UpdatedAt = DateTimeOffset.UtcNow
-            }, cancellationToken);
-            await repository.MarkWorkflowAsync(deployment.BillerId, deployment.ConfigVersion, published: true, cancellationToken);
+                // Build + upload the bespoke static bundle first (no active.json), then let the config
+                // publisher flip active.json last — so the site is fully uploaded before it's served.
+                await BuildBundleAsync(plan, experience, cancellationToken);
+                deployment = await repository.SaveAsync(deployment with
+                {
+                    Status = PublicationStates.Verifying,
+                    UpdatedAt = DateTimeOffset.UtcNow
+                }, cancellationToken);
+            }
+            await publisher.PublishAsync(plan, cancellationToken);
+            activated = true;
+            await CompleteActivatedPublicationAsync(deployment, plan.PublishedUrl, cancellationToken);
 
             PublicationTelemetry.Publications.Add(1, new KeyValuePair<string, object?>("outcome", "ready"));
             LogPublicationReady(logger, deployment.BillerId, deployment.Id, plan.PublishedUrl, activity?.TraceId.ToString());
@@ -58,11 +62,36 @@ public sealed partial class PublicationProcessor(
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
             LogPublicationCancelled(logger, deployment.BillerId, deployment.Id, activity?.TraceId.ToString());
+            if (activated)
+            {
+                await TryCompleteActivatedPublicationAsync(
+                    deployment,
+                    activity?.TraceId.ToString(),
+                    ensureActive: false,
+                    CancellationToken.None);
+            }
+            else
+            {
+                await TryReleaseClaimAsync(deployment, activity?.TraceId.ToString());
+            }
             throw;
         }
         catch (Exception exception)
         {
             activity?.SetStatus(ActivityStatusCode.Error, exception.GetType().Name);
+            var activationMayHaveSucceeded = activated || exception is ArtifactActivationException;
+            if (activationMayHaveSucceeded)
+            {
+                PublicationTelemetry.Publications.Add(1, new KeyValuePair<string, object?>("outcome", "activation_finalization_failed"));
+                LogActivatedPublicationFinalizationFailed(logger, deployment.BillerId, deployment.Id, activity?.TraceId.ToString(), exception);
+                await TryCompleteActivatedPublicationAsync(
+                    deployment,
+                    activity?.TraceId.ToString(),
+                    ensureActive: !activated,
+                    cancellationToken);
+                return;
+            }
+
             PublicationTelemetry.Publications.Add(1, new KeyValuePair<string, object?>("outcome", "failed"));
             LogPublicationFailed(logger, deployment.BillerId, deployment.Id, activity?.TraceId.ToString(), exception);
             try
@@ -72,7 +101,9 @@ public sealed partial class PublicationProcessor(
                     Status = PublicationStates.Failed,
                     FailureCode = FailureCode(exception),
                     FailureMessage = SafeFailureMessage(exception),
-                    UpdatedAt = DateTimeOffset.UtcNow
+                    UpdatedAt = DateTimeOffset.UtcNow,
+                    ClaimedAt = null,
+                    LeaseExpiresAt = null
                 }, cancellationToken);
                 await repository.MarkWorkflowAsync(deployment.BillerId, deployment.ConfigVersion, published: false, cancellationToken);
             }
@@ -94,8 +125,7 @@ public sealed partial class PublicationProcessor(
     {
         if (!bundleBuilder.Enabled)
         {
-            LogBundleBuildSkipped(logger, plan.BillerId, plan.Revision);
-            return;
+            throw new InvalidOperationException("BundleBuild:BuilderImage is required for router-backed publication.");
         }
 
         var definitionJson = JsonSerializer.Serialize(experience.Definition, PublicationArtifactPlanFactory.JsonOptions);
@@ -108,6 +138,65 @@ public sealed partial class PublicationProcessor(
                 _options.StorageEndpoint,
                 _options.ContainerName),
             cancellationToken);
+    }
+
+    private async ValueTask CompleteActivatedPublicationAsync(
+        PublicationDeployment deployment,
+        Uri publishedUrl,
+        CancellationToken cancellationToken)
+    {
+        await repository.MarkWorkflowAsync(deployment.BillerId, deployment.ConfigVersion, published: true, cancellationToken);
+        await repository.SaveAsync(deployment with
+        {
+            Status = PublicationStates.Ready,
+            PublishedUrl = publishedUrl,
+            UpdatedAt = DateTimeOffset.UtcNow,
+            ClaimedAt = null,
+            LeaseExpiresAt = null
+        }, cancellationToken);
+    }
+
+    private async ValueTask TryCompleteActivatedPublicationAsync(
+        PublicationDeployment deployment,
+        string? traceId,
+        bool ensureActive,
+        CancellationToken cancellationToken)
+    {
+        try
+        {
+            var biller = await repository.GetBillerAsync(deployment.BillerId, cancellationToken);
+            var experience = await repository.GetExperienceAsync(deployment.BillerId, deployment.ConfigVersion, cancellationToken);
+            var plan = planFactory.Create(deployment, biller, experience);
+            if (ensureActive)
+            {
+                await publisher.PublishAsync(plan, cancellationToken);
+            }
+            await CompleteActivatedPublicationAsync(deployment, plan.PublishedUrl, cancellationToken);
+        }
+        catch (Exception exception)
+        {
+            LogActivatedPublicationRepairFailed(logger, deployment.BillerId, deployment.Id, traceId, exception);
+        }
+    }
+
+    private async ValueTask TryReleaseClaimAsync(PublicationDeployment deployment, string? traceId)
+    {
+        try
+        {
+            await repository.SaveAsync(deployment with
+            {
+                Status = deployment.Status == PublicationStates.Verifying
+                    ? PublicationStates.Verifying
+                    : PublicationStates.Requested,
+                UpdatedAt = DateTimeOffset.UtcNow,
+                ClaimedAt = null,
+                LeaseExpiresAt = null
+            }, CancellationToken.None);
+        }
+        catch (Exception exception)
+        {
+            LogClaimReleaseFailed(logger, deployment.BillerId, deployment.Id, traceId, exception);
+        }
     }
 
     private static string FailureCode(Exception exception) => exception switch
@@ -126,9 +215,6 @@ public sealed partial class PublicationProcessor(
     [LoggerMessage(1002, LogLevel.Information, "Publishing config version {ConfigVersion} for biller {BillerId}, deployment {DeploymentId}; trace {TraceId}")]
     private static partial void LogPublicationStarted(ILogger logger, string billerId, string deploymentId, int configVersion, string? traceId);
 
-    [LoggerMessage(1005, LogLevel.Information, "Bundle build disabled (no builder image); publishing config only for biller {BillerId}, revision {Revision}")]
-    private static partial void LogBundleBuildSkipped(ILogger logger, string billerId, string revision);
-
     [LoggerMessage(1003, LogLevel.Information, "Published deployment {DeploymentId} for biller {BillerId} at {PublishedUrl}; trace {TraceId}")]
     private static partial void LogPublicationReady(ILogger logger, string billerId, string deploymentId, Uri publishedUrl, string? traceId);
 
@@ -140,4 +226,13 @@ public sealed partial class PublicationProcessor(
 
     [LoggerMessage(1903, LogLevel.Error, "Could not persist failed state for publication {DeploymentId}, biller {BillerId}; trace {TraceId}")]
     private static partial void LogFailureStatusError(ILogger logger, string billerId, string deploymentId, string? traceId, Exception exception);
+
+    [LoggerMessage(1905, LogLevel.Error, "Publication {DeploymentId} for biller {BillerId} activated but finalization failed; trace {TraceId}")]
+    private static partial void LogActivatedPublicationFinalizationFailed(ILogger logger, string billerId, string deploymentId, string? traceId, Exception exception);
+
+    [LoggerMessage(1906, LogLevel.Error, "Could not repair activated publication {DeploymentId} for biller {BillerId}; trace {TraceId}")]
+    private static partial void LogActivatedPublicationRepairFailed(ILogger logger, string billerId, string deploymentId, string? traceId, Exception exception);
+
+    [LoggerMessage(1907, LogLevel.Error, "Could not release cancelled publication claim {DeploymentId} for biller {BillerId}; trace {TraceId}")]
+    private static partial void LogClaimReleaseFailed(ILogger logger, string billerId, string deploymentId, string? traceId, Exception exception);
 }

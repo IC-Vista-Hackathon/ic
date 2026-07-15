@@ -107,6 +107,43 @@ public sealed class BillerOnboardingServiceTests
     }
 
     [Fact]
+    public async Task FailedPublicationIsRequeuedWhenPublishIsRepeated()
+    {
+        var repository = new InMemoryBillerExperienceRepository();
+        var service = new BillerOnboardingService(
+            repository,
+            new DeterministicExperienceDraftGenerator(NullLogger<DeterministicExperienceDraftGenerator>.Instance),
+            new OrchestrationRunner(),
+            NullLogger<BillerOnboardingService>.Instance);
+        var created = await service.CreateAsync(CreateRequest(), CancellationToken.None);
+        var chat = await service.SendMessageAsync(created.Biller.BillerId, new("Ready for review"), CancellationToken.None);
+        var approved = await service.ApproveAsync(created.Biller.BillerId, new(chat.Draft!.Revision, "test-user"), CancellationToken.None);
+        var request = new PublishExperienceRequest(created.Biller.BillerId, approved.Revision);
+        var first = await service.PublishAsync(created.Biller.BillerId, request, CancellationToken.None);
+        var existing = await repository.GetDeploymentAsync(created.Biller.BillerId, first.DeploymentId, CancellationToken.None);
+        Assert.NotNull(existing);
+        await repository.SaveDeploymentAsync(
+            existing! with
+            {
+                Status = "failed",
+                FailureCode = "BUNDLE_BUILD_FAILED",
+                FailureMessage = "transient builder failure"
+            },
+            existing.ETag,
+            CancellationToken.None);
+
+        var retry = await service.PublishAsync(created.Biller.BillerId, request, CancellationToken.None);
+        var record = await repository.GetDeploymentAsync(created.Biller.BillerId, retry.DeploymentId, CancellationToken.None);
+
+        Assert.Equal(first.DeploymentId, retry.DeploymentId);
+        Assert.Equal(DeploymentState.Requested, retry.State);
+        Assert.NotNull(record);
+        Assert.Equal("requested", record!.Status);
+        Assert.Null(record.FailureCode);
+        Assert.Null(record.FailureMessage);
+    }
+
+    [Fact]
     public async Task ApprovalFailureReturnsTheBlockingFindings()
     {
         var service = CreateService();
