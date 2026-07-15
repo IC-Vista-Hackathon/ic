@@ -20,8 +20,46 @@ public sealed partial class CosmosBillerExperienceRepository(
     public ValueTask<BillerRecord> CreateBillerAsync(BillerRecord biller, CancellationToken cancellationToken) =>
         ObserveAsync("create", "billers", biller.Id, async () =>
         {
-            var response = await Billers.CreateItemAsync(biller, new PartitionKey(biller.Id), cancellationToken: cancellationToken);
-            return response.Resource;
+            // Slugs must be globally unique, but Cosmos unique keys are scoped per partition and
+            // billers partition on /id, so a slug reservation document in its own partition is the
+            // atomic gate: the point-create below is the only thing that decides the winner of a
+            // concurrent race for the same slug.
+            var reservationId = SlugReservationId(biller.Slug);
+            var reservationPartition = new PartitionKey(reservationId);
+            try
+            {
+                await Billers.CreateItemAsync(
+                    new SlugReservationDocument(reservationId, biller.Id, "slug_reservation"),
+                    reservationPartition,
+                    cancellationToken: cancellationToken);
+            }
+            catch (CosmosException exception) when (exception.StatusCode == HttpStatusCode.Conflict)
+            {
+                throw new SlugConflictException(biller.Slug);
+            }
+
+            try
+            {
+                var response = await Billers.CreateItemAsync(biller, new PartitionKey(biller.Id), cancellationToken: cancellationToken);
+                return response.Resource;
+            }
+            catch
+            {
+                // Release the reservation so a retry (or a different biller) can claim the slug.
+                // Use CancellationToken.None: the caller's token may already be cancelled (which is
+                // what failed the create), and a skipped cleanup would orphan the reservation and
+                // block the slug forever. Best-effort — the original exception is always re-thrown.
+                try
+                {
+                    using var _ = await Billers.DeleteItemStreamAsync(reservationId, reservationPartition, cancellationToken: CancellationToken.None);
+                }
+                catch
+                {
+                    // ignored
+                }
+
+                throw;
+            }
         });
 
     public ValueTask<BillerRecord?> GetBillerAsync(string billerId, CancellationToken cancellationToken) =>
@@ -48,19 +86,29 @@ public sealed partial class CosmosBillerExperienceRepository(
     public ValueTask<bool> SlugExistsAsync(string slug, CancellationToken cancellationToken) =>
         ObserveAsync("query", "billers", slug, async () =>
         {
-            // Cross-partition by design: billers partition on /id and slug lookups are rare
-            // (creation-time only).
-            var query = new QueryDefinition("SELECT TOP 1 c.id FROM c WHERE c.slug = @slug")
-                .WithParameter("@slug", slug);
-            using var iterator = Billers.GetItemQueryIterator<IdOnly>(
-                query, requestOptions: new QueryRequestOptions { MaxItemCount = 1 });
-            if (!iterator.HasMoreResults)
+            // Authoritative check is a single-partition point read of the reservation document.
+            var reservationId = SlugReservationId(slug);
+            try
             {
-                return false;
+                await Billers.ReadItemAsync<SlugReservationDocument>(
+                    reservationId, new PartitionKey(reservationId), cancellationToken: cancellationToken);
+                return true;
             }
+            catch (CosmosException exception) when (exception.StatusCode == HttpStatusCode.NotFound)
+            {
+                // Fall back to legacy biller docs created before slug reservations existed.
+                var query = new QueryDefinition("SELECT TOP 1 c.id FROM c WHERE c.slug = @slug")
+                    .WithParameter("@slug", slug);
+                using var iterator = Billers.GetItemQueryIterator<IdOnly>(
+                    query, requestOptions: new QueryRequestOptions { MaxItemCount = 1 });
+                if (!iterator.HasMoreResults)
+                {
+                    return false;
+                }
 
-            var page = await iterator.ReadNextAsync(cancellationToken);
-            return page.Resource.Any();
+                var page = await iterator.ReadNextAsync(cancellationToken);
+                return page.Resource.Any();
+            }
         });
 
     public ValueTask<ExperienceRecord?> GetLatestExperienceAsync(string billerId, CancellationToken cancellationToken) =>
@@ -80,8 +128,7 @@ public sealed partial class CosmosBillerExperienceRepository(
             }
 
             var page = await iterator.ReadNextAsync(cancellationToken);
-            var item = page.Resource.FirstOrDefault();
-            return item is null ? null : item with { ETag = page.ETag };
+            return page.Resource.FirstOrDefault();
         });
 
     public ValueTask<ExperienceRecord> SaveExperienceAsync(ExperienceRecord experience, string? expectedETag, CancellationToken cancellationToken) =>
@@ -223,6 +270,29 @@ public sealed partial class CosmosBillerExperienceRepository(
             }
         });
 
+    public ValueTask<DeploymentRecord> SaveDeploymentAsync(
+        DeploymentRecord deployment,
+        string? expectedETag,
+        CancellationToken cancellationToken) =>
+        ObserveAsync("replace", "deployments", deployment.BillerId, async () =>
+        {
+            try
+            {
+                var options = expectedETag is null ? null : new ItemRequestOptions { IfMatchEtag = expectedETag };
+                var response = await Deployments.ReplaceItemAsync(
+                    deployment,
+                    deployment.Id,
+                    new PartitionKey(deployment.BillerId),
+                    options,
+                    cancellationToken);
+                return response.Resource with { ETag = response.ETag };
+            }
+            catch (CosmosException exception) when (exception.StatusCode == HttpStatusCode.PreconditionFailed)
+            {
+                throw new ConcurrencyException("This publication request was modified by another request.");
+            }
+        });
+
     public ValueTask<DeploymentRecord?> GetDeploymentAsync(string billerId, string deploymentId, CancellationToken cancellationToken) =>
         ObserveAsync<DeploymentRecord?>("read", "deployments", billerId, async () =>
         {
@@ -240,17 +310,33 @@ public sealed partial class CosmosBillerExperienceRepository(
     public async ValueTask PurgeByBillerAsync(string billerId, CancellationToken cancellationToken)
     {
         var partition = new PartitionKey(billerId);
+        var biller = await GetBillerAsync(billerId, cancellationToken);
         await DeletePartitionAsync(Configs, partition, cancellationToken);
         await DeletePartitionAsync(Runs, partition, cancellationToken);
         await DeletePartitionAsync(Deployments, partition, cancellationToken);
 
-        // The billers container is partitioned by /id (which equals the biller id).
-        // DeleteItemStreamAsync returns a ResponseMessage and does NOT throw on a non-success
-        // status, so a missing biller (404) is naturally a no-op — no try/catch required.
-        using var _ = await Billers.DeleteItemStreamAsync(billerId, partition, cancellationToken: cancellationToken);
+        // Release the slug reservation (its own partition) so a purged slug can be reused.
+        if (biller is not null)
+        {
+            var reservationId = SlugReservationId(biller.Slug);
+            using var __ = await Billers.DeleteItemStreamAsync(
+                reservationId, new PartitionKey(reservationId), cancellationToken: cancellationToken);
+        }
+
+        try
+        {
+            await Billers.DeleteItemAsync<BillerRecord>(
+                billerId,
+                partition,
+                cancellationToken: cancellationToken);
+        }
+        catch (CosmosException exception) when (exception.StatusCode == HttpStatusCode.NotFound)
+        {
+            LogIdempotentDeleteNotFound(logger, "billers", billerId);
+        }
     }
 
-    private static async Task DeletePartitionAsync(
+    private async Task DeletePartitionAsync(
         Container container, PartitionKey partition, CancellationToken cancellationToken)
     {
         using var iterator = container.GetItemQueryIterator<IdOnly>(
@@ -262,12 +348,29 @@ public sealed partial class CosmosBillerExperienceRepository(
             var page = await iterator.ReadNextAsync(cancellationToken);
             foreach (var item in page)
             {
-                using var _ = await container.DeleteItemStreamAsync(item.Id, partition, cancellationToken: cancellationToken);
+                try
+                {
+                    await container.DeleteItemAsync<IdOnly>(
+                        item.Id,
+                        partition,
+                        cancellationToken: cancellationToken);
+                }
+                catch (CosmosException exception) when (exception.StatusCode == HttpStatusCode.NotFound)
+                {
+                    LogIdempotentDeleteNotFound(logger, container.Id, item.Id);
+                }
             }
         }
     }
 
+    private static string SlugReservationId(string slug) => $"slug:{slug}";
+
     private sealed record IdOnly(string Id);
+
+    private sealed record SlugReservationDocument(
+        [property: JsonProperty("id")] string Id,
+        [property: JsonProperty("biller_id")] string BillerId,
+        [property: JsonProperty("document_type")] string DocumentType);
 
     private async ValueTask<T> ObserveAsync<T>(string operation, string container, string billerId, Func<Task<T>> action)
     {
@@ -308,6 +411,13 @@ public sealed partial class CosmosBillerExperienceRepository(
         string billerId,
         string? traceId,
         Exception exception);
+
+    [LoggerMessage(2101, LogLevel.Debug,
+        "Cosmos item {ItemId} in container {Container} was already absent during idempotent deletion")]
+    private static partial void LogIdempotentDeleteNotFound(
+        ILogger logger,
+        string container,
+        string itemId);
 
     private sealed record AgentActivityDocument(
         [property: JsonProperty("id")] string Id,

@@ -38,6 +38,17 @@ public sealed class PaymentContractsTests
         Assert.Equal(response, roundTripped);
     }
 
+    [Theory]
+    [InlineData(PaymentStatus.Pending, "pending")]
+    [InlineData(PaymentStatus.Scheduled, "scheduled")]
+    [InlineData(PaymentStatus.Succeeded, "succeeded")]
+    [InlineData(PaymentStatus.Failed, "failed")]
+    public void PaymentStatusSerializesToLowercaseToken(PaymentStatus status, string token)
+    {
+        Assert.Equal($"\"{token}\"", JsonSerializer.Serialize(status, CaseInsensitive));
+        Assert.Equal(status, JsonSerializer.Deserialize<PaymentStatus>($"\"{token}\"", CaseInsensitive));
+    }
+
     [Fact]
     public void CreatePaymentRequestOptionalFieldsDefaultToNull()
     {

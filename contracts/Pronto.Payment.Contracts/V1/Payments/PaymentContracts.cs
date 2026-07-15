@@ -41,6 +41,14 @@ public sealed record PaymentQuoteResponse(
 [JsonConverter(typeof(PaymentStatusJsonConverter))]
 public enum PaymentStatus
 {
+    /// <summary>
+    /// Durably persisted before the invoice transition is asserted. A crash after this point
+    /// but before <see cref="Succeeded"/>/<see cref="Scheduled"/> leaves a recoverable,
+    /// auditable payment row rather than an orphaned invoice with no payment record.
+    /// </summary>
+    [JsonStringEnumMemberName("pending")]
+    Pending,
+
     [JsonStringEnumMemberName("scheduled")]
     Scheduled,
 
