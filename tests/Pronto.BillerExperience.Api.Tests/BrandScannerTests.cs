@@ -39,7 +39,7 @@ public sealed class BrandScannerTests
             _ => new HttpResponseMessage(HttpStatusCode.NotFound)
         });
 
-        var response = await Create(handler).ScanAsync(new BrandScanRequest(new Uri("https://example.com/")));
+        var response = await Scan(handler, new BrandScanRequest(new Uri("https://example.com/")));
 
         Assert.Equal(BrandScanOutcome.Completed, response.Outcome);
         Assert.Equal("#1a73e8", response.PrimaryColor);
@@ -60,7 +60,7 @@ public sealed class BrandScannerTests
             _ => new HttpResponseMessage(HttpStatusCode.NotFound)
         });
 
-        var response = await Create(handler).ScanAsync(new BrandScanRequest(new Uri("https://example.com/")));
+        var response = await Scan(handler, new BrandScanRequest(new Uri("https://example.com/")));
 
         Assert.Equal("Merriweather", response.FontFamily);
         Assert.Contains("#d62828", response.Palette);
@@ -71,7 +71,7 @@ public sealed class BrandScannerTests
     {
         var handler = new FakeHandler(_ => Html(HomePage));
 
-        var response = await Create(handler).ScanAsync(new BrandScanRequest(new Uri("http://example.com/")));
+        var response = await Scan(handler, new BrandScanRequest(new Uri("http://example.com/")));
 
         Assert.Equal(BrandScanOutcome.Failed, response.Outcome);
         Assert.Equal("brand_scan.https_required", response.ErrorCode);
@@ -83,7 +83,7 @@ public sealed class BrandScannerTests
     {
         var handler = new FakeHandler(_ => new HttpResponseMessage(HttpStatusCode.ServiceUnavailable));
 
-        var response = await Create(handler).ScanAsync(new BrandScanRequest(new Uri("https://example.com/")));
+        var response = await Scan(handler, new BrandScanRequest(new Uri("https://example.com/")));
 
         Assert.Equal(BrandScanOutcome.Failed, response.Outcome);
         Assert.Equal("brand_scan.http_error", response.ErrorCode);
@@ -94,7 +94,7 @@ public sealed class BrandScannerTests
     {
         var handler = new FakeHandler(_ => Html("<html><head><title>No icons</title></head></html>"));
 
-        var response = await Create(handler).ScanAsync(new BrandScanRequest(new Uri("https://example.com/")));
+        var response = await Scan(handler, new BrandScanRequest(new Uri("https://example.com/")));
 
         Assert.Equal("https://example.com/favicon.ico", response.LogoUrl!.ToString());
     }
@@ -112,7 +112,7 @@ public sealed class BrandScannerTests
             return Html(HomePage);
         });
 
-        var response = await Create(handler).ScanAsync(new BrandScanRequest(new Uri("https://example.com/")));
+        var response = await Scan(handler, new BrandScanRequest(new Uri("https://example.com/")));
 
         Assert.Equal(BrandScanOutcome.Degraded, response.Outcome);
         Assert.Contains("brand_scan.stylesheet_unreadable", response.Warnings);
@@ -131,20 +131,22 @@ public sealed class BrandScannerTests
             + "</body></html>";
         var handler = new FakeHandler(_ => Html(oversized));
 
-        var response = await Create(handler).ScanAsync(new BrandScanRequest(new Uri("https://example.com/")));
+        var response = await Scan(handler, new BrandScanRequest(new Uri("https://example.com/")));
 
         Assert.NotEqual(BrandScanOutcome.Failed, response.Outcome);
         Assert.Equal("#1a73e8", response.PrimaryColor);
         Assert.Equal("https://example.com/apple-touch-icon.png", response.LogoUrl!.ToString());
     }
 
-    private static HttpBrandScanner Create(HttpMessageHandler handler)
+    private static async Task<BrandScanResponse> Scan(HttpMessageHandler handler, BrandScanRequest request)
     {
         var options = Options.Create(new BillerExperienceOptions
         {
             Research = new ResearchOptions { MaxResponseBytes = 200_000, RequestTimeoutSeconds = 5 }
         });
-        return new HttpBrandScanner(new HttpClient(handler), options, NullLogger<HttpBrandScanner>.Instance);
+        using var client = new HttpClient(handler);
+        var scanner = new HttpBrandScanner(client, options, NullLogger<HttpBrandScanner>.Instance);
+        return await scanner.ScanAsync(request);
     }
 
     private static HttpResponseMessage Html(string html) => new(HttpStatusCode.OK)

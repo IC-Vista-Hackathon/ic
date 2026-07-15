@@ -101,7 +101,14 @@ public sealed partial class HttpBrandScanner(
         {
             throw;
         }
-        catch (Exception exception)
+        catch (Exception exception) when (
+            exception is HttpRequestException
+                or OperationCanceledException
+                or IOException
+                or InvalidOperationException
+                or FormatException
+                or UriFormatException
+                or RegexMatchTimeoutException)
         {
             LogScanFailure(logger, website.Host, exception);
             return Failed("brand_scan.unexpected_failure");
@@ -274,16 +281,11 @@ public sealed partial class HttpBrandScanner(
             .Concat(maskIcons)
             .Append("/favicon.ico");
 
-        foreach (var candidate in candidates)
-        {
-            if (Uri.TryCreate(baseUri, System.Net.WebUtility.HtmlDecode(candidate), out var uri)
-                && uri.Scheme == Uri.UriSchemeHttps)
-            {
-                return uri;
-            }
-        }
-
-        return null;
+        return candidates
+            .Select(candidate =>
+                Uri.TryCreate(baseUri, System.Net.WebUtility.HtmlDecode(candidate), out var uri) ? uri : null)
+            .Where(uri => uri is not null && uri.Scheme == Uri.UriSchemeHttps)
+            .FirstOrDefault();
     }
 
     private static string? ExtractFontFamily(string html, string cssText)
