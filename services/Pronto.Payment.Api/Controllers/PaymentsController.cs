@@ -89,29 +89,32 @@ public sealed partial class PaymentsController : ControllerBase
     /// </summary>
     [HttpGet("quote")]
     public async Task<ActionResult<PaymentQuoteResponse>> Quote(
-        [FromQuery(Name = "biller_id")] string billerId,
-        [FromQuery(Name = "invoice_id")] string invoiceId,
-        [FromQuery] string method,
+        [FromQuery(Name = "biller_id")] string? billerId,
+        [FromQuery(Name = "invoice_id")] string? invoiceId,
+        [FromQuery] string? method,
         CancellationToken cancellationToken)
     {
-        var config = await configs.GetAsync(billerId, cancellationToken).ConfigureAwait(false);
-        if (!config.PaymentMethods.Contains(method))
+        var requiredBillerId = RequireQueryValue(billerId, "biller_id");
+        var requiredInvoiceId = RequireQueryValue(invoiceId, "invoice_id");
+        var requiredMethod = RequireQueryValue(method, "method");
+        var config = await configs.GetAsync(requiredBillerId, cancellationToken).ConfigureAwait(false);
+        if (!config.PaymentMethods.Contains(requiredMethod))
         {
             throw ServiceException.BadRequest(
-                "method_not_enabled", $"payment method '{method}' is not enabled for this biller");
+                "method_not_enabled", $"payment method '{requiredMethod}' is not enabled for this biller");
         }
 
-        var invoice = await invoices.GetAsync(billerId, invoiceId, cancellationToken).ConfigureAwait(false)
-            ?? throw ServiceException.NotFound("invoice_not_found", $"invoice {invoiceId} not found");
+        var invoice = await invoices.GetAsync(requiredBillerId, requiredInvoiceId, cancellationToken).ConfigureAwait(false)
+            ?? throw ServiceException.NotFound("invoice_not_found", $"invoice {requiredInvoiceId} not found");
 
         if (invoice.Status == InvoiceStatus.Paid)
         {
-            throw ServiceException.Conflict("already_paid", $"invoice {invoiceId} is already paid");
+            throw ServiceException.Conflict("already_paid", $"invoice {requiredInvoiceId} is already paid");
         }
 
-        var (feeCents, totalCents) = FeeCalculator.Calculate(config, method, invoice.AmountCents);
+        var (feeCents, totalCents) = FeeCalculator.Calculate(config, requiredMethod, invoice.AmountCents);
         return new PaymentQuoteResponse(
-            billerId, invoiceId, method, invoice.AmountCents, feeCents, totalCents);
+            requiredBillerId, requiredInvoiceId, requiredMethod, invoice.AmountCents, feeCents, totalCents);
     }
 
     [HttpGet("{paymentId}")]
@@ -141,6 +144,16 @@ public sealed partial class PaymentsController : ControllerBase
         }
 
         return $"PRONTO-{new string(code)}";
+    }
+
+    private static string RequireQueryValue(string? value, string name)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+        {
+            throw ServiceException.BadRequest($"{name}_required", $"{name} is required");
+        }
+
+        return value.Trim();
     }
 
     [LoggerMessage(4100, LogLevel.Information, "Created payment {PaymentId} for biller {BillerId}, invoice {InvoiceId}, status {Status}, total {TotalCents}; trace {TraceId}")]

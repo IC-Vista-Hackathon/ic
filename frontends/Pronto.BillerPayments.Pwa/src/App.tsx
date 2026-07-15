@@ -34,10 +34,12 @@ export function App() {
 
   const preferences = useMemo(() => experiencePreferences(config), [config]);
   const provider = useMemo(() => config ? new ServicePaymentExperienceProvider(config.biller_id) : undefined, [config]);
+  const acceptedMethods = useMemo(
+    () => preferences.accepted_methods.filter(value => config?.enabled_payment_capabilities.includes(value)),
+    [config?.enabled_payment_capabilities, preferences.accepted_methods]);
   // Server-side quotes: fees come from the Payment Service (same policy the charge applies),
   // never computed client-side. quote.totalCents === amount when the biller absorbs the fee.
   const quote = quotes[method];
-  const fee = quote ? quote.totalCents - invoiceAmount(invoice) : undefined;
   useEffect(() => {
     setQuotes({});
     if (!provider || !invoice) return;
@@ -47,11 +49,9 @@ export function App() {
         .then(result => { if (!cancelled) setQuotes(previous => ({ ...previous, [value]: result })); })
         .catch(caught => logError('pwa.payment.quote_failed', caught, { method: value })));
     return () => { cancelled = true; };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [provider, invoice]);
+  }, [acceptedMethods, provider, invoice]);
   const primaryAction = config?.ui?.actions.find(action => action.id === 'primary-payment-action');
   const schedulesPayment = primaryAction?.action === 1 || primaryAction?.action === 'schedule_payment';
-  const acceptedMethods = preferences.accepted_methods.filter(value => config?.enabled_payment_capabilities.includes(value));
 
   useEffect(() => { if (!acceptedMethods.includes(method)) setMethod(acceptedMethods.includes('ach') ? 'ach' : 'card'); }, [acceptedMethods, method]);
 
@@ -70,7 +70,7 @@ export function App() {
         {step === 'method' && invoice && <section className="card"><Bill invoice={invoice}/><h2>Choose how to pay</h2><div className="choices">{acceptedMethods.includes('card') && <button className={method === 'card' ? 'selected' : 'option'} onClick={() => setMethod('card')}>Card <small>{quoteFeeText(quotes.card, invoice.amountCents)}</small></button>}{acceptedMethods.includes('ach') && <button className={method === 'ach' ? 'selected' : 'option'} onClick={() => setMethod('ach')}>Bank Account <small>{quoteFeeText(quotes.ach, invoice.amountCents)}</small></button>}</div>{acceptedMethods.filter(value => value !== 'card' && value !== 'ach').length > 0 && <div className="method-chips">Also accepts {acceptedMethods.filter(value => value !== 'card' && value !== 'ach').map(humanize).join(' · ')}</div>}
           {(preferences.offer_autopay || preferences.offer_paperless) && <fieldset><legend>Optional preferences</legend>{preferences.offer_autopay && preferences.enroll_during_payment && <label className="check"><input type="checkbox" checked={autoPay} onChange={event => setAutoPay(event.target.checked)}/><span><strong>Enroll in AutoPay</strong><small>Use this method for future bills. Cancel anytime.</small></span></label>}{preferences.offer_paperless && <label className="check"><input type="checkbox" checked={paperless} onChange={event => setPaperless(event.target.checked)}/><span><strong>Switch to Paperless Billing</strong><small>Receive bills electronically instead of by mail.</small></span></label>}{(autoPay || paperless) && <><label>Name<input value={payerName} onChange={event => setPayerName(event.target.value)} required/></label><label>Email<input type="email" value={payerEmail} onChange={event => setPayerEmail(event.target.value)} required/></label></>}</fieldset>}
           <button onClick={() => setStep('review')} disabled={acceptedMethods.length === 0 || ((autoPay || paperless) && (!payerName || !payerEmail))}>Review Payment</button></section>}
-        {step === 'review' && invoice && <section className="card"><h2>Review and confirm</h2><dl><div><dt>Bill amount</dt><dd>{money(invoice.amountCents)}</dd></div><div><dt>Service fee</dt><dd>{quote ? money(fee ?? 0) : '…'}</dd></div><div className="total"><dt>Total</dt><dd>{quote ? money(quote.totalCents) : '…'}</dd></div></dl>{schedulesPayment && <div className="notice">This payment will be scheduled for {new Date(invoice.dueDate).toLocaleDateString()}.</div>}{(autoPay || paperless) && <div className="notice">You chose: {[autoPay && 'AutoPay', paperless && 'Paperless Billing'].filter(Boolean).join(' and ')}.</div>}<p className="consent">Selecting “{primaryAction?.label ?? 'Pay Now'}” authorizes this {schedulesPayment ? 'scheduled' : 'one-time'} payment. Optional preferences are recorded separately.</p><div className="actions"><button className="back" onClick={() => setStep('method')}>Back</button><button disabled={busy || !quote} onClick={pay}>{busy ? 'Processing…' : (primaryAction?.label ?? (quote ? `Pay ${money(quote.totalCents)}` : 'Preparing quote…'))}</button></div></section>}
+        {step === 'review' && invoice && <section className="card"><h2>Review and confirm</h2><dl><div><dt>Bill amount</dt><dd>{money(invoice.amountCents)}</dd></div><div><dt>Service fee</dt><dd>{quoteFeeText(quote, invoice.amountCents)}</dd></div><div className="total"><dt>Total</dt><dd>{quote ? money(quote.totalCents) : '…'}</dd></div></dl>{schedulesPayment && <div className="notice">This payment will be scheduled for {new Date(invoice.dueDate).toLocaleDateString()}.</div>}{(autoPay || paperless) && <div className="notice">You chose: {[autoPay && 'AutoPay', paperless && 'Paperless Billing'].filter(Boolean).join(' and ')}.</div>}<p className="consent">Selecting “{primaryAction?.label ?? 'Pay Now'}” authorizes this {schedulesPayment ? 'scheduled' : 'one-time'} payment. Optional preferences are recorded separately.</p><div className="actions"><button className="back" onClick={() => setStep('method')}>Back</button><button disabled={busy || !quote} onClick={pay}>{busy ? 'Processing…' : (primaryAction?.label ?? (quote ? `Pay ${money(quote.totalCents)}` : 'Preparing quote…'))}</button></div></section>}
         {step === 'complete' && receipt && <section className="card success" aria-live="polite"><div className="success-icon">✓</div><h2>{schedulesPayment ? 'Payment scheduled' : 'Payment received'}</h2><p>Confirmation <strong>{receipt.confirmation}</strong></p><p>{money(receipt.totalCents)} {schedulesPayment ? 'scheduled' : 'paid'} using the configured provider.</p>{autoPay && <span className="pill">AutoPay requested</span>}{paperless && <span className="pill">Paperless requested</span>}</section>}
       </>}
       {page === 'history' && <section className="card"><h2>Recent account activity</h2>{invoice ? <>{invoices.map(item => <Bill key={item.id} invoice={item}/>)}{payments.map(payment => <div className="history-row" key={payment.payment_id}><span>Payment {payment.confirmation}<small>{new Date(payment.created_at).toLocaleDateString()}</small></span><strong>{money(payment.total_cents)}</strong></div>)}</> : <><p className="card-copy">Find your bill first to load account-specific activity.</p><button onClick={() => navigate('payment')}>Find My Bill</button></>}</section>}
@@ -82,7 +82,6 @@ export function App() {
 
 function Bill({ invoice }: { invoice: Invoice }) { return <div className="bill"><div><span>{invoice.description}</span><small>Due {new Date(invoice.dueDate).toLocaleDateString()}</small></div><strong>{money(invoice.amountCents)}</strong></div>; }
 function experiencePreferences(config?: ExperienceDefinition): ExperiencePreferences { return config?.preferences ?? { guest_checkout_allowed: true, offer_autopay: true, enroll_during_payment: true, offer_paperless: true, reminder_channel: 'both', accepted_methods: config?.enabled_payment_capabilities ?? ['card', 'ach'], self_service_history: true, self_service_updates: true, fee_handling: 'mixed', preview: { default_device: 'desktop', enabled_scenarios: ['payment', 'history', 'communication', 'complex'] } }; }
-function invoiceAmount(invoice?: Invoice) { return invoice?.amountCents ?? 0; }
 function quoteFeeText(quote: PaymentQuote | undefined, amountCents: number) {
   if (!quote) return '…';
   return quote.totalCents === amountCents ? 'No payer fee' : `${money(quote.totalCents - amountCents)} fee`;

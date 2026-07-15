@@ -91,4 +91,25 @@ public sealed class PaymentQuoteTests : IClassFixture<WebApplicationFactory<Prog
         Assert.Equal(HttpStatusCode.BadRequest, badMethod.StatusCode);
         Assert.Equal(HttpStatusCode.NotFound, missing.StatusCode);
     }
+
+    [Fact]
+    public async Task QuoteRequiresAllQueryParameters()
+    {
+        var billerId = Guid.NewGuid().ToString();
+        var invoice = fakeInvoices.AddDueInvoice(billerId, amountCents: 5000);
+        var cases = new[]
+        {
+            ($"invoice_id={invoice.Id}&method=card", "biller_id_required"),
+            ($"biller_id={billerId}&method=card", "invoice_id_required"),
+            ($"biller_id={billerId}&invoice_id={invoice.Id}", "method_required"),
+        };
+
+        foreach (var (query, errorCode) in cases)
+        {
+            var response = await client.GetAsync(new Uri($"payments/quote?{query}", UriKind.Relative));
+
+            Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+            Assert.Contains(errorCode, await response.Content.ReadAsStringAsync(), StringComparison.Ordinal);
+        }
+    }
 }
