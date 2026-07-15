@@ -31,10 +31,11 @@ public sealed partial class BillerOnboardingService(
         var id = Guid.NewGuid().ToString("N");
         activity?.SetTag("ic.biller_id", id);
         var now = DateTimeOffset.UtcNow;
+        var slug = await ReserveSlugAsync(request.Slug.Trim().ToLowerInvariant(), cancellationToken);
         var biller = new BillerRecord(
             id,
             request.DisplayName.Trim(),
-            request.Slug.Trim().ToLowerInvariant(),
+            slug,
             request.BillType.Trim(),
             request.PostalCode.Trim(),
             request.Website,
@@ -63,6 +64,8 @@ public sealed partial class BillerOnboardingService(
             now);
 
         await repository.CreateBillerAsync(biller, cancellationToken);
+        // Note: check-then-create, not an atomic reservation — adequate while onboarding
+        // volume is demo-scale; a slug reservation document makes this race-free later.
         var savedExperience = await repository.SaveExperienceAsync(experience, null, cancellationToken);
         var savedRun = await repository.SaveRunAsync(run, null, cancellationToken);
         await (invoiceSeeder ?? new NullInvoiceSeeder()).SeedAsync(id, biller.BillType, cancellationToken);
@@ -272,6 +275,21 @@ public sealed partial class BillerOnboardingService(
         CancellationToken cancellationToken) =>
         Map(await repository.GetDeploymentAsync(billerId, deploymentId, cancellationToken)
             ?? throw new KeyNotFoundException($"Deployment '{deploymentId}' was not found for biller '{billerId}'."));
+
+    /// <summary>
+    /// Published artifacts and public reads are keyed by slug, so two billers must never
+    /// share one. Appends -2, -3, … until free.
+    /// </summary>
+    private async ValueTask<string> ReserveSlugAsync(string requested, CancellationToken cancellationToken)
+    {
+        var candidate = requested;
+        for (var suffix = 2; await repository.SlugExistsAsync(candidate, cancellationToken); suffix++)
+        {
+            candidate = $"{requested}-{suffix}";
+        }
+
+        return candidate;
+    }
 
     private async ValueTask<BillerRecord> GetRequiredBillerAsync(string billerId, CancellationToken cancellationToken) =>
         await repository.GetBillerAsync(billerId, cancellationToken)

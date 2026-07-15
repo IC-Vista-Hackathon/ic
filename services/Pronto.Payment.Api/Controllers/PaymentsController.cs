@@ -83,6 +83,37 @@ public sealed partial class PaymentsController : ControllerBase
         return Created($"/payments/{payment.PaymentId}?biller_id={payment.BillerId}", payment);
     }
 
+    /// <summary>
+    /// Pre-confirmation quote using the same config + FeeCalculator as payment creation,
+    /// so the displayed total always matches the charged total.
+    /// </summary>
+    [HttpGet("quote")]
+    public async Task<ActionResult<PaymentQuoteResponse>> Quote(
+        [FromQuery(Name = "biller_id")] string billerId,
+        [FromQuery(Name = "invoice_id")] string invoiceId,
+        [FromQuery] string method,
+        CancellationToken cancellationToken)
+    {
+        var config = await configs.GetAsync(billerId, cancellationToken).ConfigureAwait(false);
+        if (!config.PaymentMethods.Contains(method))
+        {
+            throw ServiceException.BadRequest(
+                "method_not_enabled", $"payment method '{method}' is not enabled for this biller");
+        }
+
+        var invoice = await invoices.GetAsync(billerId, invoiceId, cancellationToken).ConfigureAwait(false)
+            ?? throw ServiceException.NotFound("invoice_not_found", $"invoice {invoiceId} not found");
+
+        if (invoice.Status == InvoiceStatus.Paid)
+        {
+            throw ServiceException.Conflict("already_paid", $"invoice {invoiceId} is already paid");
+        }
+
+        var (feeCents, totalCents) = FeeCalculator.Calculate(config, method, invoice.AmountCents);
+        return new PaymentQuoteResponse(
+            billerId, invoiceId, method, invoice.AmountCents, feeCents, totalCents);
+    }
+
     [HttpGet("{paymentId}")]
     public async Task<ActionResult<PaymentResponse>> Get(
         string paymentId, [FromQuery(Name = "biller_id")] string billerId, CancellationToken cancellationToken)
