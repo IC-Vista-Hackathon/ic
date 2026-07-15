@@ -87,6 +87,19 @@ public sealed partial class BillerResearchCoordinator(
             return new BillerResearchResponse(ResearchOutcome.Failed, [], [], warnings, "research.all_agents_failed", true);
         }
 
+        if (successful.All(response => response.Outcome == ResearchOutcome.Skipped))
+        {
+            var skipWarnings = successful.SelectMany(response => response.Warnings)
+                .Concat(warnings)
+                .Distinct(StringComparer.Ordinal)
+                .ToArray();
+            var skipCode = successful.Select(response => response.ErrorCode).FirstOrDefault(code => code is not null)
+                ?? "research.skipped";
+            activity?.SetTag("research.agent.skipped", successful.Length);
+            activity?.SetStatus(ActivityStatusCode.Ok, skipCode);
+            return new BillerResearchResponse(ResearchOutcome.Skipped, [], [], skipWarnings, skipCode);
+        }
+
         var facts = successful.SelectMany(response => response.Facts)
             .GroupBy(fact => (fact.Name, fact.Value, fact.SourceUrl))
             .Select(group => group.OrderByDescending(fact => fact.Confidence).First())
@@ -174,15 +187,19 @@ public sealed partial class BillerResearchCoordinator(
                 {
                     ResearchOutcome.Completed => OrchestrationEventStatus.Completed,
                     ResearchOutcome.Degraded => OrchestrationEventStatus.Degraded,
+                    ResearchOutcome.Skipped => OrchestrationEventStatus.Skipped,
                     _ => OrchestrationEventStatus.Failed
                 };
                 await PublishActivityAsync(
                     executionContext,
                     agent,
                     status,
-                    response.Outcome == ResearchOutcome.Failed
-                        ? "Agent research failed; orchestration will continue when another result is available."
-                        : $"Agent returned {response.Facts.Count} cited facts from {response.Sources.Count} sources.",
+                    response.Outcome switch
+                    {
+                        ResearchOutcome.Failed => "Agent research failed; orchestration will continue when another result is available.",
+                        ResearchOutcome.Skipped => "Agent was skipped because its required input was unavailable.",
+                        _ => $"Agent returned {response.Facts.Count} cited facts from {response.Sources.Count} sources."
+                    },
                     response.ErrorCode,
                     response.Retryable,
                     Stopwatch.GetElapsedTime(startedAt).TotalMilliseconds,

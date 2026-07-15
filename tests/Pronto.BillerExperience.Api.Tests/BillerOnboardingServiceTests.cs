@@ -314,7 +314,28 @@ public sealed class BillerOnboardingServiceTests
         await service.SendMessageAsync(created.Biller.BillerId, new("Ready for review"), CancellationToken.None);
 
         Assert.Equal(ResearchOutcome.Skipped, generator.Research?.Outcome);
-        Assert.Equal("research.website_missing", generator.Research?.ErrorCode);
+        Assert.Equal("research.not_configured", generator.Research?.ErrorCode);
+        var (_, activity) = await service.GetSessionActivityAsync(created.Biller.BillerId, CancellationToken.None);
+        Assert.Contains(activity, item => item.AgentId == "biller-research" && item.Status == AgentActivityStatus.Skipped);
+    }
+
+    [Fact]
+    public async Task MissingWebsiteStillInvokesConfiguredResearchCoordinatorWithBillerContext()
+    {
+        var generator = new CapturingDraftGenerator();
+        var coordinator = new StubResearchCoordinator(new BillerResearchResponse(
+            ResearchOutcome.Completed, [], [], []));
+        var service = CreateService(generator: generator, researchCoordinator: coordinator);
+        var created = await service.CreateAsync(CreateRequest() with { Website = null }, CancellationToken.None);
+
+        await service.SendMessageAsync(created.Biller.BillerId, new("Ready for review"), CancellationToken.None);
+
+        Assert.NotNull(coordinator.Request);
+        Assert.Null(coordinator.Request.Website);
+        Assert.Equal(CreateRequest().DisplayName, coordinator.Request.BillerName);
+        Assert.Equal(CreateRequest().BillType, coordinator.Request.BillType);
+        Assert.Equal(CreateRequest().PostalCode, coordinator.Request.PostalCode);
+        Assert.Equal(ResearchOutcome.Completed, generator.Research?.Outcome);
     }
 
     [Fact]
@@ -479,10 +500,16 @@ public sealed class BillerOnboardingServiceTests
 
     private sealed class StubResearchCoordinator(BillerResearchResponse response) : IBillerResearchCoordinator
     {
+        public BillerResearchRequest? Request { get; private set; }
+
         public Task<BillerResearchResponse> ResearchAsync(
             BillerResearchRequest request,
             ResearchExecutionContext? executionContext = null,
-            CancellationToken cancellationToken = default) => Task.FromResult(response);
+            CancellationToken cancellationToken = default)
+        {
+            Request = request;
+            return Task.FromResult(response);
+        }
     }
 
     private sealed class RecordingComplianceReviewService(bool blockPublish = false) : IComplianceReviewService

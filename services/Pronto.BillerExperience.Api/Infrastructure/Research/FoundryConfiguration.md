@@ -14,6 +14,11 @@ Assign the API workload identity a role that permits Foundry agent data-plane op
 repository grants the built-in **Cognitive Services User** role at the AI Services account scope;
 its data actions cover versioned-agent discovery and Responses API invocation. No API key is read by this adapter.
 
+Production enables agent reconciliation only when the `ic-shared-context-mcp` project connection
+and the `ic-agent-mcp` Kubernetes secret exist. The secret contains separate `api-key` and
+`capability-signing-key` values of at least 32 characters. The API key must exactly match the
+`mcpApiKey` supplied to the Bicep deployment; neither value belongs in source control.
+
 Each worker agent must be a versioned Foundry agent and carry this metadata on its latest version:
 
 ```text
