@@ -38,6 +38,9 @@ spec:
             - { name: BillerExperience__Research__FoundryProjectEndpoint, value: "https://aif-ic-hack-jk4zmntatjem4.services.ai.azure.com/api/projects/ic" }
             - { name: BillerExperience__Research__CoordinatorAgentId, value: research-coordinator }
             - { name: BillerExperience__AgentProvisioning__Enabled, value: "true" }
+            - { name: BillerExperience__Compliance__FoundryAgentId, value: biller-compliance }
+            - { name: BillerExperience__Compliance__RequireFoundryEvidence, value: "true" }
+            - { name: BillerExperience__Compliance__PolicyVersion, value: "2026-07-15" }
             - { name: BillerExperience__AgentProvisioning__McpConnectionId, value: ic-shared-context-mcp }
             # The public Gateway is HTTP-only; authenticated MCP remains disabled until TLS exists.
             - { name: BillerExperience__Mcp__Enabled, value: "false" }

@@ -8,6 +8,7 @@ public sealed class BillerExperienceOptions
     public PublishedExperienceOptions PublishedExperience { get; set; } = new();
     public SupportingServicesOptions SupportingServices { get; set; } = new();
     public ResearchOptions Research { get; set; } = new();
+    public ComplianceOptions Compliance { get; set; } = new();
     public McpOptions Mcp { get; set; } = new();
     public AgentProvisioningOptions AgentProvisioning { get; set; } = new();
 }
@@ -19,6 +20,13 @@ public sealed class AgentProvisioningOptions
     public string PrimaryModel { get; set; } = "gpt-5.4";
     public string MiniModel { get; set; } = "gpt-5.4-mini";
     public string McpConnectionId { get; set; } = "ic-shared-context-mcp";
+}
+
+public sealed class ComplianceOptions
+{
+    public string FoundryAgentId { get; set; } = string.Empty;
+    public bool RequireFoundryEvidence { get; set; }
+    public string PolicyVersion { get; set; } = "2026-07-15";
 }
 
 public sealed class McpOptions
