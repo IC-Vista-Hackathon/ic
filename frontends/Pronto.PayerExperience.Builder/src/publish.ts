@@ -2,6 +2,7 @@ import { readFile, readdir } from 'node:fs/promises';
 import { join, relative, sep } from 'node:path';
 import { BlobServiceClient } from '@azure/storage-blob';
 import { DefaultAzureCredential } from '@azure/identity';
+import { validateRevision, validateSlug } from './paths';
 
 const CONTENT_TYPES: Record<string, string> = {
   html: 'text/html; charset=utf-8',
@@ -46,23 +47,34 @@ export async function publishBundle({
   containerName = 'payer-experiences',
   writeActive = true,
 }: PublishInputs): Promise<PublishResult> {
+  const safeSlug = validateSlug(slug);
+  const safeRevision = validateRevision(revision);
   const service = new BlobServiceClient(storageEndpoint, new DefaultAzureCredential());
   const container = service.getContainerClient(containerName);
 
-  const sitePrefix = `billers/${slug}/revisions/${revision}/site`;
+  const sitePrefix = `billers/${safeSlug}/revisions/${safeRevision}/site`;
   const files = await walk(distDir);
   for (const file of files) {
     const rel = relative(distDir, file).split(sep).join('/');
     const blobName = `${sitePrefix}/${rel}`;
     const body = await readFile(file);
-    const isEntry = rel === 'index.html';
-    await container.getBlockBlobClient(blobName).uploadData(body, {
-      blobHTTPHeaders: {
-        blobContentType: contentTypeFor(rel),
-        // Hashed assets are immutable; the SPA entry must always revalidate.
-        blobCacheControl: isEntry ? 'no-cache, no-store, must-revalidate' : 'public, max-age=31536000, immutable',
-      },
-    });
+    const blob = container.getBlockBlobClient(blobName);
+    try {
+      await blob.uploadData(body, {
+        blobHTTPHeaders: {
+          blobContentType: contentTypeFor(rel),
+          blobCacheControl: cacheControlFor(rel),
+        },
+        conditions: { ifNoneMatch: '*' },
+      });
+    } catch (error) {
+      const statusCode = getStatusCode(error);
+      if (statusCode !== 409 && statusCode !== 412) throw error;
+      const existing = await blob.downloadToBuffer();
+      if (!existing.equals(body)) {
+        throw new Error(`Immutable site artifact already exists with different content: ${blobName}`);
+      }
+    }
   }
 
   if (!writeActive) {
@@ -71,8 +83,8 @@ export async function publishBundle({
   }
 
   // Active pointer written last so a partially-uploaded revision is never served.
-  const activeBlob = `billers/${slug}/active.json`;
-  const pointer = JSON.stringify({ slug, revision, site_prefix: sitePrefix, entry: `${sitePrefix}/index.html` });
+  const activeBlob = `billers/${safeSlug}/active.json`;
+  const pointer = JSON.stringify({ slug: safeSlug, revision: safeRevision, site_prefix: sitePrefix, entry: `${sitePrefix}/index.html` });
   await container.getBlockBlobClient(activeBlob).uploadData(Buffer.from(pointer), {
     blobHTTPHeaders: { blobContentType: 'application/json', blobCacheControl: 'no-cache, no-store, must-revalidate' },
   });
@@ -94,4 +106,18 @@ async function walk(dir: string): Promise<string[]> {
 function contentTypeFor(rel: string): string {
   const ext = rel.slice(rel.lastIndexOf('.') + 1).toLowerCase();
   return CONTENT_TYPES[ext] ?? 'application/octet-stream';
+}
+
+function cacheControlFor(rel: string): string {
+  const file = rel.split('/').pop() ?? rel;
+  const stem = file.includes('.') ? file.slice(0, file.lastIndexOf('.')) : file;
+  return rel.startsWith('assets/') && stem.includes('-')
+    ? 'public, max-age=31536000, immutable'
+    : 'no-cache, no-store, must-revalidate';
+}
+
+function getStatusCode(error: unknown): number | undefined {
+  if (typeof error !== 'object' || error === null || !('statusCode' in error)) return undefined;
+  const statusCode = error.statusCode;
+  return typeof statusCode === 'number' ? statusCode : undefined;
 }

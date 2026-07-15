@@ -102,7 +102,7 @@ Execution only proceeds after the client posts back `{confirm: true}` for a pend
 | `get_invoices(biller_id, account_number)` | Invoice Service | Bill Intelligence Agent |
 | `get_preferences(biller_id, payer_id)` | Payer Account Service | Policy Agent |
 | `create_payer_account(biller_id, ...)` | Payer Account Service | Policy Agent (payer opt-in) |
-| `pay_invoice(biller_id, invoice_id, method, payer_account_id)` | Payment Service | Execution Agent only, post-confirmation |
+| `pay_invoice(biller_id, invoice_id, method, payer_account_id, scheduled_for)` | Payment Service | Execution Agent only, post-confirmation; `scheduled_for` is an ISO date or explicit `null` for immediate payment |
 | `send_notification(biller_id, channel, template, to, payload, payer_id?)` | Notification Service | stretch |
 
 ## Notification Service (stretch)

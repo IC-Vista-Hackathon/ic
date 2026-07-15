@@ -1,8 +1,8 @@
 namespace Pronto.BillerExperience.Worker.Building;
 
 // Configuration for the per-biller bundle build Job the Worker launches on Kubernetes.
-// When BuilderImage is empty the bundle-build step is skipped and the Worker falls back to
-// config-only publication (its prior behavior), so non-cluster environments still work.
+// When BuilderImage is empty the Worker can start without Kubernetes, but publication fails
+// closed before active.json is changed.
 public sealed class BundleBuildOptions
 {
     public const string SectionName = "BundleBuild";

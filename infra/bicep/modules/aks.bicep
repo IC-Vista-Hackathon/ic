@@ -7,12 +7,14 @@ param nodeCountMin int
 param nodeCountMax int
 param vmSize string
 param uamiName string
+param nonprodUamiName string
 param workloadNamespace string
 param nonprodWorkloadNamespace string
 param workloadServiceAccountName string
 param publisherUamiName string
 param publisherNamespace string
 param publisherServiceAccountName string
+param deploymentPrincipalIds array
 param monitorWorkspaceId string
 param monitorWorkspaceLocation string
 
@@ -22,6 +24,10 @@ resource acr 'Microsoft.ContainerRegistry/registries@2023-07-01' existing = {
 
 resource uami 'Microsoft.ManagedIdentity/userAssignedIdentities@2023-01-31' existing = {
   name: uamiName
+}
+
+resource nonprodUami 'Microsoft.ManagedIdentity/userAssignedIdentities@2023-01-31' existing = {
+  name: nonprodUamiName
 }
 
 resource publisherUami 'Microsoft.ManagedIdentity/userAssignedIdentities@2023-01-31' existing = {
@@ -42,6 +48,10 @@ resource aks 'Microsoft.ContainerService/managedClusters@2024-02-01' = {
     oidcIssuerProfile: { enabled: true }
     securityProfile: {
       workloadIdentity: { enabled: true }
+    }
+    aadProfile: {
+      managed: true
+      enableAzureRBAC: true
     }
     addonProfiles: {
       omsagent: {
@@ -84,6 +94,28 @@ resource acrPullRoleAssignment 'Microsoft.Authorization/roleAssignments@2022-04-
   }
 }
 
+// CI deploy identities authenticate as normal cluster users and can update workloads, but cannot
+// create RBAC bindings or use the system:masters administrator certificate.
+resource deploymentClusterUserRoleAssignments 'Microsoft.Authorization/roleAssignments@2022-04-01' = [for principalId in deploymentPrincipalIds: {
+  name: guid(aks.id, string(principalId), 'AksClusterUser')
+  scope: aks
+  properties: {
+    principalId: string(principalId)
+    principalType: 'ServicePrincipal'
+    roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', '4abbcc35-e782-43d8-92c5-2d3f1bd2253f')
+  }
+}]
+
+resource deploymentWriterRoleAssignments 'Microsoft.Authorization/roleAssignments@2022-04-01' = [for principalId in deploymentPrincipalIds: {
+  name: guid(aks.id, string(principalId), 'AksRbacWriter')
+  scope: aks
+  properties: {
+    principalId: string(principalId)
+    principalType: 'ServicePrincipal'
+    roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', 'a7ffa36f-339b-4b5c-8bdf-e2c188b2c0eb')
+  }
+}]
+
 // Federates the workload identity to a specific namespace/service account — services running
 // as this service account can request Azure AD tokens with no secret, via workload identity.
 resource federatedCredential 'Microsoft.ManagedIdentity/userAssignedIdentities/federatedIdentityCredentials@2023-01-31' = {
@@ -96,19 +128,19 @@ resource federatedCredential 'Microsoft.ManagedIdentity/userAssignedIdentities/f
   }
 }
 
-// Same workload identity, also federated to the nonprod namespace's service account so per-PR
-// (ic-nonprod) pods can authenticate to the nonprod Cosmos account. One identity, two subjects.
-// Azure rejects concurrent federated-credential writes on a single managed identity, so this
-// depends on the prod credential above to force them to be created sequentially.
+// Dedicated nonprod identity, federated to the nonprod namespace's service account so per-PR
+// (ic-nonprod) pods authenticate to the nonprod Cosmos account only. Because this lives on its
+// own identity (not the prod uami), each identity carries a single federated credential and no
+// serialization/dependsOn is needed — this sidesteps the
+// ConcurrentFederatedIdentityCredentialsWritesForSingleManagedIdentity error entirely.
 resource nonprodFederatedCredential 'Microsoft.ManagedIdentity/userAssignedIdentities/federatedIdentityCredentials@2023-01-31' = {
-  parent: uami
+  parent: nonprodUami
   name: 'aks-${nonprodWorkloadNamespace}-${workloadServiceAccountName}'
   properties: {
     issuer: aks.properties.oidcIssuerProfile.issuerURL
     subject: 'system:serviceaccount:${nonprodWorkloadNamespace}:${workloadServiceAccountName}'
     audiences: [ 'api://AzureADTokenExchange' ]
   }
-  dependsOn: [ federatedCredential ]
 }
 
 resource publisherFederatedCredential 'Microsoft.ManagedIdentity/userAssignedIdentities/federatedIdentityCredentials@2023-01-31' = {
