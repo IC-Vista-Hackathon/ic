@@ -95,6 +95,64 @@ public sealed class InvoiceStatusTransitionTests
     }
 
     [Fact]
+    public async Task ScheduledInvoiceCanOnlyBeSettledByOriginatingPayment()
+    {
+        var repo = new InMemoryInvoiceRepository();
+        var invoice = Make("b_1");
+        await repo.AddRangeAsync([invoice]);
+        await repo.TryUpdateStatusAsync("b_1", invoice.Id, Domain.InvoiceStatus.Scheduled, "pay-1");
+
+        var wrongPayment = await repo.TryUpdateStatusAsync("b_1", invoice.Id, Domain.InvoiceStatus.Paid, "pay-2");
+        var originating = await repo.TryUpdateStatusAsync("b_1", invoice.Id, Domain.InvoiceStatus.Paid, "pay-1");
+
+        Assert.Equal(InvoiceTransitionOutcome.ScheduleLocked, wrongPayment.Outcome);
+        Assert.Equal(InvoiceTransitionOutcome.Updated, originating.Outcome);
+        Assert.Equal(Domain.InvoiceStatus.Paid, originating.Invoice!.Status);
+    }
+
+    [Fact]
+    public async Task ScheduledInvoiceRejectsReschedulingByAnotherPayment()
+    {
+        var repo = new InMemoryInvoiceRepository();
+        var invoice = Make("b_1");
+        await repo.AddRangeAsync([invoice]);
+        await repo.TryUpdateStatusAsync("b_1", invoice.Id, Domain.InvoiceStatus.Scheduled, "pay-1");
+
+        var second = await repo.TryUpdateStatusAsync("b_1", invoice.Id, Domain.InvoiceStatus.Scheduled, "pay-2");
+
+        Assert.Equal(InvoiceTransitionOutcome.ScheduleLocked, second.Outcome);
+    }
+
+    [Fact]
+    public async Task ScheduledReplayBySamePaymentIsIdempotent()
+    {
+        var repo = new InMemoryInvoiceRepository();
+        var invoice = Make("b_1");
+        await repo.AddRangeAsync([invoice]);
+        await repo.TryUpdateStatusAsync("b_1", invoice.Id, Domain.InvoiceStatus.Scheduled, "pay-1");
+
+        var replay = await repo.TryUpdateStatusAsync("b_1", invoice.Id, Domain.InvoiceStatus.Scheduled, "pay-1");
+
+        Assert.Equal(InvoiceTransitionOutcome.Updated, replay.Outcome);
+        Assert.Equal(Domain.InvoiceStatus.Scheduled, replay.Invoice!.Status);
+    }
+
+    [Fact]
+    public async Task ControllerMapsScheduleLockedToConflict()
+    {
+        var controller = NewController(out var repo);
+        var invoice = Make("b_1");
+        await repo.AddRangeAsync([invoice]);
+        await repo.TryUpdateStatusAsync("b_1", invoice.Id, Domain.InvoiceStatus.Scheduled, "pay-1");
+
+        var result = await controller.UpdateStatus(
+            "b_1", invoice.Id, new UpdateInvoiceStatusRequest(WireStatus.Paid, "pay-2"), CancellationToken.None);
+
+        var conflict = Assert.IsType<ConflictObjectResult>(result);
+        Assert.Equal("schedule_locked", ((ApiError)conflict.Value!).Error.Code);
+    }
+
+    [Fact]
     public async Task PaidToScheduledIsInvalid()
     {
         var repo = new InMemoryInvoiceRepository();

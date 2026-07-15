@@ -1,36 +1,60 @@
+using System.Globalization;
 using System.Net;
 using System.Text.Json.Serialization;
-using Pronto.Payment.Contracts.V1.Payments;
+using Pronto.Payment.Api.Domain;
 using Microsoft.Azure.Cosmos;
 
 namespace Pronto.Payment.Api.Storage;
 
 /// <summary>
 /// Cosmos-backed payment store. Container <c>payments</c>, partition key <c>/biller_id</c>.
-/// The wire <see cref="PaymentResponse"/> is wrapped so the document carries Cosmos's
-/// required <c>id</c> and the <c>biller_id</c> partition key at the top level.
+/// The <see cref="PaymentRecord"/> is wrapped so the document carries Cosmos's required
+/// <c>id</c> and the <c>biller_id</c> partition key at the top level while the queryable payment
+/// fields (lifecycle, scheduled_for, lease) live under <c>payment</c>.
 /// </summary>
 public sealed class CosmosPaymentStore : IPaymentStore
 {
+    private const int MaxClaimRetries = 5;
+
     private readonly Container container;
 
     public CosmosPaymentStore(CosmosClient client, string databaseName)
         => container = client.GetContainer(databaseName, "payments");
 
-    public async Task AddAsync(PaymentResponse payment, CancellationToken cancellationToken = default)
+    public async Task<PaymentBeginResult> BeginAsync(
+        PaymentRecord pending, CancellationToken cancellationToken = default)
     {
-        var document = new PaymentDocument
+        var document = PaymentDocument.From(pending);
+        try
         {
-            Id = payment.PaymentId,
-            BillerId = payment.BillerId,
-            Payment = payment,
-        };
+            var created = await container.CreateItemAsync(
+                document, new PartitionKey(pending.BillerId), cancellationToken: cancellationToken);
+            return new PaymentBeginResult(Created: true, created.Resource.Payment);
+        }
+        catch (CosmosException exception) when (exception.StatusCode == HttpStatusCode.Conflict)
+        {
+            // Idempotent insert lost the race (or is a client retry): return the existing record.
+            var existing = await FindAsync(pending.BillerId, pending.PaymentId, cancellationToken)
+                .ConfigureAwait(false);
+            if (existing is null)
+            {
+                throw;
+            }
 
-        await container.UpsertItemAsync(
-            document, new PartitionKey(payment.BillerId), cancellationToken: cancellationToken);
+            return new PaymentBeginResult(Created: false, existing);
+        }
     }
 
-    public async Task<PaymentResponse?> FindAsync(
+    public async Task<PaymentRecord> SaveAsync(PaymentRecord record, CancellationToken cancellationToken = default)
+    {
+        var response = await container.UpsertItemAsync(
+            PaymentDocument.From(record),
+            new PartitionKey(record.BillerId),
+            cancellationToken: cancellationToken);
+        return response.Resource.Payment;
+    }
+
+    public async Task<PaymentRecord?> FindAsync(
         string billerId, string paymentId, CancellationToken cancellationToken = default)
     {
         try
@@ -45,30 +69,87 @@ public sealed class CosmosPaymentStore : IPaymentStore
         }
     }
 
-    public async Task<IReadOnlyList<PaymentResponse>> ListAsync(
+    public async Task<IReadOnlyList<PaymentRecord>> ListAsync(
         string billerId,
         string? payerAccountId,
         string? invoiceId,
         CancellationToken cancellationToken = default)
     {
-        var clauses = new List<string>();
+        var clauses = new List<string> { "c.payment.lifecycle != @pending" };
         if (!string.IsNullOrWhiteSpace(payerAccountId)) clauses.Add("c.payment.payer_account_id = @payerAccountId");
         if (!string.IsNullOrWhiteSpace(invoiceId)) clauses.Add("c.payment.invoice_id = @invoiceId");
-        var sql = "SELECT VALUE c.payment FROM c";
-        if (clauses.Count > 0) sql += $" WHERE {string.Join(" AND ", clauses)}";
-        sql += " ORDER BY c.payment.created_at DESC";
-        var query = new QueryDefinition(sql);
+        var sql = $"SELECT VALUE c.payment FROM c WHERE {string.Join(" AND ", clauses)} ORDER BY c.payment.created_at DESC";
+        var query = new QueryDefinition(sql).WithParameter("@pending", "pending");
         if (!string.IsNullOrWhiteSpace(payerAccountId)) query.WithParameter("@payerAccountId", payerAccountId);
         if (!string.IsNullOrWhiteSpace(invoiceId)) query.WithParameter("@invoiceId", invoiceId);
-        using var iterator = container.GetItemQueryIterator<PaymentResponse>(
+        using var iterator = container.GetItemQueryIterator<PaymentRecord>(
             query, requestOptions: new QueryRequestOptions { PartitionKey = new PartitionKey(billerId) });
-        var results = new List<PaymentResponse>();
+        var results = new List<PaymentRecord>();
         while (iterator.HasMoreResults)
         {
             results.AddRange(await iterator.ReadNextAsync(cancellationToken));
         }
 
         return results;
+    }
+
+    public async Task<PaymentRecord?> ClaimDueAsync(
+        DateOnly asOf,
+        DateTimeOffset now,
+        DateTimeOffset staleBefore,
+        DateTimeOffset leaseUntil,
+        CancellationToken cancellationToken = default)
+    {
+        for (var attempt = 0; attempt < MaxClaimRetries; attempt++)
+        {
+            var query = new QueryDefinition(
+                "SELECT TOP 1 * FROM c WHERE "
+                + "(NOT IS_DEFINED(c.payment.lease_until) OR c.payment.lease_until = null OR c.payment.lease_until <= @now) AND ("
+                + "(c.payment.lifecycle = @scheduled AND IS_DEFINED(c.payment.scheduled_for) AND c.payment.scheduled_for <= @asOf) "
+                + "OR (c.payment.lifecycle = @pending AND c.payment.updated_at <= @staleBefore)) "
+                + "ORDER BY c.payment.updated_at")
+                .WithParameter("@now", now)
+                .WithParameter("@asOf", asOf.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture))
+                .WithParameter("@staleBefore", staleBefore)
+                .WithParameter("@scheduled", "scheduled")
+                .WithParameter("@pending", "pending");
+
+            using var iterator = container.GetItemQueryIterator<PaymentDocument>(
+                query, requestOptions: new QueryRequestOptions { MaxItemCount = 1 });
+            if (!iterator.HasMoreResults)
+            {
+                return null;
+            }
+
+            var page = await iterator.ReadNextAsync(cancellationToken);
+            var candidate = page.FirstOrDefault();
+            if (candidate is null)
+            {
+                return null;
+            }
+
+            var claimed = candidate with
+            {
+                Payment = candidate.Payment with { LeaseUntil = leaseUntil, UpdatedAt = now },
+            };
+
+            try
+            {
+                var response = await container.ReplaceItemAsync(
+                    claimed,
+                    claimed.Id,
+                    new PartitionKey(claimed.BillerId),
+                    new ItemRequestOptions { IfMatchEtag = candidate.ETag },
+                    cancellationToken);
+                return response.Resource.Payment;
+            }
+            catch (CosmosException exception) when (exception.StatusCode == HttpStatusCode.PreconditionFailed)
+            {
+                // Another processor claimed it first; re-query for the next candidate.
+            }
+        }
+
+        return null;
     }
 
     public async Task PurgeByBillerAsync(string billerId, CancellationToken cancellationToken = default)
@@ -100,6 +181,16 @@ public sealed class CosmosPaymentStore : IPaymentStore
         public required string BillerId { get; init; }
 
         [JsonPropertyName("payment")]
-        public required PaymentResponse Payment { get; init; }
+        public required PaymentRecord Payment { get; init; }
+
+        [JsonPropertyName("_etag")]
+        public string? ETag { get; init; }
+
+        public static PaymentDocument From(PaymentRecord record) => new()
+        {
+            Id = record.PaymentId,
+            BillerId = record.BillerId,
+            Payment = record,
+        };
     }
 }

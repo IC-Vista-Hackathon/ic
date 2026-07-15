@@ -4,16 +4,21 @@ namespace Pronto.Payment.Contracts.V1.Payments;
 
 /// <summary>
 /// Money-moving request: unknown members are rejected (<see cref="JsonUnmappedMemberHandling.Disallow"/>)
-/// so a caller can't smuggle unexpected fields past validation into a payment (e.g. a typo'd
-/// <c>amount_cents</c> silently ignored, or a field a future version would honour).
+/// so a misspelled scheduling field cannot silently become an immediate payment.
 /// </summary>
 [JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Disallow)]
+/// <param name="IdempotencyKey">
+/// Optional durable client idempotency key. Retrying a create with the same key (and biller)
+/// returns the original payment instead of creating a duplicate — safe across process restarts.
+/// May also be supplied via the <c>Idempotency-Key</c> header, which takes precedence.
+/// </param>
 public sealed record CreatePaymentRequest(
     string BillerId,
     string InvoiceId,
     string Method,
     string? PayerAccountId = null,
-    DateOnly? ScheduledFor = null);
+    DateOnly? ScheduledFor = null,
+    string? IdempotencyKey = null);
 
 public sealed record PaymentResponse(
     string PaymentId,
