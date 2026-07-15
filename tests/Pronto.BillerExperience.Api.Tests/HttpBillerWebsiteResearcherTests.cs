@@ -12,6 +12,18 @@ namespace Pronto.BillerExperience.Api.Tests;
 public sealed class HttpBillerWebsiteResearcherTests
 {
     [Fact]
+    public async Task MissingWebsiteIsExplicitlySkippedWithoutSendingRequest()
+    {
+        var handler = new FakeHandler(_ => Html("unused"));
+
+        var response = await Create(handler).ResearchAsync(new BillerResearchRequest(null, "brand"));
+
+        Assert.Equal(ResearchOutcome.Skipped, response.Outcome);
+        Assert.Equal("research.website_missing", response.ErrorCode);
+        Assert.Empty(handler.Requests);
+    }
+
+    [Fact]
     public async Task ResearchExtractsBoundedFactsAndCitationsFromSameHost()
     {
         var handler = new FakeHandler(request => request.RequestUri!.AbsolutePath switch

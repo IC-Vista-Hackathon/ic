@@ -4,11 +4,11 @@
 // asserts:
 //   1. GET /api/public/telemetry returns a non-null connection string (runtime config works),
 //   2. the page boots and mints a flow id (the telemetry client initialized),
-//   3. the Application Insights browser SDK actually POSTs a beacon off the page.
+//   3. the Application Insights browser SDK POSTs the expected event and flow id,
+//   4. the ingestion endpoint accepts that beacon.
 //
 // Prints a single JSON object on stdout ({ flowId, expectedEvent, beaconSeen }); all logging goes
-// to stderr so the caller can pipe stdout straight into jq. The caller then verifies server-side
-// arrival by querying Application Insights for an EXPECTED_EVENT event carrying this flow id.
+// to stderr so the caller can pipe stdout straight into jq.
 //
 // Works for both frontends: TARGET_PATH selects which app to load and EXPECTED_EVENT its
 // session-start event; the sessionStorage flow-id key is derived from the event's app prefix
@@ -44,8 +44,12 @@ try {
   // Wait for the ingestion RESPONSE, not just the request — closing the browser right after the
   // request starts aborts the in-flight POST and the event never reaches Application Insights.
   const beacon = page.waitForResponse(
-    response => response.request().method() === 'POST' &&
-      (response.url().includes('applicationinsights.azure.com') || response.url().includes('/v2/track')),
+    response => {
+      const request = response.request();
+      return request.method() === 'POST' &&
+        (response.url().includes('applicationinsights.azure.com') || response.url().includes('/v2/track')) &&
+        (request.postData() ?? '').includes(expectedEvent);
+    },
     { timeout: beaconTimeoutMs },
   );
 
@@ -59,9 +63,11 @@ try {
 
   const beaconResponse = await beacon.catch(() => fail(`no Application Insights beacon completed within ${beaconTimeoutMs}ms`));
   if (beaconResponse.status() !== 200) fail(`ingestion endpoint returned ${beaconResponse.status()}`);
+  const beaconPayload = beaconResponse.request().postData() ?? '';
+  if (!beaconPayload.includes(flowId)) fail(`the ${expectedEvent} beacon did not include flow_id ${flowId}`);
   const receipt = await beaconResponse.json().catch(() => undefined);
   if (receipt && receipt.itemsAccepted < 1) fail(`ingestion accepted 0 items: ${JSON.stringify(receipt)}`);
-  log(`beacon accepted by ${new URL(beaconResponse.url()).host} (itemsAccepted=${receipt?.itemsAccepted ?? 'unknown'})`);
+  log(`${expectedEvent} beacon accepted by ${new URL(beaconResponse.url()).host} (itemsAccepted=${receipt?.itemsAccepted ?? 'unknown'})`);
 
   console.log(JSON.stringify({ flowId, expectedEvent, beaconSeen: true }));
 } finally {

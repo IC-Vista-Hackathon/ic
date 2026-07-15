@@ -1,9 +1,11 @@
 using Pronto.Payment.Api;
 using Pronto.Payment.Api.Clients;
+using Pronto.Payment.Api.Scheduling;
 using Pronto.Payment.Api.Storage;
 using Pronto.Persistence.Cosmos;
 using Pronto.ServiceDefaults;
 using Microsoft.Azure.Cosmos;
+using Microsoft.Extensions.DependencyInjection.Extensions;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -35,6 +37,13 @@ builder.Services.AddHttpClient<IInvoiceClient, HttpInvoiceClient>(client =>
     client.BaseAddress = new Uri(
         builder.Configuration["Services:InvoiceApi"] ?? "http://localhost:5101"))
     .AddHttpMessageHandler<CorrelationPropagationHandler>();
+
+// Scheduled-payment executor: sweeps Cosmos for due Scheduled payments and finalizes them.
+builder.Services.Configure<SchedulingOptions>(
+    builder.Configuration.GetSection(SchedulingOptions.SectionName));
+builder.Services.TryAddSingleton(TimeProvider.System);
+builder.Services.AddScoped<ScheduledPaymentExecutor>();
+builder.Services.AddHostedService<ScheduledPaymentWorker>();
 
 var app = builder.Build();
 

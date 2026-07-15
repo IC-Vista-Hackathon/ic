@@ -49,7 +49,11 @@ public sealed partial class FoundryAgentServiceGateway : IFoundryAgentServiceGat
 
     public async Task<IReadOnlyList<FoundryAgentDefinition>> ListAgentsAsync(CancellationToken cancellationToken)
     {
+        var startedAt = Stopwatch.GetTimestamp();
         using var activity = BillerExperienceTelemetry.Source.StartActivity("foundry.agents.list");
+        activity?.SetTag("gen_ai.provider.name", "microsoft.foundry");
+        activity?.SetTag("gen_ai.operation.name", "list_agents");
+        LogInventoryStarted(_logger, Activity.Current?.TraceId.ToString());
         try
         {
             var agents = new List<FoundryAgentDefinition>();
@@ -58,13 +62,15 @@ public sealed partial class FoundryAgentServiceGateway : IFoundryAgentServiceGat
             {
                 var latest = agent.GetLatestVersion();
                 agents.Add(new FoundryAgentDefinition(
-                    agent.Name,
+                    agent.Id,
                     string.IsNullOrWhiteSpace(agent.Name) ? agent.Id : agent.Name,
                     new Dictionary<string, string>(latest.Metadata, StringComparer.OrdinalIgnoreCase)));
             }
 
             activity?.SetTag("foundry.agent.count", agents.Count);
             activity?.SetStatus(ActivityStatusCode.Ok);
+            LogInventoryCompleted(_logger, agents.Count, Stopwatch.GetElapsedTime(startedAt).TotalMilliseconds,
+                Activity.Current?.TraceId.ToString());
             return agents;
         }
         catch (Exception exception) when (exception is not OperationCanceledException)
@@ -80,8 +86,12 @@ public sealed partial class FoundryAgentServiceGateway : IFoundryAgentServiceGat
         string prompt,
         CancellationToken cancellationToken)
     {
+        var startedAt = Stopwatch.GetTimestamp();
         using var activity = BillerExperienceTelemetry.Source.StartActivity("foundry.agent.invoke");
         activity?.SetTag("gen_ai.agent.id", agentId);
+        activity?.SetTag("gen_ai.provider.name", "microsoft.foundry");
+        activity?.SetTag("gen_ai.operation.name", "invoke_agent");
+        LogInvocationStarted(_logger, agentId, Activity.Current?.TraceId.ToString());
         try
         {
             var responses = _project.ProjectOpenAIClient
@@ -110,14 +120,22 @@ public sealed partial class FoundryAgentServiceGateway : IFoundryAgentServiceGat
             }
 
             activity?.SetStatus(ActivityStatusCode.Ok);
+            LogInvocationCompleted(_logger, agentId, citations.Count,
+                Stopwatch.GetElapsedTime(startedAt).TotalMilliseconds, Activity.Current?.TraceId.ToString());
             return new FoundryAgentOutput(
                 string.Join(Environment.NewLine, texts),
                 citations.DistinctBy(citation => citation.Url).ToArray());
         }
+        catch (FoundryResearchException exception)
+        {
+            activity?.SetStatus(ActivityStatusCode.Error, exception.Code);
+            LogInvocationFailure(_logger, agentId, exception.Code, Activity.Current?.TraceId.ToString(), exception);
+            throw;
+        }
         catch (Exception exception) when (exception is not OperationCanceledException and not FoundryResearchException)
         {
             activity?.SetStatus(ActivityStatusCode.Error, "research.foundry_request_failed");
-            LogInvocationFailure(_logger, agentId, Activity.Current?.TraceId.ToString(), exception);
+            LogInvocationFailure(_logger, agentId, "research.foundry_request_failed", Activity.Current?.TraceId.ToString(), exception);
             throw new FoundryResearchException("research.foundry_request_failed", "Foundry request failed.", true, exception);
         }
     }
@@ -125,8 +143,20 @@ public sealed partial class FoundryAgentServiceGateway : IFoundryAgentServiceGat
     [LoggerMessage(2669, LogLevel.Error, "Foundry agent inventory failed; trace {TraceId}")]
     private static partial void LogInventoryFailure(ILogger logger, string? traceId, Exception exception);
 
-    [LoggerMessage(2670, LogLevel.Error, "Foundry agent {AgentId} invocation failed; trace {TraceId}")]
-    private static partial void LogInvocationFailure(ILogger logger, string agentId, string? traceId, Exception exception);
+    [LoggerMessage(2670, LogLevel.Error, "Foundry agent {AgentId} invocation failed with {ErrorCode}; trace {TraceId}")]
+    private static partial void LogInvocationFailure(ILogger logger, string agentId, string errorCode, string? traceId, Exception exception);
+
+    [LoggerMessage(2673, LogLevel.Information, "Listing Foundry agents; trace {TraceId}")]
+    private static partial void LogInventoryStarted(ILogger logger, string? traceId);
+
+    [LoggerMessage(2674, LogLevel.Information, "Listed {AgentCount} Foundry agents in {DurationMs} ms; trace {TraceId}")]
+    private static partial void LogInventoryCompleted(ILogger logger, int agentCount, double durationMs, string? traceId);
+
+    [LoggerMessage(2675, LogLevel.Information, "Invoking Foundry agent {AgentId}; trace {TraceId}")]
+    private static partial void LogInvocationStarted(ILogger logger, string agentId, string? traceId);
+
+    [LoggerMessage(2676, LogLevel.Information, "Foundry agent {AgentId} completed with {CitationCount} citations in {DurationMs} ms; trace {TraceId}")]
+    private static partial void LogInvocationCompleted(ILogger logger, string agentId, int citationCount, double durationMs, string? traceId);
 
 }
 
