@@ -30,6 +30,16 @@ is HTTP-only: `mcpConnectionEnabled` currently permits only `false`. Add the pla
 change the public endpoint to HTTPS, and then remove that restriction before provisioning an MCP
 API key.
 
+ARM incremental deployments do not delete a connection that was created by an older template.
+After applying this version, list any legacy connection with the read-only command below and
+delete that resource explicitly before considering the HTTP credential retired:
+
+```sh
+az resource list --resource-group rg-ic-hack \
+  --resource-type Microsoft.CognitiveServices/accounts/projects/connections \
+  --query "[?name=='ic-shared-context-mcp'].id" -o tsv
+```
+
 The module outputs the reviewed MCP tool definition for agent-version provisioning. It allowlists
 only `get_goal_context` and `append_context`. Agent versions are Foundry data-plane objects, so ARM
 Bicep creates their authenticated project connection and publishes the tool definition, while the

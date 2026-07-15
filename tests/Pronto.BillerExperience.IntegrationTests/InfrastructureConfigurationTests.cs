@@ -56,6 +56,27 @@ public sealed class InfrastructureConfigurationTests
                 bicep,
                 StringComparison.Ordinal);
         }
+
+        var prodEnvironment = File.ReadAllText(
+            Path.Combine(
+                root,
+                "deploy",
+                "kubernetes",
+                "overlays",
+                "prod",
+                "biller-experience-api-env-patch.yaml"));
+        Assert.Contains(
+            "BillerExperience__Mcp__Enabled, value: \"false\"",
+            prodEnvironment,
+            StringComparison.Ordinal);
+        Assert.DoesNotContain(
+            "BillerExperience__Mcp__ApiKey",
+            prodEnvironment,
+            StringComparison.Ordinal);
+        Assert.DoesNotContain(
+            "BillerExperience__Mcp__PublicEndpoint",
+            prodEnvironment,
+            StringComparison.Ordinal);
     }
 
     [Fact]
