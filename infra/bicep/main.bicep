@@ -207,4 +207,4 @@ output monitorWorkspaceId string = monitorWorkspace.outputs.id
 output grafanaEndpoint string = grafana.outputs.endpoint
 output sharedContextMcpConnectionName string = aiFoundry.outputs.sharedContextMcpConnectionName
 output sharedContextMcpTool object = aiFoundry.outputs.sharedContextMcpTool
-output observabilityActionGroupId string = deployObservabilityAlerts ? observability.outputs.actionGroupId : ''
+output observabilityActionGroupId string = observability.?outputs.actionGroupId ?? ''
