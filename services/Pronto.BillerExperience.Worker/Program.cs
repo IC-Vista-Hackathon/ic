@@ -1,9 +1,12 @@
 using Azure.Identity;
 using Azure.Monitor.OpenTelemetry.AspNetCore;
 using Azure.Storage.Blobs;
+using k8s;
+using Microsoft.Extensions.Options;
 using Pronto.Agentic.Orchestration.Telemetry;
 using Pronto.BillerExperience.Worker;
 using Pronto.BillerExperience.Worker.Artifacts;
+using Pronto.BillerExperience.Worker.Building;
 using Pronto.BillerExperience.Worker.Persistence;
 using Microsoft.Azure.Cosmos;
 using OpenTelemetry.Metrics;
@@ -46,6 +49,23 @@ builder.Services.AddSingleton(services => services.GetRequiredService<BlobServic
     .GetBlobContainerClient(publicationOptions.ContainerName));
 builder.Services.AddSingleton<PublicationArtifactPlanFactory>();
 builder.Services.AddSingleton<IExperienceArtifactPublisher, BlobExperienceArtifactPublisher>();
+builder.Services.Configure<BundleBuildOptions>(builder.Configuration.GetSection(BundleBuildOptions.SectionName));
+// When no builder image is configured, keep the prior config-only behavior and never touch the
+// Kubernetes API (so local/CI runs don't require an in-cluster config or kubeconfig).
+builder.Services.AddSingleton<IExperienceBundleBuilder>(services =>
+{
+    var bundleOptions = services.GetRequiredService<IOptions<BundleBuildOptions>>();
+    if (string.IsNullOrWhiteSpace(bundleOptions.Value.BuilderImage))
+    {
+        return new NoOpBundleBuilder();
+    }
+
+    var kubernetes = new Kubernetes(KubernetesClientConfiguration.InClusterConfig());
+    return new KubernetesBundleBuilder(
+        kubernetes,
+        bundleOptions,
+        services.GetRequiredService<ILogger<KubernetesBundleBuilder>>());
+});
 builder.Services.AddSingleton<PublicationProcessor>();
 builder.Services.AddHostedService<PublicationWorker>();
 builder.Services.AddHealthChecks().AddCheck<PublicationHealthCheck>("publication_dependencies");

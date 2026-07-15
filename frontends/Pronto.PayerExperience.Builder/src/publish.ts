@@ -24,11 +24,14 @@ export interface PublishInputs {
   revision: string;
   storageEndpoint: string;
   containerName?: string;
+  // When false, the caller (e.g. the Worker's config publisher) owns the atomic
+  // active.json flip and this step only uploads the immutable site tree.
+  writeActive?: boolean;
 }
 
 export interface PublishResult {
   uploaded: number;
-  activeBlob: string;
+  activeBlob: string | null;
   sitePrefix: string;
 }
 
@@ -41,6 +44,7 @@ export async function publishBundle({
   revision,
   storageEndpoint,
   containerName = 'payer-experiences',
+  writeActive = true,
 }: PublishInputs): Promise<PublishResult> {
   const service = new BlobServiceClient(storageEndpoint, new DefaultAzureCredential());
   const container = service.getContainerClient(containerName);
@@ -59,6 +63,11 @@ export async function publishBundle({
         blobCacheControl: isEntry ? 'no-cache, no-store, must-revalidate' : 'public, max-age=31536000, immutable',
       },
     });
+  }
+
+  if (!writeActive) {
+    // Site tree is uploaded but not yet activated; the caller flips active.json last.
+    return { uploaded: files.length, activeBlob: null, sitePrefix };
   }
 
   // Active pointer written last so a partially-uploaded revision is never served.

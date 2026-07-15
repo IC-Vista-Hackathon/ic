@@ -54,6 +54,30 @@ npm run build:one -- --definition ./demo.json --slug acme --mode opus \
 | `--publish` | off | Upload `dist/` and flip the active pointer |
 | `--storage` | `PAYER_STORAGE_ENDPOINT` | Blob endpoint (required with `--publish`) |
 
+## In-cluster: the build Job
+
+In prod the builder runs as a short-lived Kubernetes Job, one per publication. The Deployment
+Worker (`Pronto.BillerExperience.Worker`) builds the Job from `BundleBuildOptions`, watches it
+to completion, and only then flips `active.json` — so a failed generate/build/validate leaves
+the previously active revision serving. See `deploy/kubernetes/overlays/prod/biller-experience.yaml`
+(Job image env + `ic-bundle-build-runner` RBAC) and `Dockerfile`.
+
+The container entrypoint is `src/cli.ts`, driven entirely by env (no flags). The Job sets:
+
+| Env | Notes |
+|---|---|
+| `PAYER_DEFINITION_B64` | base64 of the experience definition JSON (decoded to `$PAYER_WORK/definition.json`) |
+| `PAYER_SLUG` / `PAYER_REVISION` | route slug + revision; revision must match the config publisher's |
+| `PAYER_MODE` | `deterministic` or `opus` |
+| `PAYER_PUBLISH=true` | upload the built `dist/` tree |
+| `PAYER_SKIP_ACTIVE=true` | do **not** write `active.json` — the Worker owns the atomic flip |
+| `PAYER_STORAGE_ENDPOINT` / `PAYER_CONTAINER` | blob target (auth via workload identity) |
+| `PAYER_PWA_DIR` | set to the PWA baked into the image (`/app/frontends/Pronto.BillerPayments.Pwa`) |
+| `PAYER_WORK` / `PAYER_ARTIFACTS` | writable scratch (`/work/...`, an emptyDir) |
+
+`--definition`/`PAYER_DEFINITION_PATH` (a file) is an alternative to `PAYER_DEFINITION_B64`;
+CLI flags override env when both are present.
+
 ## Environment
 
 - Node ≥ 22.12 (matches the PWA toolchain / vite 8).

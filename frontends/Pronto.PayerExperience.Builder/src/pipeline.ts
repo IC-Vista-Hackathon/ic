@@ -18,7 +18,7 @@ export interface PipelineOptions {
   artifactsRoot: string;
   briefOverrides?: Partial<DesignBrief>;
   validate?: boolean;
-  publish?: { storageEndpoint: string; containerName?: string };
+  publish?: { storageEndpoint: string; containerName?: string; writeActive?: boolean };
   log?: (message: string) => void;
 }
 
@@ -29,7 +29,7 @@ export interface PipelineResult {
   distDir: string;
   artifactsDir: string;
   validated: boolean;
-  published?: { uploaded: number; activeBlob: string };
+  published?: { uploaded: number; activeBlob: string | null; sitePrefix: string };
 }
 
 // generate -> persist -> build (typecheck gate) -> validate (Playwright gate) -> publish.
@@ -76,8 +76,9 @@ export async function runPipeline(options: PipelineOptions): Promise<PipelineRes
       revision: options.revision,
       storageEndpoint: options.publish.storageEndpoint,
       containerName: options.publish.containerName,
+      writeActive: options.publish.writeActive,
     });
-    published = { uploaded: result.uploaded, activeBlob: result.activeBlob };
+    published = { uploaded: result.uploaded, activeBlob: result.activeBlob, sitePrefix: result.sitePrefix };
   }
 
   return {

@@ -1,7 +1,7 @@
 #!/usr/bin/env -S npx tsx
-import { readFile } from 'node:fs/promises';
+import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
-import { dirname, resolve } from 'node:path';
+import { dirname, join, resolve } from 'node:path';
 import { runPipeline } from './pipeline';
 import type { ExperienceDefinition } from './types';
 import type { GeneratorMode } from './generators';
@@ -10,7 +10,7 @@ const here = dirname(fileURLToPath(import.meta.url));
 const defaultPwa = resolve(here, '..', '..', 'Pronto.BillerPayments.Pwa');
 
 interface Args {
-  definition: string;
+  definition?: string;
   slug?: string;
   revision: string;
   mode: GeneratorMode;
@@ -19,6 +19,7 @@ interface Args {
   artifacts: string;
   validate: boolean;
   publish: boolean;
+  writeActive: boolean;
   storage?: string;
   container?: string;
 }
@@ -38,26 +39,45 @@ function parseArgs(argv: string[]): Args {
       flags.add(key);
     }
   }
-  const definition = map.get('definition');
-  if (!definition) throw new Error('--definition <path-to-experience.json> is required.');
+  const env = process.env;
   return {
-    definition,
-    slug: map.get('slug'),
-    revision: map.get('revision') ?? `rev-${Date.now()}`,
-    mode: (map.get('mode') as GeneratorMode) ?? 'deterministic',
-    pwa: map.get('pwa') ?? defaultPwa,
-    work: map.get('work') ?? resolve(here, '..', '.work'),
-    artifacts: map.get('artifacts') ?? resolve(here, '..', '.artifacts'),
+    definition: map.get('definition') ?? env.PAYER_DEFINITION_PATH,
+    slug: map.get('slug') ?? env.PAYER_SLUG,
+    revision: map.get('revision') ?? env.PAYER_REVISION ?? `rev-${Date.now()}`,
+    mode: (map.get('mode') ?? env.PAYER_MODE) as GeneratorMode ?? 'deterministic',
+    pwa: map.get('pwa') ?? env.PAYER_PWA_DIR ?? defaultPwa,
+    work: map.get('work') ?? env.PAYER_WORK ?? resolve(here, '..', '.work'),
+    artifacts: map.get('artifacts') ?? env.PAYER_ARTIFACTS ?? resolve(here, '..', '.artifacts'),
     validate: !flags.has('no-validate'),
-    publish: flags.has('publish'),
-    storage: map.get('storage') ?? process.env.PAYER_STORAGE_ENDPOINT,
-    container: map.get('container'),
+    publish: flags.has('publish') || env.PAYER_PUBLISH === 'true',
+    // The Worker's config publisher owns the active.json flip; the Job only uploads the site.
+    writeActive: !flags.has('no-active') && env.PAYER_SKIP_ACTIVE !== 'true',
+    storage: map.get('storage') ?? env.PAYER_STORAGE_ENDPOINT,
+    container: map.get('container') ?? env.PAYER_CONTAINER,
   };
+}
+
+// The definition may be provided as a file path, or (for the K8s build Job) inline as a
+// base64-encoded JSON env var, which we materialize to a file so the Playwright gate can read it.
+async function resolveDefinition(args: Args): Promise<{ definition: ExperienceDefinition; path: string }> {
+  if (args.definition) {
+    const raw = await readFile(args.definition, 'utf8');
+    return { definition: JSON.parse(raw) as ExperienceDefinition, path: args.definition };
+  }
+  const encoded = process.env.PAYER_DEFINITION_B64;
+  if (!encoded) {
+    throw new Error('Provide --definition <path>, PAYER_DEFINITION_PATH, or PAYER_DEFINITION_B64.');
+  }
+  const raw = Buffer.from(encoded, 'base64').toString('utf8');
+  await mkdir(args.work, { recursive: true });
+  const path = join(args.work, 'definition.json');
+  await writeFile(path, raw, 'utf8');
+  return { definition: JSON.parse(raw) as ExperienceDefinition, path };
 }
 
 async function main(): Promise<void> {
   const args = parseArgs(process.argv.slice(2));
-  const definition = JSON.parse(await readFile(args.definition, 'utf8')) as ExperienceDefinition;
+  const { definition, path: definitionPath } = await resolveDefinition(args);
   const slug = args.slug ?? definition.biller_id;
 
   if (args.publish && !args.storage) {
@@ -66,7 +86,7 @@ async function main(): Promise<void> {
 
   const result = await runPipeline({
     definition,
-    definitionPath: args.definition,
+    definitionPath,
     slug,
     revision: args.revision,
     mode: args.mode,
@@ -74,7 +94,9 @@ async function main(): Promise<void> {
     workRoot: args.work,
     artifactsRoot: args.artifacts,
     validate: args.validate,
-    publish: args.publish && args.storage ? { storageEndpoint: args.storage, containerName: args.container } : undefined,
+    publish: args.publish && args.storage
+      ? { storageEndpoint: args.storage, containerName: args.container, writeActive: args.writeActive }
+      : undefined,
     log: message => console.log(message),
   });
 
