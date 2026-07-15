@@ -191,6 +191,10 @@ const PALETTES: Palette[] = [
 
 const GOOGLE_FONTS = ['Poppins', 'Montserrat', 'Source Sans Pro', 'Nunito Sans', 'Work Sans', 'Lato', 'Open Sans', 'Roboto Slab'];
 
+// Convenience/service fee charged to the payer when the biller passes processing costs through
+// (feeHandling === 'charge'). Absorbed, mixed, and undecided all show no payer-facing fee.
+const SERVICE_FEE = 2.5;
+
 const VERTICAL_DOC_LABELS: Record<VerticalId, { docLabel: string; numberPrefix: string; numberLabel: string; personLabel: string; periodLabel: string; totalLabel: string; issuerLabel: string; }> = {
   insurance: { docLabel: 'Policy Statement', numberPrefix: 'POL-', numberLabel: 'Policy Number', personLabel: 'Named Insured', periodLabel: 'Coverage Period', totalLabel: 'Premium Due', issuerLabel: 'Carrier' },
   utilities: { docLabel: 'Utility Bill', numberPrefix: 'ACCT-', numberLabel: 'Account Number', personLabel: 'Account Holder', periodLabel: 'Billing Period', totalLabel: 'Amount Due', issuerLabel: 'Utility Provider' },
@@ -917,7 +921,10 @@ export function App() {
   const complianceByState = (compliance.states || []).map((name) => ({ state: name, categories: (compliance.byState || {})[name] || [], expanded: s.expandedCompliance.includes(name), onToggle: () => toggleComplianceState(name) }));
 
   const amount = s.amount;
-  const total = amount + 2.5;
+  // Payer sees a service fee only when the biller charges one; 'absorb'/'mixed'/'unsure' show none.
+  const serviceFeeApplies = s.feeHandling === 'charge';
+  const serviceFee = serviceFeeApplies ? SERVICE_FEE : 0;
+  const total = amount + serviceFee;
   const cardDisabledForAutopay = isFlorida && s.autopayOptIn;
   const acceptedMethodTypes = s.acceptedMethods.length ? s.acceptedMethods : ['card', 'ach'];
   const ALL_METHOD_TYPES: { id: MethodType; label: string }[] = [
@@ -1925,7 +1932,9 @@ export function App() {
                     <div style={css('border:1px solid var(--invoicecloud-surface-default-border);border-radius:14px;padding:var(--invoicecloud-spacing-m);position:sticky;top:0')}>
                       <h4 style={css('font-size:15px;margin-bottom:var(--invoicecloud-spacing-s)')}>{docLabels.docLabel}</h4>
                       <div style={css('display:flex;justify-content:space-between;padding-bottom:var(--invoicecloud-spacing-xs);border-bottom:1px solid var(--invoicecloud-surface-default-border);margin-bottom:var(--invoicecloud-spacing-xs);font-size:14px')}><span>Amount due</span><span style={css('font-family:var(--invoicecloud-font-family-mono)')}>${amount.toFixed(2)}</span></div>
-                      <div style={css('display:flex;justify-content:space-between;padding-bottom:var(--invoicecloud-spacing-xs);border-bottom:1px solid var(--invoicecloud-surface-default-border);margin-bottom:var(--invoicecloud-spacing-xs);font-size:14px')}><span>Service fee*</span><span style={css('font-family:var(--invoicecloud-font-family-mono)')}>$2.50</span></div>
+                      {serviceFeeApplies && (
+                        <div style={css('display:flex;justify-content:space-between;padding-bottom:var(--invoicecloud-spacing-xs);border-bottom:1px solid var(--invoicecloud-surface-default-border);margin-bottom:var(--invoicecloud-spacing-xs);font-size:14px')}><span>Service fee*</span><span style={css('font-family:var(--invoicecloud-font-family-mono)')}>${serviceFee.toFixed(2)}</span></div>
+                      )}
                       <div style={css('display:flex;justify-content:space-between;font-weight:500;margin-bottom:var(--invoicecloud-spacing-s)')}><span>Total</span><span style={css('font-family:var(--invoicecloud-font-family-mono);font-size:20px')}>${total.toFixed(2)}</span></div>
                       {(s.autopayOptIn || s.paperlessOptIn) && (
                         <div style={css('background:var(--invoicecloud-primary-tint);border-radius:10px;padding:var(--invoicecloud-spacing-s);font-size:13px')}>
