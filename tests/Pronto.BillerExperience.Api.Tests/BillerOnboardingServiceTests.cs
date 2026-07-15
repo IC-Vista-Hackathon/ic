@@ -248,6 +248,8 @@ public sealed class BillerOnboardingServiceTests
         // The target after "to" wins over the source color, and the fallback maps the name to an
         // accessible hex instead of ignoring anything that isn't already a hex code.
         Assert.Equal("#c1121f", response.Draft?.Definition.Brand.PrimaryColor);
+        // The deterministic designer is surfaced so the Studio can flag when the live model didn't run.
+        Assert.Equal("deterministic", response.GenerationMode);
     }
 
     [Fact]

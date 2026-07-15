@@ -158,7 +158,7 @@ public sealed partial class BillerOnboardingService(
         BillerExperienceTelemetry.ChatTurns.Add(1, new KeyValuePair<string, object?>("provider", draftGenerator.Provider));
         RecordTransition(run.State, nextState);
         LogChatCompleted(logger, billerId, savedRun.Id, savedRun.Step, nextState, draftGenerator.Provider);
-        return new OnboardingChatResponse(generated.Reply, Map(savedRun), Map(savedExperience));
+        return new OnboardingChatResponse(generated.Reply, Map(savedRun), Map(savedExperience), generated.GenerationMode);
     }
 
     public async ValueTask<ExperienceRevisionResponse> GetDraftAsync(string billerId, CancellationToken cancellationToken) =>

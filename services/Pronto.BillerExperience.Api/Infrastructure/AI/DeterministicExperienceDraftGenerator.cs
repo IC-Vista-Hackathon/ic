@@ -53,7 +53,8 @@ public sealed partial class DeterministicExperienceDraftGenerator(
                 "I updated the live preview. Review the brand, payment methods, legal links, and compliance guidance before approving it.",
                 definition,
                 Array.Empty<string>(),
-                findings);
+                findings,
+                GenerationModes.Deterministic);
             BillerExperienceTelemetry.ModelCalls.Add(1, new("provider", Provider), new("outcome", "success"));
             return ValueTask.FromResult(result);
         }
