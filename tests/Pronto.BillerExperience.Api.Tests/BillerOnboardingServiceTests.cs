@@ -14,6 +14,7 @@ using Pronto.BillerExperience.Contracts.V1.Deployments;
 using Pronto.BillerExperience.Contracts.V1.Experiences;
 using Pronto.BillerExperience.Contracts.V1.Onboarding;
 using Pronto.BillerExperience.Contracts.V1.Research;
+using Pronto.ServiceDefaults;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using Newtonsoft.Json;
@@ -103,6 +104,88 @@ public sealed class BillerOnboardingServiceTests
         var second = await service.PublishAsync(created.Biller.BillerId, request, CancellationToken.None);
 
         Assert.Equal(first.DeploymentId, second.DeploymentId);
+    }
+
+    [Fact]
+    public async Task ApprovalFailureReturnsTheBlockingFindings()
+    {
+        var service = CreateService();
+        var created = await service.CreateAsync(CreateRequest(), CancellationToken.None);
+        var invalidDefinition = created.Draft.Definition with
+        {
+            Brand = created.Draft.Definition.Brand with { PrimaryColor = "not-a-color" }
+        };
+        var updated = await service.UpdateDraftAsync(
+            created.Biller.BillerId,
+            new UpdateExperienceRequest(invalidDefinition, created.Draft.ETag),
+            CancellationToken.None);
+
+        var exception = await Assert.ThrowsAsync<ExperienceValidationException>(async () =>
+            await service.ApproveAsync(
+                created.Biller.BillerId,
+                new ApproveExperienceRequest(updated.Revision, "test-user"),
+                CancellationToken.None));
+
+        Assert.Contains(exception.Findings, finding => finding.Code == "BRAND_COLOR_INVALID");
+    }
+
+    [Fact]
+    public async Task PublishPersistsW3CTraceparentFromCurrentActivity()
+    {
+        using var listener = new ActivityListener
+        {
+            ShouldListenTo = source => source.Name == BillerExperienceTelemetry.SourceName,
+            Sample = static (ref ActivityCreationOptions<ActivityContext> _) => ActivitySamplingResult.AllData,
+        };
+        ActivitySource.AddActivityListener(listener);
+
+        var repository = new InMemoryBillerExperienceRepository();
+        var service = new BillerOnboardingService(
+            repository,
+            new DeterministicExperienceDraftGenerator(NullLogger<DeterministicExperienceDraftGenerator>.Instance),
+            new OrchestrationRunner(),
+            NullLogger<BillerOnboardingService>.Instance);
+        var created = await service.CreateAsync(CreateRequest(), CancellationToken.None);
+        var chat = await service.SendMessageAsync(created.Biller.BillerId, new("Ready for review"), CancellationToken.None);
+        var approved = await service.ApproveAsync(created.Biller.BillerId, new(chat.Draft!.Revision, "test-user"), CancellationToken.None);
+
+        var deployment = await service.PublishAsync(
+            created.Biller.BillerId,
+            new PublishExperienceRequest(created.Biller.BillerId, approved.Revision),
+            CancellationToken.None);
+
+        var record = await repository.GetDeploymentAsync(created.Biller.BillerId, deployment.DeploymentId, CancellationToken.None);
+        Assert.NotNull(record);
+        Assert.Matches("^00-[0-9a-f]{32}-[0-9a-f]{16}-0[01]$", record!.Traceparent);
+    }
+
+    [Fact]
+    public async Task InvoiceSeederPropagatesCorrelationHeadersFromRequestActivity()
+    {
+        using var listener = new ActivityListener
+        {
+            ShouldListenTo = source => source.Name == BillerExperienceTelemetry.SourceName,
+            Sample = static (ref ActivityCreationOptions<ActivityContext> _) => ActivitySamplingResult.AllData,
+        };
+        ActivitySource.AddActivityListener(listener);
+
+        // Ambient inbound-request activity carrying the correlation id set by RequestObservabilityMiddleware.
+        using var request = new Activity("request");
+        request.SetIdFormat(ActivityIdFormat.W3C);
+        request.Start();
+        request.SetTag("ic.correlation_id", "corr-xyz");
+
+        var handler = new RecordingHttpHandler();
+        using var client = new HttpClient(new CorrelationPropagationHandler { InnerHandler = handler })
+        {
+            BaseAddress = new Uri("http://invoice.test/"),
+        };
+        var seeder = new HttpInvoiceSeeder(client, NullLogger<HttpInvoiceSeeder>.Instance);
+
+        await seeder.SeedAsync("biller-77", "Utility", CancellationToken.None);
+
+        Assert.Equal("corr-xyz", handler.CorrelationHeader);
+        Assert.Equal("biller-77", handler.BillerHeader);
     }
 
     [Fact]
@@ -251,11 +334,17 @@ public sealed class BillerOnboardingServiceTests
     private sealed class RecordingHttpHandler : HttpMessageHandler
     {
         public string RequestBody { get; private set; } = string.Empty;
+        public string? CorrelationHeader { get; private set; }
+        public string? BillerHeader { get; private set; }
 
         protected override async Task<HttpResponseMessage> SendAsync(
             HttpRequestMessage request, CancellationToken cancellationToken)
         {
             RequestBody = await request.Content!.ReadAsStringAsync(cancellationToken);
+            CorrelationHeader = request.Headers.TryGetValues(
+                RequestObservabilityMiddleware.CorrelationHeader, out var correlation) ? correlation.FirstOrDefault() : null;
+            BillerHeader = request.Headers.TryGetValues(
+                RequestObservabilityMiddleware.BillerHeader, out var biller) ? biller.FirstOrDefault() : null;
             return new HttpResponseMessage(HttpStatusCode.Created)
             {
                 Content = new StringContent(

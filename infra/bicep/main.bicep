@@ -23,6 +23,11 @@ param mcpApiKey string = ''
 param payerExperienceBlobContributorPrincipalIds array = []
 param payerExperienceBlobReaderPrincipalIds array = []
 
+// Observability alerting (action group + log-search alert rules over Application Insights).
+param deployObservabilityAlerts bool = true
+@description('Optional email address for observability alert notifications. Empty creates the action group with no receivers.')
+param observabilityAlertEmailAddress string = ''
+
 var suffix = uniqueString(subscription().subscriptionId, prefix)
 
 resource rg 'Microsoft.Resources/resourceGroups@2024-03-01' = {
@@ -177,6 +182,16 @@ module grafana 'modules/grafana.bicep' = {
   }
 }
 
+module observability 'modules/observability.bicep' = if (deployObservabilityAlerts) {
+  name: 'observability'
+  scope: rg
+  params: {
+    location: location
+    appInsightsId: appInsights.outputs.id
+    alertEmailAddress: observabilityAlertEmailAddress
+  }
+}
+
 output resourceGroup string = rg.name
 output cosmosEndpoint string = cosmos.outputs.endpoint
 output cosmosNonprodEndpoint string = cosmosNonprod.outputs.endpoint
@@ -192,3 +207,4 @@ output monitorWorkspaceId string = monitorWorkspace.outputs.id
 output grafanaEndpoint string = grafana.outputs.endpoint
 output sharedContextMcpConnectionName string = aiFoundry.outputs.sharedContextMcpConnectionName
 output sharedContextMcpTool object = aiFoundry.outputs.sharedContextMcpTool
+output observabilityActionGroupId string = observability.?outputs.actionGroupId ?? ''
