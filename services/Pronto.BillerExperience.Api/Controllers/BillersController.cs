@@ -58,6 +58,16 @@ public sealed partial class BillersController(
     public async Task<ActionResult<OnboardingSessionResponse>> GetSession(string billerId, CancellationToken cancellationToken) =>
         Ok(await onboarding.GetSessionAsync(billerId, cancellationToken));
 
+    [HttpGet("{billerId}/activity")]
+    [ProducesResponseType<AgentActivitySnapshotResponse>(StatusCodes.Status200OK)]
+    public async Task<ActionResult<AgentActivitySnapshotResponse>> GetActivity(
+        string billerId,
+        CancellationToken cancellationToken)
+    {
+        var (session, activity) = await onboarding.GetSessionActivityAsync(billerId, cancellationToken);
+        return Ok(new AgentActivitySnapshotResponse(session, activity));
+    }
+
     [HttpPost("{billerId}/chat")]
     [ProducesResponseType<OnboardingChatResponse>(StatusCodes.Status200OK)]
     public async Task<ActionResult<OnboardingChatResponse>> Chat(

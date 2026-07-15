@@ -32,6 +32,10 @@ public sealed record AgentActivityEvent(
     int Attempt = 1,
     double? DurationMs = null);
 
+public sealed record AgentActivitySnapshotResponse(
+    OnboardingSessionResponse Session,
+    IReadOnlyList<AgentActivityEvent> Activity);
+
 public enum AgentActivityStatus
 {
     Discovered,

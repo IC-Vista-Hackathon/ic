@@ -60,6 +60,10 @@ public sealed class BillersControllerTests
         var session = await controller.GetSession(billerId, CancellationToken.None);
         Assert.IsType<OnboardingSessionResponse>(((OkObjectResult)session.Result!).Value);
 
+        var activity = await controller.GetActivity(billerId, CancellationToken.None);
+        var snapshot = Assert.IsType<AgentActivitySnapshotResponse>(((OkObjectResult)activity.Result!).Value);
+        Assert.Equal(billerId, snapshot.Session.BillerId);
+
         var chat = await controller.Chat(
             billerId, new SendOnboardingMessageRequest("Make the primary color green"), CancellationToken.None);
         Assert.IsType<OnboardingChatResponse>(((OkObjectResult)chat.Result!).Value);

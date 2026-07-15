@@ -61,6 +61,8 @@ export interface Session {
   discovery_progress?: { completed: number; total: number; is_complete: boolean };
 }
 
+export interface AgentActivitySnapshot { session: Session; activity: AgentActivity[] }
+
 export interface BillingProfile {
   schema_version: string;
   confirmed: boolean;
