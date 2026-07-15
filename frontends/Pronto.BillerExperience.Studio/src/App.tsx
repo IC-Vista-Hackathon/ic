@@ -310,7 +310,7 @@ const STATEMENTS: Statement[] = [
 const VERTICAL_STATEMENTS: Partial<Record<VerticalId, Statement[]>> = {
   insurance: [
     { id: '778120', type: 'Auto', period: 'Jul 14, 2026 - Jul 14, 2027', date: 'Due Jul 14, 2026', due: 'Coverage Period', status: 'Due', amount: 142.5, statusColor: 'yellow',
-      note: 'Overdue but within the grace period — pay today to keep your policy active with no penalty.', noteEmphasis: true,
+      note: 'Overdue but in the grace period — pay today to keep your policy active with no penalty.', noteEmphasis: true,
       breakdown: [{ key: 'base', amount: 130.0 }, { key: 'surcharge', amount: 12.5 }] },
     { id: '640318', type: 'Home', period: 'Aug 30, 2026 - Aug 30, 2027', date: 'Due Aug 30, 2026', due: 'Coverage Period', status: 'Due', amount: 89.0, statusColor: 'green',
       breakdown: [{ key: 'base', amount: 82.0 }, { key: 'surcharge', amount: 7.0 }] },
