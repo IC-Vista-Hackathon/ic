@@ -936,7 +936,7 @@ export function App() {
 
   const payerGoPay = () => patch({ payerStep: 1 });
   const payerBack = () => patch((st) => ({ payerStep: Math.max(0, st.payerStep - 1) }));
-  const selectMethodType = (t: MethodType) => patch({ methodType: t });
+  const selectMethodType = (t: MethodType) => patch({ methodType: t, payError: null });
   const toggleAutopay = () => patch((st) => { const turningOn = !st.autopayOptIn; const isFL = !!st.compliance?.states.includes('Florida'); return { autopayOptIn: turningOn, methodType: turningOn && isFL ? 'bank' : st.methodType, paperlessOptIn: turningOn && st.offerPaperless ? true : st.paperlessOptIn }; });
   const togglePaperless = () => patch((st) => ({ paperlessOptIn: !st.paperlessOptIn }));
   const setPayCardNumber = (e: React.ChangeEvent<HTMLInputElement>) => patch({ payCardNumber: e.target.value, payError: null });
