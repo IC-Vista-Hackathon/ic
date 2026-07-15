@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using Pronto.BillerExperience.Api.Application;
 using Pronto.BillerExperience.Api.Infrastructure.Persistence;
 using Microsoft.AspNetCore.Diagnostics;
 using Microsoft.AspNetCore.Mvc;
@@ -15,6 +16,7 @@ public sealed partial class GlobalExceptionHandler(
 
         var (status, title, code) = exception switch
         {
+            ExperienceValidationException => (StatusCodes.Status422UnprocessableEntity, "Experience is not ready to publish", "experience_validation_blocked"),
             KeyNotFoundException => (StatusCodes.Status404NotFound, "Resource not found", "resource_not_found"),
             ArgumentException => (StatusCodes.Status400BadRequest, "Invalid request", "invalid_request"),
             ConcurrencyException => (StatusCodes.Status409Conflict, "Concurrent update", "concurrent_update"),
@@ -29,6 +31,10 @@ public sealed partial class GlobalExceptionHandler(
             Detail = status == StatusCodes.Status500InternalServerError ? "The request could not be completed." : exception.Message,
             Extensions = { ["code"] = code, ["trace_id"] = traceId }
         };
+        if (exception is ExperienceValidationException validationException)
+        {
+            problem.Extensions["findings"] = validationException.Findings;
+        }
         try
         {
             await httpContext.Response.WriteAsJsonAsync(

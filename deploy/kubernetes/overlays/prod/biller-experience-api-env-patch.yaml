@@ -36,6 +36,7 @@ spec:
             - { name: BillerExperience__Model__Endpoint, value: "https://aif-ic-hack-jk4zmntatjem4.cognitiveservices.azure.com/" }
             - { name: BillerExperience__Model__Deployment, value: gpt-5.4-mini }
             - { name: BillerExperience__Research__FoundryProjectEndpoint, value: "https://aif-ic-hack-jk4zmntatjem4.services.ai.azure.com/api/projects/ic" }
+            - { name: BillerExperience__AgentProvisioning__McpConnectionId, value: ic-shared-context-mcp }
             - { name: BillerExperience__PublishedExperience__StorageEndpoint, value: "https://stichackjk4zmntatjem4.blob.core.windows.net/" }
             - { name: BillerExperience__PublishedExperience__ContainerName, value: payer-experiences }
             - { name: BillerExperience__SupportingServices__InvoiceBaseUrl, value: "http://ic-invoice-api.ic.svc.cluster.local:8080/" }

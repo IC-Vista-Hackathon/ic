@@ -1,7 +1,9 @@
 import { CSSProperties, FormEvent, useEffect, useRef, useState } from 'react';
 import { activityUrl, api } from './api';
-import { errorMessage } from './http';
-import { logError } from './telemetry';
+import { errorMessage, UiRequestError, type ValidationFinding } from './http';
+import { trackEvent } from './insights';
+import { categorizeError } from './telemetryPolicy';
+import { logError, logEvent } from './telemetry';
 import type { AgentActivity, Deployment, ExperienceDefinition, ExperienceRevision } from './types';
 
 /* ------------------------------------------------------------------ *
@@ -15,6 +17,19 @@ import type { AgentActivity, Deployment, ExperienceDefinition, ExperienceRevisio
  * ------------------------------------------------------------------ */
 
 const asset = (p: string) => `${import.meta.env.BASE_URL}${p}`;
+
+// Allowlisted step enum for studio.checklist_step_completed, indexed by wizard step.
+const CHECKLIST_STEPS = ['vertical', 'business_location', 'brand_details', 'import_data', 'customer_experience'] as const;
+
+// Maps a generated draft's validation findings to the allowlisted outcome enum. Only the outcome
+// bucket leaves the page — finding codes, messages, and severities never become telemetry.
+function validationOutcome(revision: ExperienceRevision | null): 'passed' | 'warnings' | 'failed' {
+  const findings = revision?.findings ?? [];
+  if (!findings.length) return 'passed';
+  const isBlocking = (severity: string | number) =>
+    typeof severity === 'number' ? severity >= 2 : ['high', 'error', 'critical', 'blocker'].includes(severity.toLowerCase());
+  return findings.some(f => f.requires_review || isBlocking(f.severity)) ? 'failed' : 'warnings';
+}
 
 /** Parse a CSS declaration string into a React style object so the
  *  design's inline styles can be transcribed verbatim. */
@@ -144,10 +159,16 @@ interface State {
   backendDraft: ExperienceRevision | null;
   deployment: Deployment | null;
   publishing: boolean;
-  publishError: string | null;
+  publishError: { message: string; findings: ValidationFinding[]; reference?: string } | null;
   agentActivity: AgentActivity[];
   activityConnection: 'idle' | 'connecting' | 'connected' | 'disconnected';
   orchestrationError: string | null;
+  analysisComplete: boolean;
+  previewChatInput: string;
+  previewChatBusy: boolean;
+  previewChatError: string | null;
+  previewProposal: ExperienceRevision | null;
+  previewChatReply: string | null;
 }
 
 const VERTICALS: Vertical[] = [
@@ -260,7 +281,9 @@ function computeAiRecommendations(vertical: VerticalId | null, states: string[],
   const isUtil = vertical === 'utilities';
   const isOther = vertical === 'other';
   const isFL = (states || []).includes('Florida');
-  const methods = isTax ? ['card', 'ach'] : isUtil ? ['card', 'ach', 'applepay', 'googlepay', 'paypal'] : ['card', 'ach', 'applepay', 'googlepay'];
+  // The demo create contract currently provisions card and ACH rails. Recommendations must
+  // customize presentation without claiming payment capabilities the biller does not have.
+  const methods = ['card', 'ach'];
   const fee = isUtil ? 'charge' : 'absorb';
   const otherNote = isOther && otherDescription ? ` Based on your description ("${otherDescription.slice(0, 80)}"), we're starting from standard billing defaults.` : '';
   return {
@@ -281,7 +304,11 @@ function computeAiRecommendations(vertical: VerticalId | null, states: string[],
       enrollDuringPayment: isFL ? 'Enrollment during checkout drives adoption, but Florida payers will be limited to bank-funded AutoPay.' : 'Letting payers enroll mid-checkout is the highest-converting placement for AutoPay signup.',
       offerPaperless: 'Paperless adoption is trending up industry-wide and cuts mailing costs.',
       reminderChannel: 'Multi-channel (email + text) reminders outperform single-channel in reducing missed payments.',
-      acceptedMethods: isUtil ? 'Utility billers commonly support wallets and PayPal alongside cards and ACH.' : isTax ? 'Government billers tend to limit methods to cards and ACH for reconciliation simplicity.' : 'Cards, ACH and major wallets cover most payer preferences in this vertical.',
+      acceptedMethods: isUtil
+        ? 'Card and ACH are enabled because they match this biller\'s existing payment rails; additional wallets require an existing rail capability.'
+        : isTax
+          ? 'Card and ACH match the existing rails and keep government reconciliation straightforward.'
+          : 'Card and ACH match the biller\'s existing payment rails. The experience does not add or replace money movement.',
       selfServiceHistory: 'Self-service history lookup is table-stakes for competing payment experiences.',
       selfServiceUpdate: 'Letting payers manage their own methods reduces support volume.',
       feeHandling: isUtil ? 'Many utility billers pass processing costs through as a convenience fee.' : 'Billers in this vertical commonly absorb fees to keep the payer experience frictionless.',
@@ -334,7 +361,8 @@ const INITIAL_STATE: State = {
   previewAutopayEnrolled: false, previewAutopayEnrolling: false, previewAutopaySource: 'existing', previewAutopayMethodType: 'card',
   previewPaperlessEnrolled: false,
   backendBillerId: null, backendDraft: null, deployment: null, publishing: false, publishError: null,
-  agentActivity: [], activityConnection: 'idle', orchestrationError: null,
+  agentActivity: [], activityConnection: 'idle', orchestrationError: null, analysisComplete: false,
+  previewChatInput: '', previewChatBusy: false, previewChatError: null, previewProposal: null, previewChatReply: null,
 };
 
 const TINT = 'var(--invoicecloud-primary-tint)';
@@ -479,7 +507,7 @@ export function App() {
   };
 
   // ---- handlers ----
-  const goTry = () => patch({ screen: 'wizard', ...WIZARD_RESET });
+  const goTry = () => { trackEvent('studio.onboarding_started'); patch({ screen: 'wizard', ...WIZARD_RESET }); };
   const setColorChoice = (v: 'auto' | 'custom') => patch({ colorChoice: v });
   const setCustomPrimary = (e: React.ChangeEvent<HTMLInputElement>) => patch({ customPrimary: e.target.value });
   const setCustomSecondary = (e: React.ChangeEvent<HTMLInputElement>) => patch({ customSecondary: e.target.value });
@@ -497,7 +525,10 @@ export function App() {
   const setLogoFile = (e: React.ChangeEvent<HTMLInputElement>) => { const file = e.target.files && e.target.files[0]; if (!file) return; const reader = new FileReader(); reader.onload = () => patch({ logoDataUrl: reader.result as string }); reader.readAsDataURL(file); };
   const clearLogo = () => patch({ logoDataUrl: null });
 
-  const nextStep = () => patch((st) => {
+  const nextStep = () => {
+    const completedStep = CHECKLIST_STEPS[s.wizardStep];
+    if (completedStep) trackEvent('studio.checklist_step_completed', { step: completedStep, biller_id: s.backendBillerId ?? undefined });
+    patch((st) => {
     const wizardStep = Math.min(4, st.wizardStep + 1);
     if (wizardStep === 4 && !st.aiApplied) {
       const rec = computeAiRecommendations(st.vertical, st.selectedStates, st.otherVerticalDescription);
@@ -507,7 +538,8 @@ export function App() {
       return { wizardStep, ...values, aiApplied: true, aiRationale: rationale };
     }
     return { wizardStep };
-  });
+    });
+  };
   const prevStep = () => patch((st) => ({ wizardStep: Math.max(0, st.wizardStep - 1) }));
 
   const onCsvFile = (e: React.ChangeEvent<HTMLInputElement>) => { const file = e.target.files && e.target.files[0]; if (!file) return; const reader = new FileReader(); reader.onload = () => applyCsv(reader.result as string, file.name); reader.readAsText(file); };
@@ -549,7 +581,8 @@ export function App() {
   };
 
   const runAnalysis = async () => {
-    patch({ screen: 'analyzing', analyzeStage: 0, orchestrationError: null, agentActivity: [] });
+    trackEvent('studio.checklist_step_completed', { step: 'customer_experience', biller_id: s.backendBillerId ?? undefined });
+    patch({ screen: 'analyzing', analyzeStage: 0, orchestrationError: null, agentActivity: [], analysisComplete: false });
     later(() => patch({ analyzeStage: 1 }), 700);
     later(() => patch({ analyzeStage: 2 }), 1400);
     let events: EventSource | undefined;
@@ -594,13 +627,26 @@ export function App() {
       });
       events.onerror = () => patch({ activityConnection: 'disconnected' });
 
+      trackEvent('studio.chat_message_sent', { biller_id: billerId }); // count only; message text never leaves the page
       const chat = await api.chat(
         billerId,
         `Build a ${s.vertical ?? 'custom'} payment experience for ${s.bizName}. ` +
         `Serve ${s.selectedStates.join(', ') || 'the selected market'}; methods: ${s.acceptedMethods.join(', ')}. ` +
         `Use the supplied website and preserve the existing payment rails.`,
       );
-      patch(st => ({ screen: 'results', compliance: recomputeCompliance(st), brand: buildBrand(st), analyzeStage: 2, backendDraft: chat.draft }));
+      await new Promise(resolve => window.setTimeout(resolve, 500));
+      logEvent('studio.orchestration.completed', { biller_id: billerId, revision: chat.draft.revision });
+      patch(st => ({
+        compliance: recomputeCompliance(st),
+        brand: buildBrand(st),
+        analyzeStage: 2,
+        backendDraft: chat.draft,
+        acceptedMethods: chat.draft.definition.preferences?.accepted_methods ?? st.acceptedMethods,
+        analysisComplete: true,
+        activityConnection: 'idle',
+      }));
+      trackEvent('studio.draft_generated', { biller_id: billerId });
+      trackEvent('studio.validation_result', { outcome: validationOutcome(chat.draft), biller_id: billerId });
     } catch (caught) {
       const message = errorMessage(caught);
       logError('studio.orchestration.failed', caught, { biller_id: s.backendBillerId });
@@ -617,8 +663,66 @@ export function App() {
   const saveLocationSection = () => patch((st) => ({ reviewEditingSection: null, compliance: recomputeCompliance(st) }));
   const closeSaveErrorModal = () => { patch({ reviewSaveError: false }); setTimeout(() => { saveBtnRef.current?.focus(); }, 0); };
 
-  const confirmPreview = () => { if (s.reviewEditingSection) { patch({ reviewSaveError: true }); return; } patch({ screen: 'preview', payerStep: 0, methodType: 'card', autopayOptIn: false, paperlessOptIn: false, processing: false, statementTab: 'current', accountEmail: '', accountPassword: '', previewAutopayEnrolled: false, previewAutopayEnrolling: false, previewAutopaySource: 'existing', previewAutopayMethodType: 'card', previewPaperlessEnrolled: false }); };
+  const confirmPreview = () => { if (s.reviewEditingSection) { patch({ reviewSaveError: true }); return; } trackEvent('studio.preview_opened', { device: s.previewDevice, biller_id: s.backendBillerId ?? undefined }); patch({ screen: 'preview', payerStep: 0, methodType: 'card', autopayOptIn: false, paperlessOptIn: false, processing: false, statementTab: 'current', accountEmail: '', accountPassword: '', previewAutopayEnrolled: false, previewAutopayEnrolling: false, previewAutopaySource: 'existing', previewAutopayMethodType: 'card', previewPaperlessEnrolled: false }); };
   const redoWizard = () => patch({ screen: 'wizard', wizardStep: 0 });
+  const reviewCompletedResearch = () => patch({ screen: 'analyzing' });
+  const backToResults = () => patch({ screen: 'results', payerStep: 0, processing: false });
+  const submitPreviewChange = async (event: FormEvent) => {
+    event.preventDefault();
+    if (!s.backendBillerId || !s.previewChatInput.trim() || s.previewChatBusy) return;
+    patch({ previewChatBusy: true, previewChatError: null, previewProposal: null });
+    const events = new EventSource(activityUrl(s.backendBillerId));
+    patch({ activityConnection: 'connecting' });
+    events.onopen = () => patch({ activityConnection: 'connected' });
+    events.addEventListener('agent_activity', raw => {
+      try {
+        const item = JSON.parse((raw as MessageEvent).data) as AgentActivity;
+        patch(st => ({ agentActivity: [...st.agentActivity.filter(existing => existing.event_id !== item.event_id), item].sort((left, right) => left.sequence - right.sequence) }));
+      } catch (caught) { logError('studio.preview_chat.invalid_event', caught, { biller_id: s.backendBillerId }); }
+    });
+    events.onerror = () => patch({ activityConnection: 'disconnected' });
+    try {
+      const response = await api.chat(s.backendBillerId,
+        `Modify the existing payer experience preview only as requested. Preserve existing payment rails. Request: ${s.previewChatInput.trim()}`);
+      patch({ previewChatBusy: false, previewProposal: response.draft, previewChatReply: response.reply });
+    } catch (caught) {
+      logError('studio.preview_chat.failed', caught, { biller_id: s.backendBillerId });
+      patch({ previewChatBusy: false, previewChatError: errorMessage(caught) });
+    } finally { window.setTimeout(() => { events.close(); patch({ activityConnection: 'idle' }); }, 500); }
+  };
+  const acceptPreviewChange = () => patch(st => {
+    const proposal = st.previewProposal;
+    if (!proposal) return null;
+    const preferences = proposal.definition.preferences;
+    return {
+      backendDraft: proposal,
+      brand: {
+        primary: proposal.definition.brand.primary_color,
+        secondary: proposal.definition.brand.secondary_color,
+        accent: proposal.definition.pwa.background_color,
+        font: proposal.definition.brand.font_family ?? st.brand?.font ?? 'Inter',
+        initials: initialsFrom(proposal.definition.brand.display_name),
+      },
+      acceptedMethods: preferences?.accepted_methods ?? st.acceptedMethods,
+      guestCheckoutAllowed: preferences?.guest_checkout_allowed ?? st.guestCheckoutAllowed,
+      offerAutopay: preferences?.offer_autopay ?? st.offerAutopay,
+      offerPaperless: preferences?.offer_paperless ?? st.offerPaperless,
+      previewProposal: null,
+      previewChatInput: '',
+      previewChatReply: 'Changes accepted and applied to this preview.',
+    };
+  });
+  const rejectPreviewChange = async () => {
+    if (!s.backendBillerId || !s.backendDraft || !s.previewProposal) return;
+    patch({ previewChatBusy: true, previewChatError: null });
+    try {
+      const restored = await api.update(s.backendBillerId, s.backendDraft.definition, s.previewProposal.e_tag);
+      patch({ backendDraft: restored, previewProposal: null, previewChatBusy: false, previewChatReply: 'Proposed changes discarded.', previewChatInput: '' });
+    } catch (caught) {
+      logError('studio.preview_chat.reject_failed', caught, { biller_id: s.backendBillerId });
+      patch({ previewChatBusy: false, previewChatError: errorMessage(caught) });
+    }
+  };
   const setNewDocName = (e: React.ChangeEvent<HTMLInputElement>) => patch({ newDocName: e.target.value });
   const addDocument = () => patch((st) => (st.newDocName.trim() ? { docs: [...st.docs, st.newDocName.trim()], newDocName: '' } : null));
   const removeDocument = (i: number) => patch((st) => ({ docs: st.docs.filter((_, idx) => idx !== i) }));
@@ -653,7 +757,7 @@ export function App() {
   const goPricing = () => patch({ screen: 'pricing', pendingLob: true });
   const backToPreviewOrDashboard = () => patch((st) => ({ screen: st.accountCreated ? 'dashboard' : 'preview' }));
   const openSignup = () => patch({ modal: 'signup' });
-  const openCheckout = () => patch({ modal: 'checkout' });
+  const openCheckout = () => { trackEvent('studio.purchase_started', { biller_id: s.backendBillerId ?? undefined }); patch({ modal: 'checkout' }); };
   const closeModal = () => patch({ modal: null });
 
   const saveLob = (published: boolean) => patch((st) => {
@@ -673,6 +777,7 @@ export function App() {
     e.preventDefault();
     if (s.publishing) return;
     patch({ publishing: true, publishError: null });
+    trackEvent('studio.publish_requested', { biller_id: s.backendBillerId ?? undefined });
     try {
       if (!s.backendBillerId) throw new Error('This experience is not connected to a biller. Run the agent analysis before publishing.');
 
@@ -684,6 +789,17 @@ export function App() {
         }
         const updated = await api.update(s.backendBillerId, publishableDefinition(s), s.backendDraft?.e_tag);
         patch({ backendDraft: updated });
+        const blockingFindings = (updated.findings ?? []).filter(finding => finding.severity === 2 || String(finding.severity).toLowerCase() === 'blocking');
+        if (blockingFindings.length > 0) {
+          throw new UiRequestError(
+            'This experience is not ready to publish. Resolve the items below and try again.',
+            422,
+            'experience_validation_blocked',
+            undefined,
+            false,
+            blockingFindings,
+          );
+        }
         const approved = await api.approve(s.backendBillerId, updated.revision);
         deployment = await api.publish(s.backendBillerId, approved.revision);
         patch({ backendDraft: approved, deployment });
@@ -708,19 +824,30 @@ export function App() {
         modal: null,
         lobs: st.lobs.map(lob => lob.id === st.editingLobId || (!st.editingLobId && lob.bizName === st.bizName) ? { ...lob, published: true } : lob),
       }));
+      trackEvent('studio.publish_completed', { biller_id: s.backendBillerId ?? undefined });
+      trackEvent('studio.purchase_completed', { biller_id: s.backendBillerId ?? undefined });
       patch({ deployment, publishing: false, publishError: null });
     } catch (caught) {
-      const message = errorMessage(caught);
+      const message = caught instanceof UiRequestError ? caught.message : errorMessage(caught);
+      trackEvent('studio.publish_failed', { error_category: categorizeError(caught), biller_id: s.backendBillerId ?? undefined });
       logError('studio.publish.failed', caught, {
         biller_id: s.backendBillerId,
         revision: s.backendDraft?.revision,
         deployment_id: s.deployment?.deployment_id,
+        finding_codes: caught instanceof UiRequestError ? caught.findings.map(finding => finding.code) : [],
       });
-      patch({ publishing: false, publishError: message });
+      patch({
+        publishing: false,
+        publishError: {
+          message,
+          findings: caught instanceof UiRequestError ? caught.findings : [],
+          reference: caught instanceof UiRequestError ? caught.correlationId : undefined,
+        },
+      });
     }
   };
 
-  const addLob = () => patch({ screen: 'wizard', ...WIZARD_RESET });
+  const addLob = () => { trackEvent('studio.onboarding_started', { biller_id: s.backendBillerId ?? undefined }); patch({ screen: 'wizard', ...WIZARD_RESET }); };
   const editLob = (lob: Lob) => {
     patch({
       screen: 'wizard', wizardStep: 0, vertical: lob.vertical, bizName: lob.bizName, selectedStates: lob.selectedStates || [], website: lob.website, skipWebsite: !!lob.skipWebsite,
@@ -732,6 +859,7 @@ export function App() {
     checkLogoFetch(lob.website, !!lob.skipWebsite);
   };
   const previewLob = (lob: Lob) => {
+    trackEvent('studio.preview_opened', { device: s.previewDevice, biller_id: s.backendBillerId ?? undefined });
     patch({
       screen: 'preview', payerStep: 0, brand: lob.brand, compliance: lob.compliance, bizName: lob.bizName, vertical: lob.vertical, website: lob.website, skipWebsite: !!lob.skipWebsite, logoDataUrl: lob.logoDataUrl || null, logoFetchOk: false,
       guestCheckoutAllowed: lob.guestCheckoutAllowed, offerAutopay: lob.offerAutopay, enrollDuringPayment: lob.enrollDuringPayment, offerPaperless: lob.offerPaperless, acceptedMethods: lob.acceptedMethods || ['card', 'ach'], accountNumber: lob.accountNumber || null,
@@ -846,7 +974,9 @@ export function App() {
   const brandSourceLabel = brand.colorsFromLogo ? `Colors extracted from the logo at ${s.website}` : s.website && !s.skipWebsite ? `Logo colors unavailable - using a simulated palette for ${s.website}` : 'Simulated default palette for this vertical';
 
   const reminderOptions = [{ id: 'email', label: 'Email' }, { id: 'text', label: 'Text (SMS)' }, { id: 'both', label: 'Both' }, { id: 'none', label: 'None' }].map((r) => ({ ...r, selected: s.reminderChannel === r.id, onSelect: () => patch({ reminderChannel: r.id, editingSection: null }) }));
-  const methodOptions = [{ id: 'ach', label: 'ACH' }, { id: 'card', label: 'Credit/Debit Cards' }, { id: 'applepay', label: 'Apple Pay' }, { id: 'googlepay', label: 'Google Pay' }, { id: 'paypal', label: 'PayPal' }, { id: 'other', label: 'Other' }].map((m) => ({ ...m, selected: s.acceptedMethods.includes(m.id), onToggle: () => toggleAcceptedMethod(m.id) }));
+  const methodLabels: Record<string, string> = { ach: 'ACH', card: 'Credit/Debit Cards', applepay: 'Apple Pay', googlepay: 'Google Pay', paypal: 'PayPal', other: 'Other' };
+  const availablePaymentCapabilities = s.backendDraft?.definition.enabled_payment_capabilities ?? ['card', 'ach'];
+  const methodOptions = availablePaymentCapabilities.map(id => ({ id, label: methodLabels[id] ?? id, selected: s.acceptedMethods.includes(id), onToggle: () => toggleAcceptedMethod(id) }));
   const feeOptions = [{ id: 'absorb', label: 'We will absorb all fees' }, { id: 'charge', label: 'Charge a convenience/service fee to customers' }, { id: 'mixed', label: 'Different fee rules for different payment types' }, { id: 'unsure', label: "I'm not sure yet" }].map((f) => ({ ...f, selected: s.feeHandling === f.id, onSelect: () => patch({ feeHandling: f.id, editingSection: null }) }));
 
   const lobsView = s.lobs.map((l) => {
@@ -1182,7 +1312,7 @@ export function App() {
               </div>
             ))}
           </div>
-          <h2 style={css('margin-bottom:var(--invoicecloud-spacing-m)')}>Building your preview...</h2>
+          <h2 style={css('margin-bottom:var(--invoicecloud-spacing-m)')}>{s.analysisComplete ? 'Research completed successfully' : 'Building your preview...'}</h2>
           <div style={css('display:flex;flex-direction:column;gap:var(--invoicecloud-spacing-s);width:100%;max-width:440px')}>
             {analyzeStages.map((st, i) => (
               <div key={i} style={css(`display:flex;align-items:center;gap:var(--invoicecloud-spacing-s);padding:var(--invoicecloud-spacing-s);border-radius:10px;background:${st.bg};opacity:${st.opacity}`)}>
@@ -1192,6 +1322,13 @@ export function App() {
             ))}
           </div>
           <AgentActivityPanel activity={s.agentActivity} connection={s.activityConnection} />
+          {s.analysisComplete && !s.orchestrationError && (
+            <div role="status" style={css('width:100%;max-width:720px;margin-top:16px;padding:16px;border:1px solid #197d00;border-radius:10px;background:#f0f9ed;color:#145c00;text-align:center')}>
+              <strong>{s.agentActivity.filter(item => item.status === 'completed').length} agent tasks completed.</strong>
+              <p style={css('margin:6px 0 12px')}>The orchestration run finished and its results are ready for review.</p>
+              <button type="button" onClick={() => patch({ screen: 'results' })} style={css('border:0;border-radius:8px;padding:10px 18px;background:#197d00;color:#fff;font-weight:700;cursor:pointer')}>Review agent findings</button>
+            </div>
+          )}
           {s.orchestrationError && (
             <div role="alert" style={css('width:100%;max-width:720px;margin-top:16px;padding:16px;border:1px solid #b42318;border-radius:10px;background:#fff1f0;color:#7a271a')}>
               <strong>We could not finish building this preview.</strong>
@@ -1207,6 +1344,7 @@ export function App() {
         <div style={css('min-height:100vh;padding:var(--invoicecloud-spacing-xl) var(--invoicecloud-spacing-l);display:flex;flex-direction:column;align-items:center')}>
           <h2 style={css('margin-bottom:var(--invoicecloud-spacing-xxs)')}>Here's what we found</h2>
           <p style={css('font-size:14px;color:var(--invoicecloud-utility-neutral-70);margin-bottom:var(--invoicecloud-spacing-l)')}>Review before we build the live preview.</p>
+          <AgentActivityPanel activity={s.agentActivity} connection="idle" />
           <div style={css('width:100%;max-width:900px;display:flex;flex-direction:column;gap:var(--invoicecloud-spacing-m)')}>
 
             <div style={css('background:var(--invoicecloud-surface-default-background);border:1px solid var(--invoicecloud-surface-default-border);border-radius:14px;padding:var(--invoicecloud-spacing-m)')}>
@@ -1441,6 +1579,7 @@ export function App() {
           </div>
 
           <div style={css('display:flex;gap:var(--invoicecloud-spacing-s);margin-top:var(--invoicecloud-spacing-l)')}>
+            <button type="button" onClick={reviewCompletedResearch} style={css('background:none;border:1px solid var(--invoicecloud-surface-default-border);border-radius:10px;padding:14px 24px;font-size:15px;cursor:pointer;color:var(--invoicecloud-utility-neutral-80)')}>&larr; Agent activity</button>
             <button type="button" onClick={redoWizard} style={css('background:none;border:1px solid var(--invoicecloud-surface-default-border);border-radius:10px;padding:14px 24px;font-size:15px;cursor:pointer;color:var(--invoicecloud-utility-neutral-80)')}>Redo</button>
             <button type="button" onClick={confirmPreview} style={css('background:var(--invoicecloud-primary);color:#fff;border:none;border-radius:10px;padding:14px 32px;font-size:16px;font-weight:700;cursor:pointer')}>Preview My Payment Site &rarr;</button>
           </div>
@@ -1459,9 +1598,36 @@ export function App() {
                 <button type="button" onClick={() => setPreviewDevice('desktop')} style={css(`padding:8px 14px;border-radius:8px;font-size:13px;font-weight:500;cursor:pointer;background:${selBg(s.previewDevice === 'desktop')};border:1.5px solid ${selBorder(s.previewDevice === 'desktop')}`)}>Desktop</button>
                 <button type="button" onClick={() => setPreviewDevice('mobile')} style={css(`padding:8px 14px;border-radius:8px;font-size:13px;font-weight:500;cursor:pointer;background:${selBg(s.previewDevice === 'mobile')};border:1.5px solid ${selBorder(s.previewDevice === 'mobile')}`)}>Mobile</button>
               </div>
-              <button type="button" onClick={goPricing} style={css('background:var(--invoicecloud-utility-neutral-90);color:#fff;border:none;border-radius:10px;padding:10px 18px;font-size:14px;font-weight:700;cursor:pointer')}>Exit Preview</button>
+              <button type="button" onClick={backToResults} style={css('background:var(--invoicecloud-utility-neutral-90);color:#fff;border:none;border-radius:10px;padding:10px 18px;font-size:14px;font-weight:700;cursor:pointer')}>&larr; Back to builder</button>
             </div>
           </div>
+
+          <section style={css(`width:100%;max-width:${previewMaxWidth};background:#fff;border:1px solid var(--invoicecloud-surface-default-border);border-radius:14px;padding:var(--invoicecloud-spacing-m);margin-bottom:var(--invoicecloud-spacing-s);box-shadow:var(--invoicecloud-elevation-1)`)}>
+            <h3 style={css('font-size:16px;margin-bottom:4px')}>Extend this experience with the agent</h3>
+            <p style={css('font-size:13px;color:var(--invoicecloud-utility-neutral-70);margin-bottom:12px')}>Describe a change. The agent will propose a new revision; the preview changes only after you accept it.</p>
+            <form onSubmit={submitPreviewChange} style={css('display:flex;gap:8px')}>
+              <input value={s.previewChatInput} onChange={event => patch({ previewChatInput: event.target.value })} disabled={s.previewChatBusy || !!s.previewProposal} placeholder="e.g. Make the heading friendlier and change the button to Pay later" style={css('flex:1;padding:11px 12px;border:1px solid var(--invoicecloud-surface-default-border);border-radius:8px;font-size:14px')} />
+              <button type="submit" disabled={s.previewChatBusy || !!s.previewProposal || !s.previewChatInput.trim()} style={css('border:0;border-radius:8px;padding:10px 16px;background:var(--invoicecloud-primary);color:#fff;font-weight:700;cursor:pointer')}>{s.previewChatBusy ? 'Working...' : 'Propose change'}</button>
+            </form>
+            {s.previewChatError && <div role="alert" style={css('margin-top:10px;padding:10px;border-radius:8px;background:var(--invoicecloud-intent-error-background);color:var(--invoicecloud-intent-error)')}>{s.previewChatError}</div>}
+            {s.previewChatReply && <p aria-live="polite" style={css('margin:10px 0 0;font-size:13px')}>{s.previewChatReply}</p>}
+            {s.previewChatBusy && <AgentActivityPanel activity={s.agentActivity} connection={s.activityConnection} />}
+            {s.previewProposal && (
+              <div style={css('margin-top:12px;padding:12px;border:1px solid var(--invoicecloud-primary);border-radius:10px;background:var(--invoicecloud-primary-tint)')}>
+                <strong>Proposed revision {s.previewProposal.revision}</strong>
+                <ul style={css('margin:8px 0 10px;padding-left:20px;font-size:13px')}>
+                  <li>Heading: {s.previewProposal.definition.content.heading}</li>
+                  <li>Primary action: {s.previewProposal.definition.ui?.actions[0]?.label ?? 'unchanged'}</li>
+                  <li>Payment methods: {s.previewProposal.definition.preferences?.accepted_methods.join(', ') ?? 'unchanged'}</li>
+                </ul>
+                {(s.previewProposal.findings ?? []).map(finding => <div key={finding.code} style={css('font-size:12px;color:#b54708')}>{finding.message}</div>)}
+                <div style={css('display:flex;gap:8px;margin-top:10px')}>
+                  <button type="button" onClick={acceptPreviewChange} style={css('border:0;border-radius:8px;padding:9px 14px;background:#197d00;color:#fff;font-weight:700;cursor:pointer')}>Accept and update preview</button>
+                  <button type="button" onClick={() => void rejectPreviewChange()} style={css('border:1px solid var(--invoicecloud-surface-default-border);border-radius:8px;padding:9px 14px;background:#fff;cursor:pointer')}>Discard</button>
+                </div>
+              </div>
+            )}
+          </section>
 
           {s.payerStep === 0 && (
             <>
@@ -1777,18 +1943,16 @@ export function App() {
             </div>
           </div>
 
-          {s.payerStep === 2 && (
-            <div style={css(`width:100%;max-width:${previewMaxWidth};background:var(--invoicecloud-utility-neutral-90);color:#fff;border-radius:14px;padding:var(--invoicecloud-spacing-m) var(--invoicecloud-spacing-l);margin-top:var(--invoicecloud-spacing-m);display:flex;align-items:center;justify-content:space-between;animation:fadeUp .4s ease-out`)}>
-              <div>
-                <div style={css('font-weight:500;margin-bottom:2px')}>That's what your payers will see.</div>
-                <div style={css('font-size:13px;opacity:.75')}>Ready to launch it, or save it to come back to later?</div>
-              </div>
-              <div style={css('display:flex;gap:var(--invoicecloud-spacing-s)')}>
-                <button type="button" onClick={openSignup} style={css('background:none;border:1px solid rgba(255,255,255,.3);color:#fff;border-radius:10px;padding:12px 20px;font-size:14px;cursor:pointer')}>Save without publishing</button>
-                <button type="button" onClick={goPricing} style={css('background:var(--invoicecloud-secondary);color:var(--invoicecloud-utility-neutral-100);border:none;border-radius:10px;padding:12px 24px;font-size:14px;font-weight:700;cursor:pointer')}>See Pricing &rarr;</button>
-              </div>
+          <div style={css(`width:100%;max-width:${previewMaxWidth};background:var(--invoicecloud-utility-neutral-90);color:#fff;border-radius:14px;padding:var(--invoicecloud-spacing-m) var(--invoicecloud-spacing-l);margin-top:var(--invoicecloud-spacing-m);display:flex;align-items:center;justify-content:space-between;gap:var(--invoicecloud-spacing-m);flex-wrap:wrap;animation:fadeUp .4s ease-out`)}>
+            <div>
+              <div style={css('font-weight:500;margin-bottom:2px')}>{s.payerStep === 2 ? "That's what your payers will see." : 'Ready to publish this experience?'}</div>
+              <div style={css('font-size:13px;opacity:.75')}>{s.payerStep === 2 ? 'The payment journey is verified. Launch it now, or save it for later.' : 'You can publish at any point; completing the sample payment is optional.'}</div>
             </div>
-          )}
+            <div style={css('display:flex;gap:var(--invoicecloud-spacing-s);flex-wrap:wrap')}>
+              <button type="button" onClick={openSignup} style={css('background:none;border:1px solid rgba(255,255,255,.3);color:#fff;border-radius:10px;padding:12px 20px;font-size:14px;cursor:pointer')}>Save without publishing</button>
+              <button type="button" onClick={goPricing} style={css('background:var(--invoicecloud-secondary);color:var(--invoicecloud-utility-neutral-100);border:none;border-radius:10px;padding:12px 24px;font-size:14px;font-weight:700;cursor:pointer')}>Review &amp; publish &rarr;</button>
+            </div>
+          </div>
         </div>
       )}
       {/* ================= PRICING ================= */}
@@ -1913,7 +2077,13 @@ export function App() {
             )}
             {s.publishError && (
               <div role="alert" style={css('background:var(--invoicecloud-intent-error-background);border:1px solid var(--invoicecloud-intent-error-border);color:var(--invoicecloud-intent-error);border-radius:8px;padding:10px 12px;font-size:13px;margin-bottom:var(--invoicecloud-spacing-s)')}>
-                <strong>Could not publish.</strong> {s.publishError}
+                <strong>Could not publish.</strong> {s.publishError.message}
+                {s.publishError.findings.length > 0 && (
+                  <ul style={css('margin:8px 0 0;padding-left:20px')}>
+                    {s.publishError.findings.map(finding => <li key={finding.code}>{finding.message}</li>)}
+                  </ul>
+                )}
+                {s.publishError.reference && <small style={css('display:block;margin-top:8px')}>Technical reference: {s.publishError.reference}</small>}
               </div>
             )}
             <button type="submit" disabled={s.publishing} style={css(`width:100%;background:var(--invoicecloud-intent-success-hover);color:#fff;border:none;border-radius:10px;padding:14px;font-size:15px;font-weight:700;cursor:${s.publishing ? 'wait' : 'pointer'};opacity:${s.publishing ? '.65' : '1'}`)}>{s.publishing ? 'Publishing...' : s.deployment && !['failed', 'rolled_back', 'ready'].includes(s.deployment.state.toLowerCase()) ? 'Check Publish Status' : 'Pay & Publish'}</button>

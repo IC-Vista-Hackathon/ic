@@ -77,6 +77,71 @@ public sealed class OrchestrationRunnerTests
         Assert.Equal("root failure", exception.Message);
     }
 
+    [Fact]
+    public async Task ResilientExecutionRetriesTransientFailureWithinBudget()
+    {
+        var attempts = 0;
+        var result = await ResilientExecution.ExecuteAsync(
+            (_, _) => ++attempts < 3
+                ? ValueTask.FromException<string>(new HttpRequestException("transient"))
+                : ValueTask.FromResult("recovered"),
+            new(MaxAttempts: 3, InitialBackoff: TimeSpan.Zero));
+        Assert.Equal("recovered", result);
+        Assert.Equal(3, attempts);
+    }
+
+    [Fact]
+    public async Task FanOutPreservesPartialSuccess()
+    {
+        var results = await BoundedFanOut.ExecuteAsync<int, int>([1, 2, 3], 2,
+            (input, _, _) => input == 2
+                ? ValueTask.FromException<int>(new InvalidOperationException("failed"))
+                : ValueTask.FromResult(input * 10));
+        Assert.Equal(2, results.Count(item => item.Succeeded));
+        Assert.Single(results, item => !item.Succeeded);
+    }
+
+    [Fact]
+    public async Task CheckpointedExecutionReturnsCompletedOutputAfterRestart()
+    {
+        var store = new MemoryStateStore();
+        var calls = 0;
+        var first = await CheckpointedExecution.ExecuteAsync(store, "biller-1", "run-1", "test", 1,
+            _ => ValueTask.FromResult(++calls));
+        var resumed = await CheckpointedExecution.ExecuteAsync(store, "biller-1", "run-1", "test", 1,
+            _ => ValueTask.FromResult(++calls));
+        Assert.Equal(1, first);
+        Assert.Equal(1, resumed);
+        Assert.Equal(1, calls);
+    }
+
+    [Fact]
+    public async Task CheckpointedExecutionResumesAnInterruptedRunningStep()
+    {
+        var store = new MemoryStateStore();
+        await Assert.ThrowsAsync<IOException>(async () =>
+            await CheckpointedExecution.ExecuteAsync<int>(store, "biller-1", "run-2", "test", 1,
+                _ => ValueTask.FromException<int>(new IOException("pod stopped"))));
+
+        var recovered = await CheckpointedExecution.ExecuteAsync(store, "biller-1", "run-2", "test", 1,
+            _ => ValueTask.FromResult(42));
+        Assert.Equal(42, recovered);
+    }
+
+    [Fact]
+    public async Task AttemptTimeoutRetriesAndEventuallyCompletes()
+    {
+        var attempts = 0;
+        var result = await ResilientExecution.ExecuteAsync(async (_, token) =>
+        {
+            attempts++;
+            if (attempts == 1) await Task.Delay(TimeSpan.FromSeconds(5), token);
+            return "ok";
+        }, new(MaxAttempts: 2, AttemptTimeout: TimeSpan.FromMilliseconds(20), InitialBackoff: TimeSpan.Zero));
+        Assert.Equal("ok", result);
+        Assert.Equal(2, attempts);
+    }
+
     private sealed class CollectingSink : IOrchestrationEventSink
     {
         public List<OrchestrationEvent> Events { get; } = [];
@@ -93,6 +158,17 @@ public sealed class OrchestrationRunnerTests
             activity.Status == OrchestrationEventStatus.Failed
                 ? ValueTask.FromException(new IOException("sink failure"))
                 : ValueTask.CompletedTask;
+    }
+
+    private sealed class MemoryStateStore : IOrchestrationStateStore
+    {
+        private OrchestrationCheckpoint? checkpoint;
+        public ValueTask<OrchestrationCheckpoint?> ReadAsync(string partitionKey, string runId, CancellationToken cancellationToken = default) => ValueTask.FromResult(checkpoint);
+        public ValueTask<OrchestrationCheckpoint> SaveAsync(OrchestrationCheckpoint value, string? expectedETag = null, CancellationToken cancellationToken = default)
+        {
+            checkpoint = value with { ETag = Guid.NewGuid().ToString("N") };
+            return ValueTask.FromResult(checkpoint);
+        }
     }
 
     private sealed class EchoWorkflow : IOrchestrationWorkflow<string, string>

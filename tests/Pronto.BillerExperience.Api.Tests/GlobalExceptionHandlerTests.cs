@@ -1,5 +1,7 @@
 using System.Text.Json;
 using Pronto.BillerExperience.Api.Infrastructure;
+using Pronto.BillerExperience.Api.Application;
+using Pronto.BillerExperience.Contracts.V1.Experiences;
 using Pronto.BillerExperience.Api.Infrastructure.Persistence;
 using Microsoft.AspNetCore.Http;
 using Microsoft.Extensions.Logging.Abstractions;
@@ -47,5 +49,26 @@ public sealed class GlobalExceptionHandlerTests
         using var problem = JsonDocument.Parse(body);
         Assert.DoesNotContain(
             "secret", problem.RootElement.GetProperty("detail").GetString(), StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public async Task ValidationErrorsIncludeActionableFindingsAndTrace()
+    {
+        var handler = new GlobalExceptionHandler(NullLogger<GlobalExceptionHandler>.Instance);
+        var context = new DefaultHttpContext();
+        var body = new MemoryStream();
+        context.Response.Body = body;
+        var exception = new ExperienceValidationException(
+            "Resolve the listed validation items.",
+            [new ComplianceFinding("ACTION_LABEL_INVALID", "Action labels must contain 1 to 48 characters.", ComplianceFindingSeverity.Blocking)]);
+
+        await handler.TryHandleAsync(context, exception, CancellationToken.None);
+
+        Assert.Equal(StatusCodes.Status422UnprocessableEntity, context.Response.StatusCode);
+        body.Position = 0;
+        using var problem = JsonDocument.Parse(body);
+        Assert.Equal("experience_validation_blocked", problem.RootElement.GetProperty("code").GetString());
+        Assert.Equal("ACTION_LABEL_INVALID", problem.RootElement.GetProperty("findings")[0].GetProperty("code").GetString());
+        Assert.True(problem.RootElement.TryGetProperty("trace_id", out _));
     }
 }

@@ -1,20 +1,30 @@
-// Browser telemetry smoke test for the deployed payer PWA.
+// Browser telemetry smoke test for a deployed Pronto frontend (payer PWA or Biller Studio).
 //
-// Loads the PWA through the target origin (usually a port-forwarded gateway), then asserts:
+// Loads a deployed frontend through the target origin (usually a port-forwarded gateway), then
+// asserts:
 //   1. GET /api/public/telemetry returns a non-null connection string (runtime config works),
 //   2. the page boots and mints a flow id (the telemetry client initialized),
 //   3. the Application Insights browser SDK actually POSTs a beacon off the page.
 //
-// Prints a single JSON object on stdout ({ flowId, beaconSeen }); all logging goes to stderr so
-// the caller can pipe stdout straight into jq. The caller then verifies server-side arrival by
-// querying Application Insights for a pwa.session_started event carrying this flow id.
+// Prints a single JSON object on stdout ({ flowId, expectedEvent, beaconSeen }); all logging goes
+// to stderr so the caller can pipe stdout straight into jq. The caller then verifies server-side
+// arrival by querying Application Insights for an EXPECTED_EVENT event carrying this flow id.
+//
+// Works for both frontends: TARGET_PATH selects which app to load and EXPECTED_EVENT its
+// session-start event; the sessionStorage flow-id key is derived from the event's app prefix
+// (pwa.* -> pronto.pwa.flow_id, studio.* -> pronto.studio.flow_id). Defaults preserve the
+// original PWA behavior.
 //
 // Usage: TARGET_ORIGIN=http://127.0.0.1:18081 node telemetry-smoke.mjs
+//        TARGET_ORIGIN=http://127.0.0.1:18081 TARGET_PATH=/studio/ \
+//          EXPECTED_EVENT=studio.session_started node telemetry-smoke.mjs
 
 import { chromium } from 'playwright';
 
 const origin = process.env.TARGET_ORIGIN ?? 'http://127.0.0.1:18081';
 const pagePath = process.env.TARGET_PATH ?? '/pay/demo/';
+const expectedEvent = process.env.EXPECTED_EVENT ?? 'pwa.session_started';
+const flowStorageKey = `pronto.${expectedEvent.split('.')[0]}.flow_id`;
 const beaconTimeoutMs = Number(process.env.BEACON_TIMEOUT_MS ?? 45_000);
 
 const log = message => console.error(`[telemetry-smoke] ${message}`);
@@ -42,10 +52,10 @@ try {
   log(`loading ${origin}${pagePath}`);
   await page.goto(`${origin}${pagePath}`, { waitUntil: 'domcontentloaded', timeout: 30_000 });
 
-  await page.waitForFunction(() => sessionStorage.getItem('pronto.pwa.flow_id') !== null, undefined, { timeout: 20_000 })
+  await page.waitForFunction(key => sessionStorage.getItem(key) !== null, flowStorageKey, { timeout: 20_000 })
     .catch(() => fail('flow id never appeared in sessionStorage — telemetry client did not initialize'));
-  const flowId = await page.evaluate(() => sessionStorage.getItem('pronto.pwa.flow_id'));
-  log(`flow id ${flowId}`);
+  const flowId = await page.evaluate(key => sessionStorage.getItem(key), flowStorageKey);
+  log(`flow id ${flowId} (expecting event ${expectedEvent})`);
 
   const beaconResponse = await beacon.catch(() => fail(`no Application Insights beacon completed within ${beaconTimeoutMs}ms`));
   if (beaconResponse.status() !== 200) fail(`ingestion endpoint returned ${beaconResponse.status()}`);
@@ -53,7 +63,7 @@ try {
   if (receipt && receipt.itemsAccepted < 1) fail(`ingestion accepted 0 items: ${JSON.stringify(receipt)}`);
   log(`beacon accepted by ${new URL(beaconResponse.url()).host} (itemsAccepted=${receipt?.itemsAccepted ?? 'unknown'})`);
 
-  console.log(JSON.stringify({ flowId, beaconSeen: true }));
+  console.log(JSON.stringify({ flowId, expectedEvent, beaconSeen: true }));
 } finally {
   await browser.close();
 }

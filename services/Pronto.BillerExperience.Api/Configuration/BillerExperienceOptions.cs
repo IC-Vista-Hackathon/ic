@@ -9,6 +9,16 @@ public sealed class BillerExperienceOptions
     public SupportingServicesOptions SupportingServices { get; set; } = new();
     public ResearchOptions Research { get; set; } = new();
     public McpOptions Mcp { get; set; } = new();
+    public AgentProvisioningOptions AgentProvisioning { get; set; } = new();
+}
+
+public sealed class AgentProvisioningOptions
+{
+    public bool Enabled { get; set; }
+    public string DefinitionsPath { get; set; } = "agents";
+    public string PrimaryModel { get; set; } = "gpt-5.4";
+    public string MiniModel { get; set; } = "gpt-5.4-mini";
+    public string McpConnectionId { get; set; } = "ic-shared-context-mcp";
 }
 
 public sealed class McpOptions
