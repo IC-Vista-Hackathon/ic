@@ -17,6 +17,8 @@
 #   BASE_URL          public gateway base (default: http://pronto.eastus2.cloudapp.azure.com)
 #   PUBLISHED_EXPERIENCE_SLUG known published fixture to verify through API + Router
 #   HTTP_TIMEOUT      per-request timeout seconds (default: 10)
+#   HTTP_RETRIES      gateway-reachability attempts before failing (default: 6)
+#   HTTP_RETRY_DELAY  seconds between gateway-reachability attempts (default: 5)
 #   SKIP_KUBECTL=1    skip layer 1 (when cluster credentials aren't available)
 #
 # Requires: curl, jq, and (for layer 1) kubectl with cluster credentials.
@@ -25,6 +27,8 @@ set -uo pipefail
 
 BASE_URL="${BASE_URL:-http://pronto.eastus2.cloudapp.azure.com}"
 HTTP_TIMEOUT="${HTTP_TIMEOUT:-10}"
+HTTP_RETRIES="${HTTP_RETRIES:-6}"
+HTTP_RETRY_DELAY="${HTTP_RETRY_DELAY:-5}"
 SKIP_KUBECTL="${SKIP_KUBECTL:-0}"
 PUBLISHED_EXPERIENCE_SLUG="${PUBLISHED_EXPERIENCE_SLUG:-}"
 GATEWAY_NS="kgateway-system"
@@ -78,6 +82,21 @@ http_code() {
   curl -s -m "$HTTP_TIMEOUT" -o /dev/null -w "%{http_code}" "$1" 2>/dev/null
 }
 
+# Poll a URL until it returns the expected status, tolerating transient gateway
+# errors (e.g. a 503 while a rolling deploy briefly routes to a draining pod).
+# Echoes the final observed status code; returns 0 once it matches, else non-zero
+# after HTTP_RETRIES attempts.
+http_code_await() {
+  local url="$1" expected="$2" code=""
+  for ((attempt = 1; attempt <= HTTP_RETRIES; attempt++)); do
+    code="$(http_code "$url")"
+    [[ "$code" == "$expected" ]] && { printf '%s' "$code"; return 0; }
+    [[ "$attempt" -lt "$HTTP_RETRIES" ]] && sleep "$HTTP_RETRY_DELAY"
+  done
+  printf '%s' "$code"
+  return 1
+}
+
 # ---- Layer 1: Deployment readiness (kubectl) ----
 section "1. Deployment readiness (kubectl)"
 if [[ "$SKIP_KUBECTL" == "1" ]]; then
@@ -128,8 +147,7 @@ fi
 section "2. Gateway reachability ($BASE_URL)"
 for entry in "${HTTP_CHECKS[@]}"; do
   path="${entry%% *}"; expected="${entry##* }"
-  code="$(http_code "$BASE_URL$path")"
-  if [[ "$code" == "$expected" ]]; then
+  if code="$(http_code_await "$BASE_URL$path" "$expected")"; then
     pass "$path -> $code"
   else
     fail "$path -> $code (expected $expected)"
@@ -143,8 +161,7 @@ if [[ -n "$PUBLISHED_EXPERIENCE_SLUG" ]]; then
   for path in \
     "/api/public/experiences/${PUBLISHED_EXPERIENCE_SLUG}" \
     "/pay/${PUBLISHED_EXPERIENCE_SLUG}/"; do
-    code="$(http_code "$BASE_URL$path")"
-    if [[ "$code" == "200" ]]; then
+    if code="$(http_code_await "$BASE_URL$path" 200)"; then
       pass "$path -> 200"
     else
       fail "$path -> $code (expected 200)"
