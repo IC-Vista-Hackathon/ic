@@ -50,6 +50,7 @@ builder.Services.AddMcpServer()
     .WithHttpTransport(transport => transport.Stateless = true)
     .WithTools<AgentContextMcpTools>();
 builder.Services.AddSingleton<DeterministicExperienceDraftGenerator>();
+builder.Services.AddTransient<CorrelationPropagationHandler>();
 builder.Services.AddSingleton<IDestinationAddressResolver, SystemDestinationAddressResolver>();
 builder.Services.AddHttpClient<IBillerWebsiteResearcher, HttpBillerWebsiteResearcher>(client =>
     client.Timeout = Timeout.InfiniteTimeSpan)
@@ -84,7 +85,8 @@ else
 }
 if (Uri.TryCreate(options.SupportingServices.InvoiceBaseUrl, UriKind.Absolute, out var invoiceBaseUri))
 {
-    builder.Services.AddHttpClient("invoice-seeder", client => client.BaseAddress = invoiceBaseUri);
+    builder.Services.AddHttpClient("invoice-seeder", client => client.BaseAddress = invoiceBaseUri)
+        .AddHttpMessageHandler<CorrelationPropagationHandler>();
     builder.Services.AddSingleton<IInvoiceSeeder>(services => new HttpInvoiceSeeder(
         services.GetRequiredService<IHttpClientFactory>().CreateClient("invoice-seeder"),
         services.GetRequiredService<ILogger<HttpInvoiceSeeder>>()));
@@ -168,6 +170,7 @@ builder.Services.AddCors(cors => cors.AddDefaultPolicy(policy =>
         .AllowAnyHeader()
         .AllowAnyMethod()));
 
+builder.Services.FilterHealthProbeTraces();
 var openTelemetry = builder.Services.AddOpenTelemetry()
     .ConfigureResource(resource => resource.AddService("Pronto.BillerExperience.Api"))
     .WithTracing(tracing => tracing

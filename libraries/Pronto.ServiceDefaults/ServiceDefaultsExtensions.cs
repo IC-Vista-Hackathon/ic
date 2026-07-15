@@ -3,9 +3,11 @@ using System.Text.Json.Serialization;
 using Azure.Monitor.OpenTelemetry.AspNetCore;
 using Pronto.ServiceDefaults.Errors;
 using Microsoft.AspNetCore.Builder;
+using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
+using OpenTelemetry.Instrumentation.AspNetCore;
 using OpenTelemetry.Resources;
 
 namespace Pronto.ServiceDefaults;
@@ -22,6 +24,7 @@ public static class ServiceDefaultsExtensions
             options.UseUtcTimestamp = true;
         });
         builder.Services.AddServiceDefaults();
+        builder.Services.FilterHealthProbeTraces();
         var telemetry = builder.Services.AddOpenTelemetry()
             .ConfigureResource(resource => resource.AddService(serviceName));
         if (!string.IsNullOrWhiteSpace(builder.Configuration["APPLICATIONINSIGHTS_CONNECTION_STRING"]))
@@ -29,6 +32,27 @@ public static class ServiceDefaultsExtensions
             telemetry.UseAzureMonitor();
         }
         return builder;
+    }
+
+    /// <summary>
+    /// Health probes (<c>/health/live</c>, <c>/health/ready</c>) are polled continuously by
+    /// Kubernetes; excluding them from ASP.NET Core trace collection keeps that noise out of
+    /// Application Insights while normal requests are still exported. Idempotent, and a no-op
+    /// unless the AspNetCore instrumentation is active (e.g. via Azure Monitor).
+    /// </summary>
+    public static IServiceCollection FilterHealthProbeTraces(this IServiceCollection services)
+    {
+        services.Configure<AspNetCoreTraceInstrumentationOptions>(options =>
+            options.Filter = context => !IsHealthProbeRequest(context));
+        return services;
+    }
+
+    /// <summary>True for the liveness/readiness probe endpoints that should not be traced.</summary>
+    public static bool IsHealthProbeRequest(HttpContext context)
+    {
+        var path = context.Request.Path;
+        return path.Equals("/health/live", StringComparison.OrdinalIgnoreCase)
+            || path.Equals("/health/ready", StringComparison.OrdinalIgnoreCase);
     }
 
     /// <summary>
