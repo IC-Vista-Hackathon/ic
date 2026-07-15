@@ -38,7 +38,10 @@ az deployment sub create \
 The module outputs the reviewed MCP tool definition for agent-version provisioning. It allowlists
 only `get_goal_context` and `append_context`. Agent versions are Foundry data-plane objects, so ARM
 Bicep creates their authenticated project connection and publishes the tool definition, while the
-agent provisioning code attaches that definition to each approved agent.
+API's opt-in `FoundryAgentReconciler` creates immutable versions from `agents/*/instructions.md`,
+attaches that definition to each approved agent, and reads the version back to verify the MCP
+attachment. Enable `BillerExperience__AgentProvisioning__Enabled=true` only after the MCP connection
+has been provisioned; reconciliation fails closed if the latest version lacks the reviewed tool.
 
 Re-run the same command to apply changes; Bicep is idempotent (ARM incremental deployment).
 
