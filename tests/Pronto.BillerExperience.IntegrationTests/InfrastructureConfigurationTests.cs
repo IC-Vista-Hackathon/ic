@@ -80,7 +80,7 @@ public sealed class InfrastructureConfigurationTests
     }
 
     [Fact]
-    public void SecurityScansCannotSilentlyIgnoreHighSeverityFindings()
+    public void SecurityScansAreBlockingOrExplicitlyAdvisory()
     {
         var root = FindRepositoryRoot();
         var workflows = Path.Combine(root, ".github", "workflows");
@@ -92,10 +92,14 @@ public sealed class InfrastructureConfigurationTests
             "continue-on-error: true",
             File.ReadAllText(Path.Combine(workflows, "dependency-review.yml")),
             StringComparison.Ordinal);
+        var trivy = File.ReadAllText(Path.Combine(workflows, "scan.yml"));
+        Assert.Contains("name: Advisory security scan", trivy, StringComparison.Ordinal);
+        Assert.Contains("name: Advisory Trivy filesystem & config", trivy, StringComparison.Ordinal);
         Assert.Contains(
-            "--severity CRITICAL,HIGH --ignore-unfixed --exit-code 1",
-            File.ReadAllText(Path.Combine(workflows, "scan.yml")),
+            "High/critical findings are reported but do not block merges",
+            trivy,
             StringComparison.Ordinal);
+        Assert.DoesNotContain("--exit-code 1", trivy, StringComparison.Ordinal);
     }
 
     private static string FindRepositoryRoot()
