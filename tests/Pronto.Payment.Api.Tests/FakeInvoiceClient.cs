@@ -10,6 +10,7 @@ public sealed class FakeInvoiceClient : IInvoiceClient
 {
     private readonly object gate = new();
     private readonly ConcurrentDictionary<(string BillerId, string InvoiceId), InvoiceResponse> invoices = new();
+    private readonly Dictionary<(string BillerId, string InvoiceId), string> lastPaymentIds = [];
     private int updateStatusCalls;
 
     /// <summary>Number of times <see cref="UpdateStatusAsync"/> has been invoked (idempotency checks).</summary>
@@ -60,13 +61,32 @@ public sealed class FakeInvoiceClient : IInvoiceClient
             var invoice = invoices.GetValueOrDefault(key)
                 ?? throw ServiceException.NotFound("not_found", $"invoice {invoiceId} not found");
 
-            if (invoice.Status == InvoiceStatus.Paid)
+            // Idempotent replay: the same payment re-asserting the status it already produced.
+            if (invoice.Status == request.Status
+                && lastPaymentIds.GetValueOrDefault(key) == request.PaymentId)
             {
-                throw ServiceException.Conflict("already_paid", $"invoice {invoiceId} is already paid");
+                return Task.FromResult(invoice);
+            }
+
+            var allowed = (invoice.Status, request.Status) switch
+            {
+                (InvoiceStatus.Due, InvoiceStatus.Paid) => true,
+                (InvoiceStatus.Due, InvoiceStatus.Scheduled) => true,
+                (InvoiceStatus.Scheduled, InvoiceStatus.Paid) => true,
+                _ => false,
+            };
+
+            if (!allowed)
+            {
+                throw invoice.Status == InvoiceStatus.Paid
+                    ? ServiceException.Conflict("already_paid", $"invoice {invoiceId} is already paid")
+                    : ServiceException.Conflict(
+                        "invalid_transition", $"cannot transition invoice {invoiceId} to {request.Status}");
             }
 
             var updated = invoice with { Status = request.Status };
             invoices[key] = updated;
+            lastPaymentIds[key] = request.PaymentId;
             return Task.FromResult(updated);
         }
     }

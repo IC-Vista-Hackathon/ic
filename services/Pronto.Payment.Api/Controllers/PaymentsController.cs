@@ -16,6 +16,7 @@ public sealed partial class PaymentsController : ControllerBase
 {
     private const string ConfirmationAlphabet = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
     private const string IdempotencyKeyHeader = "Idempotency-Key";
+    private const int MaxIdempotencyKeyLength = 200;
 
     private readonly IPaymentStore store;
     private readonly IInvoiceClient invoices;
@@ -37,15 +38,14 @@ public sealed partial class PaymentsController : ControllerBase
         var idempotencyKey = ReadIdempotencyKey();
         if (idempotencyKey is not null)
         {
-            // Replay short-circuit: a repeat with a key we've already seen returns the ORIGINAL
-            // result verbatim — before any conflict/validation check, so a client retry after a
-            // network blip never double-charges or 409s on an invoice its first call already paid.
+            // Replay: a repeat with a key we've already seen resolves to the ORIGINAL payment —
+            // before any conflict/validation check, so a client retry after a network blip never
+            // double-charges or 409s on an invoice its first call already paid.
             var original = await store.FindByIdempotencyKeyAsync(request.BillerId, idempotencyKey, cancellationToken)
                 .ConfigureAwait(false);
             if (original is not null)
             {
-                LogPaymentReplayed(logger, original.PaymentId, original.BillerId, idempotencyKey, Activity.Current?.TraceId.ToString());
-                return Ok(original);
+                return await ResolveReplayAsync(original, idempotencyKey, cancellationToken).ConfigureAwait(false);
             }
         }
 
@@ -92,29 +92,56 @@ public sealed partial class PaymentsController : ControllerBase
             .ConfigureAwait(false);
         if (creation.IsReplay)
         {
-            // Same idempotency key seen before: return the ORIGINAL result, never a new charge/409.
-            LogPaymentReplayed(logger, creation.Payment.PaymentId, creation.Payment.BillerId, idempotencyKey, Activity.Current?.TraceId.ToString());
-            return Ok(creation.Payment);
+            // Concurrent first-time race on the same key: resolve to whoever won the reservation.
+            return await ResolveReplayAsync(creation.Payment, idempotencyKey, cancellationToken).ConfigureAwait(false);
         }
 
-        // 2. The Invoice Service transition is the atomicity authority: a concurrent duplicate
-        //    pay attempt loses here with 409, leaving only a recoverable Pending payment row.
+        // 2-3. Assert the invoice transition (atomicity authority; a concurrent duplicate loses
+        //      here with 409, leaving only a recoverable Pending row) then mark the payment terminal.
+        var payment = await FinalizeAsync(pending, cancellationToken).ConfigureAwait(false);
+        return Created($"/payments/{payment.PaymentId}?biller_id={payment.BillerId}", payment);
+    }
+
+    /// <summary>
+    /// Resolve an idempotent replay. A payment left <see cref="PaymentStatus.Pending"/> by a
+    /// mid-flight crash is resumed to completion (the invoice transition is idempotent per
+    /// payment id, so re-asserting it is safe); a terminal payment is returned verbatim.
+    /// </summary>
+    private async Task<ActionResult<PaymentResponse>> ResolveReplayAsync(
+        PaymentResponse original, string? idempotencyKey, CancellationToken cancellationToken)
+    {
+        if (original.Status == PaymentStatus.Pending)
+        {
+            var resumed = await FinalizeAsync(original, cancellationToken).ConfigureAwait(false);
+            return Ok(resumed);
+        }
+
+        LogPaymentReplayed(logger, original.PaymentId, original.BillerId, idempotencyKey, Activity.Current?.TraceId.ToString());
+        return Ok(original);
+    }
+
+    /// <summary>
+    /// Assert the invoice transition then mark the payment terminal. Re-asserting the same
+    /// transition with the same payment id is idempotent on the Invoice Service, so this is safe
+    /// to call both for a fresh payment and when resuming a crashed <c>Pending</c> one.
+    /// </summary>
+    private async Task<PaymentResponse> FinalizeAsync(PaymentResponse pending, CancellationToken cancellationToken)
+    {
+        var scheduled = pending.ScheduledFor is not null;
         await invoices.UpdateStatusAsync(
-            request.BillerId,
-            request.InvoiceId,
+            pending.BillerId,
+            pending.InvoiceId,
             new UpdateInvoiceStatusRequest(
-                scheduled ? InvoiceStatus.Scheduled : InvoiceStatus.Paid, paymentId),
+                scheduled ? InvoiceStatus.Scheduled : InvoiceStatus.Paid, pending.PaymentId),
             cancellationToken).ConfigureAwait(false);
 
-        // 3. Mark the payment terminal only after the invoice transition committed.
         var payment = pending with
         {
             Status = scheduled ? PaymentStatus.Scheduled : PaymentStatus.Succeeded,
         };
         await store.UpdateAsync(payment, cancellationToken).ConfigureAwait(false);
         LogPaymentCreated(logger, payment.PaymentId, payment.BillerId, payment.InvoiceId, payment.Status, payment.TotalCents, Activity.Current?.TraceId.ToString());
-
-        return Created($"/payments/{payment.PaymentId}?biller_id={payment.BillerId}", payment);
+        return payment;
     }
 
     private string? ReadIdempotencyKey()
@@ -122,10 +149,19 @@ public sealed partial class PaymentsController : ControllerBase
         if (Request.Headers.TryGetValue(IdempotencyKeyHeader, out var values))
         {
             var key = values.ToString().Trim();
-            if (!string.IsNullOrEmpty(key))
+            if (string.IsNullOrEmpty(key))
             {
-                return key;
+                return null;
             }
+
+            if (key.Length > MaxIdempotencyKeyLength)
+            {
+                throw ServiceException.BadRequest(
+                    "idempotency_key_too_long",
+                    $"{IdempotencyKeyHeader} must be at most {MaxIdempotencyKeyLength} characters");
+            }
+
+            return key;
         }
 
         return null;

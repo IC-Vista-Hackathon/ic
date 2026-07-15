@@ -6,10 +6,12 @@ namespace Pronto.Payment.Api.Scheduling;
 /// <summary>
 /// Hosted sweep that drives <see cref="ScheduledPaymentExecutor"/> on an interval. Uses the
 /// injected <see cref="TimeProvider"/> so "today" is deterministic in tests. A failed sweep is
-/// logged and retried next interval — never crashes the host.
+/// logged and retried next interval — never crashes the host. A fresh DI scope is created per
+/// sweep so the executor's typed <c>HttpClient</c> (transient) isn't captured for the process
+/// lifetime, keeping handler/DNS rotation intact.
 /// </summary>
 public sealed partial class ScheduledPaymentWorker(
-    ScheduledPaymentExecutor executor,
+    IServiceScopeFactory scopeFactory,
     TimeProvider timeProvider,
     IOptions<SchedulingOptions> options,
     ILogger<ScheduledPaymentWorker> logger) : BackgroundService
@@ -29,6 +31,8 @@ public sealed partial class ScheduledPaymentWorker(
             try
             {
                 var today = DateOnly.FromDateTime(timeProvider.GetUtcNow().UtcDateTime);
+                using var scope = scopeFactory.CreateScope();
+                var executor = scope.ServiceProvider.GetRequiredService<ScheduledPaymentExecutor>();
                 await executor.ExecuteDueAsync(today, stoppingToken).ConfigureAwait(false);
             }
             catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)

@@ -2,6 +2,7 @@ using System.Net;
 using System.Net.Http.Json;
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using Pronto.Invoice.Contracts.V1.Invoices;
 using Pronto.Payment.Api.Clients;
 using Pronto.Payment.Api.Storage;
 using Pronto.Payment.Contracts.V1.Payments;
@@ -96,6 +97,43 @@ public sealed class PaymentDurabilityTests : IClassFixture<WebApplicationFactory
         // The invoice was only transitioned once — no double charge on replay.
         Assert.Equal(1, fakeInvoices.UpdateStatusCalls);
         Assert.Single(await store.ListAsync(billerId, null, invoice.Id, CancellationToken.None));
+    }
+
+    [Fact]
+    public async Task RetryAfterMidFlightCrashResumesPendingPaymentToSucceeded()
+    {
+        var billerId = Guid.NewGuid().ToString();
+        var invoice = fakeInvoices.AddDueInvoice(billerId, amountCents: 5000);
+        var key = Guid.NewGuid().ToString();
+        // First attempt crashes at the invoice transition, leaving a reserved key + Pending row.
+        fakeInvoices.UpdateStatusFault = new InvalidOperationException("process crashed mid-flight");
+
+        var first = await PostWithKeyAsync(billerId, invoice.Id, key);
+        Assert.Equal(HttpStatusCode.InternalServerError, first.StatusCode);
+        var stuck = Assert.Single(await store.ListAsync(billerId, null, invoice.Id, CancellationToken.None));
+        Assert.Equal(PaymentStatus.Pending, stuck.Status);
+
+        // Retry with the same key drives the stuck payment to completion instead of returning Pending.
+        var second = await PostWithKeyAsync(billerId, invoice.Id, key);
+
+        Assert.Equal(HttpStatusCode.OK, second.StatusCode);
+        var resumed = await second.Content.ReadFromJsonAsync<PaymentResponse>(Wire);
+        Assert.Equal(stuck.PaymentId, resumed!.PaymentId);
+        Assert.Equal(PaymentStatus.Succeeded, resumed.Status);
+        Assert.Equal(InvoiceStatus.Paid, fakeInvoices.StatusOf(billerId, invoice.Id));
+        Assert.Single(await store.ListAsync(billerId, null, invoice.Id, CancellationToken.None));
+    }
+
+    [Fact]
+    public async Task OverlongIdempotencyKeyIsRejected()
+    {
+        var billerId = Guid.NewGuid().ToString();
+        var invoice = fakeInvoices.AddDueInvoice(billerId, amountCents: 5000);
+
+        var response = await PostWithKeyAsync(billerId, invoice.Id, new string('k', 201));
+
+        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+        Assert.Empty(await store.ListAsync(billerId, null, invoice.Id, CancellationToken.None));
     }
 
     [Fact]

@@ -42,7 +42,7 @@ builder.Services.AddHttpClient<IInvoiceClient, HttpInvoiceClient>(client =>
 builder.Services.Configure<SchedulingOptions>(
     builder.Configuration.GetSection(SchedulingOptions.SectionName));
 builder.Services.TryAddSingleton(TimeProvider.System);
-builder.Services.AddSingleton<ScheduledPaymentExecutor>();
+builder.Services.AddScoped<ScheduledPaymentExecutor>();
 builder.Services.AddHostedService<ScheduledPaymentWorker>();
 
 var app = builder.Build();
