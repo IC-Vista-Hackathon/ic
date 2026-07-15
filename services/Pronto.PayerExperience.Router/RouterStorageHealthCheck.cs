@@ -1,3 +1,4 @@
+using Azure;
 using Azure.Storage.Blobs;
 using Microsoft.Extensions.Diagnostics.HealthChecks;
 
@@ -16,7 +17,11 @@ public sealed class RouterStorageHealthCheck(BlobContainerClient container) : IH
                 ? HealthCheckResult.Healthy()
                 : HealthCheckResult.Unhealthy($"Blob container '{container.Name}' does not exist.");
         }
-        catch (Exception exception)
+        catch (OperationCanceledException)
+        {
+            throw;
+        }
+        catch (RequestFailedException exception)
         {
             return HealthCheckResult.Unhealthy("Payer experience storage is unavailable.", exception);
         }

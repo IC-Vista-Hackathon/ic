@@ -18,14 +18,7 @@ public static class PayerSitePaths
         if (slug.Length == 0) return null;
 
         var relative = slash < 0 ? string.Empty : rest[(slash + 1)..];
-        if (relative.Length == 0)
-        {
-            relative = "index.html";
-        }
-        else
-        {
-            relative = relative.TrimEnd('/');
-        }
+        relative = relative.Length == 0 ? "index.html" : relative.TrimEnd('/');
         return (slug, relative);
     }
 

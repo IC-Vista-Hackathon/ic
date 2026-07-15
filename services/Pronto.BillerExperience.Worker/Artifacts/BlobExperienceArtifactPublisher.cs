@@ -167,7 +167,7 @@ public sealed partial class BlobExperienceArtifactPublisher(
         {
             throw;
         }
-        catch (Exception exception)
+        catch (RequestFailedException exception)
         {
             throw new ArtifactActivationException(
                 $"Active artifact update may have completed for biller '{plan.BillerId}'.",

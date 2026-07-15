@@ -173,7 +173,7 @@ public sealed partial class PublicationProcessor(
             }
             await CompleteActivatedPublicationAsync(deployment, plan.PublishedUrl, cancellationToken);
         }
-        catch (Exception exception)
+        catch (Exception exception) when (exception is not OperationCanceledException)
         {
             LogActivatedPublicationRepairFailed(logger, deployment.BillerId, deployment.Id, traceId, exception);
         }
@@ -193,7 +193,7 @@ public sealed partial class PublicationProcessor(
                 LeaseExpiresAt = null
             }, CancellationToken.None);
         }
-        catch (Exception exception)
+        catch (Exception exception) when (exception is not OperationCanceledException)
         {
             LogClaimReleaseFailed(logger, deployment.BillerId, deployment.Id, traceId, exception);
         }
