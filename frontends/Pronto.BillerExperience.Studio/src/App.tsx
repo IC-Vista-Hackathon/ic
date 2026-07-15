@@ -1797,18 +1797,16 @@ export function App() {
             </div>
           </div>
 
-          {s.payerStep === 2 && (
-            <div style={css(`width:100%;max-width:${previewMaxWidth};background:var(--invoicecloud-utility-neutral-90);color:#fff;border-radius:14px;padding:var(--invoicecloud-spacing-m) var(--invoicecloud-spacing-l);margin-top:var(--invoicecloud-spacing-m);display:flex;align-items:center;justify-content:space-between;animation:fadeUp .4s ease-out`)}>
-              <div>
-                <div style={css('font-weight:500;margin-bottom:2px')}>That's what your payers will see.</div>
-                <div style={css('font-size:13px;opacity:.75')}>Ready to launch it, or save it to come back to later?</div>
-              </div>
-              <div style={css('display:flex;gap:var(--invoicecloud-spacing-s)')}>
-                <button type="button" onClick={openSignup} style={css('background:none;border:1px solid rgba(255,255,255,.3);color:#fff;border-radius:10px;padding:12px 20px;font-size:14px;cursor:pointer')}>Save without publishing</button>
-                <button type="button" onClick={goPricing} style={css('background:var(--invoicecloud-secondary);color:var(--invoicecloud-utility-neutral-100);border:none;border-radius:10px;padding:12px 24px;font-size:14px;font-weight:700;cursor:pointer')}>See Pricing &rarr;</button>
-              </div>
+          <div style={css(`width:100%;max-width:${previewMaxWidth};background:var(--invoicecloud-utility-neutral-90);color:#fff;border-radius:14px;padding:var(--invoicecloud-spacing-m) var(--invoicecloud-spacing-l);margin-top:var(--invoicecloud-spacing-m);display:flex;align-items:center;justify-content:space-between;gap:var(--invoicecloud-spacing-m);flex-wrap:wrap;animation:fadeUp .4s ease-out`)}>
+            <div>
+              <div style={css('font-weight:500;margin-bottom:2px')}>{s.payerStep === 2 ? "That's what your payers will see." : 'Ready to publish this experience?'}</div>
+              <div style={css('font-size:13px;opacity:.75')}>{s.payerStep === 2 ? 'The payment journey is verified. Launch it now, or save it for later.' : 'You can publish at any point; completing the sample payment is optional.'}</div>
             </div>
-          )}
+            <div style={css('display:flex;gap:var(--invoicecloud-spacing-s);flex-wrap:wrap')}>
+              <button type="button" onClick={openSignup} style={css('background:none;border:1px solid rgba(255,255,255,.3);color:#fff;border-radius:10px;padding:12px 20px;font-size:14px;cursor:pointer')}>Save without publishing</button>
+              <button type="button" onClick={goPricing} style={css('background:var(--invoicecloud-secondary);color:var(--invoicecloud-utility-neutral-100);border:none;border-radius:10px;padding:12px 24px;font-size:14px;font-weight:700;cursor:pointer')}>Review &amp; publish &rarr;</button>
+            </div>
+          </div>
         </div>
       )}
       {/* ================= PRICING ================= */}
