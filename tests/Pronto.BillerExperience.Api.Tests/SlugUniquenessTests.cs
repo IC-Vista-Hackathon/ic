@@ -29,6 +29,18 @@ public sealed class SlugUniquenessTests
     }
 
     [Fact]
+    public async Task ConcurrentCreationsNeverShareASlug()
+    {
+        var service = CreateService();
+
+        var created = await Task.WhenAll(Enumerable.Range(0, 16)
+            .Select(_ => Task.Run(() => service.CreateAsync(Request(), CancellationToken.None).AsTask())));
+
+        var slugs = created.Select(result => result.Biller.Slug).ToArray();
+        Assert.Equal(slugs.Length, slugs.Distinct(StringComparer.Ordinal).Count());
+    }
+
+    [Fact]
     public async Task MixedCaseSlugIsNormalizedNotRejected()
     {
         var service = CreateService();
