@@ -34,7 +34,7 @@ function themeCss(o: {
   fontStack: string;
   brief: DesignBrief;
 }): string {
-  return `/* Generated skin for ${o.brief.display_name} (${o.brief.biller_slug}) — deterministic. */
+  return `/* Generated skin for ${commentSafe(o.brief.display_name)} (${commentSafe(o.brief.biller_slug)}) — deterministic. */
 :root{font-family:${o.fontStack};--brand:${o.brief.primary_color};--brand-secondary:${o.brief.secondary_color};--radius:${o.radius}px;color:#1c1c1c;background:${o.canvas};line-height:1.55}
 *{box-sizing:border-box}body{margin:0}button,input{font:inherit}:focus-visible{outline:2.5px solid var(--brand);outline-offset:3px}
 .app{min-height:100vh;display:flex;flex-direction:column}
@@ -91,7 +91,7 @@ function chromeTsx(brief: DesignBrief): string {
   const tag = brief.brand_keywords.includes('civic') ? 'Official payments' : 'Secure payments';
   return `import type { FooterProps, HeaderProps, IntroProps } from './contract';
 
-// Generated skin chrome for ${brief.display_name} (${brief.biller_slug}).
+// Generated skin chrome for ${commentSafe(brief.display_name)} (${commentSafe(brief.biller_slug)}).
 // Presentational only — no fetch, no payment logic. Signatures come from contract.ts.
 
 export function Header({ brand }: HeaderProps) {
@@ -134,6 +134,12 @@ function initials(name: string) {
 
 function titleCase(value: string): string {
   return value.replace(/\b\w/g, match => match.toUpperCase());
+}
+
+// Biller-controlled strings are interpolated into generated source only inside comments.
+// Strip anything that could terminate a `//` or block comment and break out into code.
+function commentSafe(value: string): string {
+  return value.replace(/[\r\n]+/g, ' ').replace(/\*\//g, '* /').replace(/</g, '‹').trim();
 }
 
 function hash(value: string): number {

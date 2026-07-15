@@ -35,11 +35,8 @@ public sealed partial class PayerSiteRouter(
         if (!await TryServeAsync(context, sitePrefix, relativePath))
         {
             // Missing asset: fall back to the SPA shell for client-side routes, else 404.
-            if (PayerSitePaths.IsSpaRoute(relativePath))
-            {
-                await TryServeAsync(context, sitePrefix, "index.html");
-            }
-            else
+            if (!PayerSitePaths.IsSpaRoute(relativePath)
+                || !await TryServeAsync(context, sitePrefix, "index.html"))
             {
                 context.Response.StatusCode = StatusCodes.Status404NotFound;
             }

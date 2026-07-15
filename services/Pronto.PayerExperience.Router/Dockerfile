@@ -11,4 +11,5 @@ FROM mcr.microsoft.com/dotnet/aspnet:10.0-noble-chiseled AS final
 WORKDIR /app
 COPY --from=build /app/publish ./
 EXPOSE 8080
+USER $APP_UID
 ENTRYPOINT ["dotnet", "Pronto.PayerExperience.Router.dll"]
