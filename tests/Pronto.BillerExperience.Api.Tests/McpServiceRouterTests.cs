@@ -115,7 +115,14 @@ public sealed class McpServiceRouterTests
         var profile = await tools.GetPayerProfileAsync(verification.PayerCapabilityToken, default);
 
         Assert.Equal("payer-1", profile.PayerId);
-        var toolActivities = activities.Where(activity => activity.OperationName == "mcp.tool.invoke").ToList();
+        string[] expectedTools =
+        [
+            ServiceToolRegistry.ToolNames.VerifyPayerAccount,
+            ServiceToolRegistry.ToolNames.GetPayerProfile,
+        ];
+        var toolActivities = activities
+            .Where(activity => expectedTools.Contains(activity.GetTagItem("tool_name")))
+            .ToList();
         Assert.Equal(2, toolActivities.Count);
         Assert.All(toolActivities, activity =>
         {
@@ -164,10 +171,12 @@ public sealed class McpServiceRouterTests
         await Assert.ThrowsAsync<KeyNotFoundException>(() =>
             tools.GetInvoiceAsync(token, "missing-invoice", default).AsTask());
 
-        var failedActivity = Assert.Single(activities, activity => activity.OperationName == "mcp.tool.invoke");
+        var failedActivity = Assert.Single(activities, activity =>
+            Equals(activity.GetTagItem("tool_name"), ServiceToolRegistry.ToolNames.GetInvoice));
         var failedEvent = Assert.Single(failedActivity.Events, item => item.Name == "mcp.tool_failed");
         Assert.Equal("not_found", failedEvent.Tags.Single(item => item.Key == "failure_category").Value);
-        var measurement = Assert.Single(measurements);
+        var measurement = Assert.Single(measurements, item => item.Tags.Any(tag =>
+            tag.Key == "tool" && Equals(tag.Value, ServiceToolRegistry.ToolNames.GetInvoice)));
         Assert.Equal(1, measurement.Value);
         Assert.Contains(measurement.Tags, item =>
             item.Key == "failure_category" && Equals(item.Value, "not_found"));
