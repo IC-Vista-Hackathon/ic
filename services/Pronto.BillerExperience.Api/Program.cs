@@ -1,5 +1,6 @@
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using System.Threading.RateLimiting;
 using Azure.AI.OpenAI;
 using Azure.AI.Projects;
 using Azure.Core;
@@ -8,6 +9,7 @@ using Azure.Monitor.OpenTelemetry.AspNetCore;
 using Azure.Storage.Blobs;
 using Pronto.BillerExperience.Api;
 using Pronto.BillerExperience.Api.Application;
+using Pronto.BillerExperience.Api.Controllers;
 using Pronto.BillerExperience.Api.Application.Agents;
 using Pronto.BillerExperience.Api.Application.Compliance;
 using Pronto.BillerExperience.Api.Configuration;
@@ -272,6 +274,22 @@ builder.Services.AddControllers().AddJsonOptions(json =>
 });
 builder.Services.AddProblemDetails();
 builder.Services.AddExceptionHandler<GlobalExceptionHandler>();
+builder.Services.AddRateLimiter(rateLimiter =>
+{
+    rateLimiter.RejectionStatusCode = StatusCodes.Status429TooManyRequests;
+    // Throttle the unauthenticated brand-scan endpoint (each call fans out to several outbound
+    // fetches) so it can't be abused to amplify traffic or scan arbitrary hosts. Partitioned by
+    // caller IP; behind a gateway that collapses to a coarse global cap, which is the intent.
+    rateLimiter.AddPolicy(BrandScanController.RateLimitPolicy, httpContext =>
+        RateLimitPartition.GetFixedWindowLimiter(
+            httpContext.Connection.RemoteIpAddress?.ToString() ?? "unknown",
+            _ => new FixedWindowRateLimiterOptions
+            {
+                PermitLimit = 20,
+                Window = TimeSpan.FromSeconds(10),
+                QueueLimit = 0,
+            }));
+});
 var healthChecks = builder.Services.AddHealthChecks();
 if (!string.IsNullOrWhiteSpace(options.PublishedExperience.StorageEndpoint))
 {
@@ -305,6 +323,7 @@ app.UseExceptionHandler();
 app.UseCors();
 app.UseAuthentication();
 app.UseAuthorization();
+app.UseRateLimiter();
 app.MapControllers();
 app.MapHealthChecks("/health/live");
 app.MapHealthChecks("/health/ready");

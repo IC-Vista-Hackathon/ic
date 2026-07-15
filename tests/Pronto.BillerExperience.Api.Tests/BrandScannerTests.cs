@@ -99,6 +99,27 @@ public sealed class BrandScannerTests
         Assert.Equal("https://example.com/favicon.ico", response.LogoUrl!.ToString());
     }
 
+    [Fact]
+    public async Task ScanDegradesInsteadOfFailingWhenAStylesheetTimesOut()
+    {
+        var handler = new FakeHandler(request =>
+        {
+            if (request.RequestUri!.AbsolutePath == "/styles.css")
+            {
+                throw new TaskCanceledException("simulated per-request timeout");
+            }
+
+            return Html(HomePage);
+        });
+
+        var response = await Create(handler).ScanAsync(new BrandScanRequest(new Uri("https://example.com/")));
+
+        Assert.Equal(BrandScanOutcome.Degraded, response.Outcome);
+        Assert.Contains("brand_scan.stylesheet_unreadable", response.Warnings);
+        Assert.Equal("#1a73e8", response.PrimaryColor);
+        Assert.Equal("https://example.com/apple-touch-icon.png", response.LogoUrl!.ToString());
+    }
+
     private static HttpBrandScanner Create(HttpMessageHandler handler)
     {
         var options = Options.Create(new BillerExperienceOptions

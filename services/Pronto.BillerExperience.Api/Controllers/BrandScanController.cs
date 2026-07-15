@@ -1,6 +1,7 @@
 using Pronto.BillerExperience.Api.Infrastructure.Research;
 using Pronto.BillerExperience.Contracts.V1.Branding;
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.AspNetCore.RateLimiting;
 
 namespace Pronto.BillerExperience.Api.Controllers;
 
@@ -11,8 +12,15 @@ namespace Pronto.BillerExperience.Api.Controllers;
 /// </summary>
 [ApiController]
 [Route("public/brand-scan")]
+[EnableRateLimiting(RateLimitPolicy)]
 public sealed class BrandScanController(IBrandScanner scanner) : ControllerBase
 {
+    /// <summary>
+    /// Rate-limit policy for this unauthenticated endpoint, throttling the outbound fetches a
+    /// single caller can trigger so it can't be used to amplify traffic or scan arbitrary hosts.
+    /// </summary>
+    public const string RateLimitPolicy = "brand-scan";
+
     [HttpPost]
     [ProducesResponseType<BrandScanResponse>(StatusCodes.Status200OK)]
     [ProducesResponseType(StatusCodes.Status400BadRequest)]

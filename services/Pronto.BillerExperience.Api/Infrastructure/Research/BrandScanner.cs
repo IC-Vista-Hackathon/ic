@@ -133,6 +133,10 @@ public sealed partial class HttpBrandScanner(
             {
                 return FetchResult.Failure("brand_scan.request_failed");
             }
+            catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
+            {
+                return FetchResult.Failure("brand_scan.request_timeout");
+            }
 
             using (response)
             {
@@ -165,7 +169,24 @@ public sealed partial class HttpBrandScanner(
                     return FetchResult.Failure("brand_scan.response_too_large");
                 }
 
-                var text = await ReadBoundedAsync(response, Math.Max(1, _options.MaxResponseBytes), timeout.Token);
+                string? text;
+                try
+                {
+                    text = await ReadBoundedAsync(response, Math.Max(1, _options.MaxResponseBytes), timeout.Token);
+                }
+                catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
+                {
+                    return FetchResult.Failure("brand_scan.request_timeout");
+                }
+                catch (HttpRequestException)
+                {
+                    return FetchResult.Failure("brand_scan.request_failed");
+                }
+                catch (IOException)
+                {
+                    return FetchResult.Failure("brand_scan.request_failed");
+                }
+
                 return text is null
                     ? FetchResult.Failure("brand_scan.response_too_large")
                     : FetchResult.Success(response.RequestMessage?.RequestUri ?? current, text);
