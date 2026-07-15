@@ -36,6 +36,9 @@ h1, h2, h3 { font-style: italic; letter-spacing: -0.01em; }
 @keyframes orbitSpin { from { transform: rotate(0deg) translateX(46px) rotate(0deg); } to { transform: rotate(360deg) translateX(46px) rotate(-360deg); } }
 @keyframes corePulse { 0%, 100% { transform: scale(1); } 50% { transform: scale(1.18); } }
 @keyframes badgeBob { 0%, 100% { transform: translateY(0); } 50% { transform: translateY(-3px); } }
+/* Analyzing screen: draw the Pronto outline, then fill it right-to-left. */
+@keyframes prontoStroke { 0% { stroke-dashoffset: 1500; } 45%, 100% { stroke-dashoffset: 0; } }
+@keyframes prontoFillReveal { 0%, 45% { clip-path: inset(0 0 0 100%); } 80%, 100% { clip-path: inset(0 0 0 0); } }
 
 * { box-sizing: border-box; }
 body { margin: 0; }

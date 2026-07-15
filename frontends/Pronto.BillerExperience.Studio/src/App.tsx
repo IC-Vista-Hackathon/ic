@@ -319,6 +319,70 @@ const CHAT_RATIONALES = [
   'This determines whether we offer installment plans at checkout.',
 ];
 
+// The onboarding chat asks four questions that map, in order, to the backend billing
+// dimensions [categories, cadence, state_rules, payment_terms]. The wording and the AI-suggested
+// starting answer are tailored to the vertical picked in step one, so the agent proposes a
+// business setup the biller can accept or edit. CHAT_QUESTIONS is the generic/"other" fallback.
+const VERTICAL_QUESTIONS: Record<VerticalId, string[]> = {
+  insurance: [
+    'What types of policies are you billing premiums for?',
+    'How often is each policy billed?',
+    'What happens when a premium payment is late?',
+    'Can premiums be paid in installments, or in full each term?',
+  ],
+  utilities: [
+    'Which utility services are you billing for?',
+    'How often is each service billed?',
+    'What are your late-payment and shut-off rules?',
+    'Can past-due balances be paid over time, or is it pay-in-full?',
+  ],
+  tax: [
+    'Which taxes or government fees are you collecting?',
+    'How often is each one assessed?',
+    'What penalties or interest apply when a payment is late?',
+    'Can these be paid on an installment plan, or in full?',
+  ],
+  other: CHAT_QUESTIONS,
+};
+
+const VERTICAL_SUGGESTIONS: Record<VerticalId, string[]> = {
+  insurance: [
+    'Auto, home, and life insurance premiums',
+    'Monthly premiums, with annual policy renewals',
+    'A grace period applies, then the policy lapses if it stays unpaid',
+    'Both — monthly installments or pay-in-full per term',
+  ],
+  utilities: [
+    'Electric, water, gas, and sewer/municipal services',
+    'Monthly, based on metered usage',
+    'A late fee after the due date, with a disconnection notice at 30 days past due',
+    'Payment plans for past-due balances; current bills are pay-in-full',
+  ],
+  tax: [
+    'Property tax, court fees, and municipal permit fees',
+    'Property tax annually or semi-annually; other fees as they are incurred',
+    'Interest accrues monthly on delinquent balances, with liens after prolonged non-payment',
+    'Installment plans for property tax; other fees are pay-in-full',
+  ],
+  other: [
+    'Dues, fees, and one-time charges',
+    'Monthly recurring, with some one-time items',
+    'A late fee applies after the due date',
+    'Both installments and pay-in-full are available',
+  ],
+};
+
+// Pronto wordmark path data (from public/assets/pronto-logo.svg), inlined so the analyzing
+// screen can draw the outline and then fill the logo right-to-left as the preview builds.
+const PRONTO_PATHS = [
+  'M360.541 103.104C351.997 103.104 345.277 100.8 340.381 96.192C335.485 91.488 333.037 85.152 333.037 77.184C333.037 76.224 333.133 74.592 333.325 72.288L338.509 30.816C339.661 21.408 343.357 13.92 349.597 8.35199C355.933 2.784 363.805 0 373.213 0C381.661 0 388.333 2.352 393.229 7.05599C398.221 11.664 400.717 17.952 400.717 25.92C400.717 26.88 400.621 28.512 400.429 30.816L395.389 72.288C394.237 81.696 390.493 89.184 384.157 94.752C377.821 100.32 369.949 103.104 360.541 103.104ZM363.421 79.92C364.861 79.92 366.061 79.344 367.021 78.192C368.077 77.04 368.749 75.456 369.037 73.44L374.365 29.664C374.557 27.648 374.317 26.064 373.645 24.912C372.973 23.76 371.917 23.184 370.477 23.184C368.941 23.184 367.645 23.76 366.589 24.912C365.629 26.064 365.053 27.648 364.861 29.664L359.533 73.44C359.437 73.824 359.389 74.352 359.389 75.024C359.389 76.56 359.725 77.76 360.397 78.624C361.165 79.488 362.173 79.92 363.421 79.92Z',
+  'M339.138 1.15186C339.714 1.15186 340.146 1.34385 340.434 1.72786C340.818 2.11186 340.962 2.63986 340.866 3.31185L338.562 22.1759C338.466 22.8479 338.226 23.3759 337.842 23.7599C337.458 24.1439 336.93 24.3359 336.258 24.3359H319.554C319.074 24.3359 318.834 24.5759 318.834 25.0559L309.618 99.7919C309.522 100.464 309.282 100.992 308.898 101.376C308.514 101.76 307.986 101.952 307.314 101.952H285.282C284.61 101.952 284.082 101.76 283.698 101.376C283.41 100.992 283.314 100.464 283.41 99.7919L292.626 25.0559C292.626 24.5759 292.386 24.3359 291.906 24.3359H275.778C275.106 24.3359 274.578 24.1439 274.194 23.7599C273.906 23.3759 273.81 22.8479 273.906 22.1759L276.21 3.31185C276.306 2.63986 276.546 2.11186 276.93 1.72786C277.41 1.34385 277.986 1.15186 278.658 1.15186H339.138Z',
+  'M247.018 3.31185C247.114 2.63986 247.354 2.11186 247.738 1.72786C248.218 1.34385 248.794 1.15186 249.466 1.15186H271.21C271.882 1.15186 272.362 1.34385 272.65 1.72786C273.034 2.11186 273.178 2.63986 273.082 3.31185L261.13 99.7919C261.034 100.464 260.794 100.992 260.41 101.376C260.026 101.76 259.498 101.952 258.826 101.952H233.914C232.762 101.952 232.09 101.328 231.898 100.08L226.426 55.8719C226.426 55.5839 226.33 55.4399 226.138 55.4399C225.946 55.4399 225.85 55.5839 225.85 55.8719L220.666 99.7919C220.57 100.464 220.282 100.992 219.802 101.376C219.418 101.76 218.938 101.952 218.362 101.952H196.474C195.898 101.952 195.418 101.76 195.034 101.376C194.746 100.992 194.65 100.464 194.746 99.7919L206.554 3.31185C206.65 2.63986 206.89 2.11186 207.274 1.72786C207.754 1.34385 208.282 1.15186 208.858 1.15186H233.482C234.634 1.15186 235.306 1.77586 235.498 3.02386L241.114 47.5199C241.114 47.8079 241.21 47.9039 241.402 47.8079C241.594 47.7119 241.738 47.5679 241.834 47.3759L247.018 3.31185Z',
+  'M159.79 103.104C151.246 103.104 144.526 100.8 139.63 96.192C134.734 91.488 132.286 85.152 132.286 77.184C132.286 76.224 132.382 74.592 132.574 72.288L137.758 30.816C138.91 21.408 142.606 13.92 148.846 8.35199C155.182 2.784 163.054 0 172.462 0C180.91 0 187.582 2.352 192.478 7.05599C197.47 11.664 199.966 17.952 199.966 25.92C199.966 26.88 199.87 28.512 199.678 30.816L194.638 72.288C193.486 81.696 189.742 89.184 183.406 94.752C177.07 100.32 169.198 103.104 159.79 103.104ZM162.67 79.92C164.11 79.92 165.31 79.344 166.27 78.192C167.326 77.04 167.998 75.456 168.286 73.44L173.614 29.664C173.806 27.648 173.566 26.064 172.894 24.912C172.222 23.76 171.166 23.184 169.726 23.184C168.19 23.184 166.894 23.76 165.838 24.912C164.878 26.064 164.302 27.648 164.11 29.664L158.782 73.44C158.686 73.824 158.638 74.352 158.638 75.024C158.638 76.56 158.974 77.76 159.646 78.624C160.414 79.488 161.422 79.92 162.67 79.92Z',
+  'M102.535 101.952C101.383 101.952 100.711 101.328 100.519 100.08L96.343 63.7919C96.343 63.4079 96.199 63.2159 95.911 63.2159C95.527 63.2159 95.335 63.4559 95.335 63.9359L90.871 99.7919C90.775 100.464 90.487 100.992 90.007 101.376C89.623 101.76 89.143 101.952 88.567 101.952H66.3909C65.8149 101.952 65.335 101.76 64.951 101.376C64.663 100.992 64.567 100.464 64.663 99.7919L76.471 3.31185C76.567 2.63986 76.807 2.11186 77.191 1.72786C77.671 1.34385 78.199 1.15186 78.775 1.15186H110.311C117.991 1.15186 124.039 3.59986 128.455 8.49586C132.967 13.3919 135.223 19.8719 135.223 27.9359C135.223 30.2399 135.127 32.0159 134.935 33.2639C134.263 38.5439 132.775 43.2959 130.471 47.5199C128.167 51.6479 125.191 55.0079 121.543 57.5999C121.063 57.8879 120.919 58.2239 121.111 58.6079L127.303 99.5039V100.08C127.303 100.656 127.111 101.136 126.727 101.52C126.343 101.808 125.863 101.952 125.287 101.952H102.535ZM100.807 24.3359C100.327 24.3359 100.087 24.5759 100.087 25.0559L97.927 41.9039C97.927 42.3839 98.167 42.6239 98.647 42.6239H100.519C102.823 42.6239 104.743 41.6159 106.279 39.5999C107.911 37.5839 108.727 34.7999 108.727 31.2479C108.727 29.0399 108.199 27.3599 107.143 26.2079C106.087 24.9599 104.647 24.3359 102.823 24.3359H100.807Z',
+  'M45.684 1.15186C53.364 1.15186 59.412 3.64786 63.828 8.63986C68.34 13.5359 70.596 20.0639 70.596 28.2239C70.596 30.5279 70.5 32.3039 70.308 33.5519C69.54 39.6959 67.716 45.1199 64.836 49.8239C62.052 54.5279 58.404 58.1759 53.892 60.7679C49.476 63.2639 44.58 64.5119 39.204 64.5119H31.284C30.804 64.5119 30.564 64.7519 30.564 65.2319L26.244 99.7919C26.148 100.464 25.86 100.992 25.38 101.376C24.996 101.76 24.516 101.952 23.94 101.952H1.764C1.188 101.952 0.708 101.76 0.324 101.376C0.036 100.992 -0.06 100.464 0.036 99.7919L11.844 3.31185C11.94 2.63986 12.18 2.11186 12.564 1.72786C13.044 1.34385 13.572 1.15186 14.148 1.15186H45.684ZM35.748 43.6319C37.86 43.6319 39.636 42.8639 41.076 41.3279C42.612 39.6959 43.572 37.2959 43.956 34.1279C44.052 33.5519 44.1 32.7359 44.1 31.6799C44.1 29.2799 43.572 27.4559 42.516 26.2079C41.46 24.9599 40.02 24.3359 38.196 24.3359H36.18C35.7 24.3359 35.46 24.5759 35.46 25.0559L33.3 42.9119C33.108 43.3919 33.3 43.6319 33.876 43.6319H35.748Z',
+];
+
 const STATE_OPTIONS = ['Alabama', 'Alaska', 'Arizona', 'Arkansas', 'California', 'Colorado', 'Connecticut', 'Delaware', 'Florida', 'Georgia', 'Hawaii', 'Idaho', 'Illinois', 'Indiana', 'Iowa', 'Kansas', 'Kentucky', 'Louisiana', 'Maine', 'Maryland', 'Massachusetts', 'Michigan', 'Minnesota', 'Mississippi', 'Missouri', 'Montana', 'Nebraska', 'Nevada', 'New Hampshire', 'New Jersey', 'New Mexico', 'New York', 'North Carolina', 'North Dakota', 'Ohio', 'Oklahoma', 'Oregon', 'Pennsylvania', 'Rhode Island', 'South Carolina', 'South Dakota', 'Tennessee', 'Texas', 'Utah', 'Vermont', 'Virginia', 'Washington', 'West Virginia', 'Wisconsin', 'Wyoming'];
 
 // Representative postal code per operating state, used to seed the biller record so downstream
@@ -448,6 +512,7 @@ interface AiRecommendations { values: Partial<State>; rationale: Record<string, 
 function computeAiRecommendations(vertical: VerticalId | null, states: string[], otherDescription: string): AiRecommendations {
   const isTax = vertical === 'tax';
   const isUtil = vertical === 'utilities';
+  const isInsurance = vertical === 'insurance';
   const isOther = vertical === 'other';
   const isFL = (states || []).includes('Florida');
   // The demo create contract currently provisions card and ACH rails. Recommendations must
@@ -468,8 +533,16 @@ function computeAiRecommendations(vertical: VerticalId | null, states: string[],
       feeHandling: fee,
     },
     rationale: {
-      guestCheckoutAllowed: (isTax ? 'Government/tax billers typically require an account for audit purposes - most competitors gate guest checkout here.' : 'Guest checkout reduces drop-off - most billers in this vertical let first-time payers pay without an account.') + otherNote,
-      offerAutopay: 'AutoPay is standard across competing billers and meaningfully reduces late payments.',
+      guestCheckoutAllowed: (isTax
+        ? 'Government/tax billers typically require an account for audit purposes - most competitors gate guest checkout here.'
+        : isInsurance
+          ? 'Policyholders expect to pay a premium quickly using their account or policy number, so guest checkout is enabled to reduce lapse risk.'
+          : isUtil
+            ? 'Utility payers often pay a one-off bill without logging in, so guest checkout is enabled to reduce drop-off.'
+            : 'Guest checkout reduces drop-off - most billers in this vertical let first-time payers pay without an account.') + otherNote,
+      offerAutopay: isInsurance
+        ? 'AutoPay is a strong fit for recurring premiums - it keeps policies in good standing and cuts lapse-driven churn.'
+        : 'AutoPay is standard across competing billers and meaningfully reduces late payments.',
       enrollDuringPayment: isFL ? 'Enrollment during checkout drives adoption, but Florida payers will be limited to bank-funded AutoPay.' : 'Letting payers enroll mid-checkout is the highest-converting placement for AutoPay signup.',
       offerPaperless: 'Paperless adoption is trending up industry-wide and cuts mailing costs.',
       reminderChannel: 'Multi-channel (email + text) reminders outperform single-channel in reducing missed payments.',
@@ -477,10 +550,18 @@ function computeAiRecommendations(vertical: VerticalId | null, states: string[],
         ? 'Card and ACH are enabled because they match this biller\'s existing payment rails; additional wallets require an existing rail capability.'
         : isTax
           ? 'Card and ACH match the existing rails and keep government reconciliation straightforward.'
-          : 'Card and ACH match the biller\'s existing payment rails. The experience does not add or replace money movement.',
+          : isInsurance
+            ? 'Card and ACH match the existing rails - ACH is emphasized for recurring premium AutoPay to keep processing costs down.'
+            : 'Card and ACH match the biller\'s existing payment rails. The experience does not add or replace money movement.',
       selfServiceHistory: 'Self-service history lookup is table-stakes for competing payment experiences.',
       selfServiceUpdate: 'Letting payers manage their own methods reduces support volume.',
-      feeHandling: isUtil ? 'Many utility billers pass processing costs through as a convenience fee.' : 'Billers in this vertical commonly absorb fees to keep the payer experience frictionless.',
+      feeHandling: isUtil
+        ? 'Many utility billers pass processing costs through as a convenience fee.'
+        : isTax
+          ? 'Government billers commonly pass a convenience fee, but this preview absorbs it - switch to pass-through if statute allows.'
+          : isInsurance
+            ? 'Insurers typically absorb processing fees so premium amounts stay exact and predictable for policyholders.'
+            : 'Billers in this vertical commonly absorb fees to keep the payer experience frictionless.',
     },
   };
 }
@@ -759,6 +840,7 @@ export function App() {
   const setSetupPathUpload = () => patch({ setupPath: 'upload', chatActive: false, analyzingUpload: false });
   const setSetupPathManual = () => patch({ setupPath: 'manual', chatActive: true });
   const setChatDraft = (e: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement>) => patch({ chatDraft: e.target.value });
+  const applyChatSuggestion = (text: string) => patch({ chatDraft: text });
   const submitChatAnswer = () => patch((st) => { if (!st.chatDraft.trim()) return null; const chatAnswers = [...st.chatAnswers]; chatAnswers[st.chatStep] = st.chatDraft.trim(); return { chatAnswers, chatDraft: '', chatStep: Math.min(4, st.chatStep + 1) }; });
   const editChatAnswerClick = (i: number) => patch((st) => ({ editingChatIndex: i, chatDraft: st.chatAnswers[i] }));
   const saveChatAnswerEdit = () => patch((st) => { if (st.editingChatIndex === null || !st.chatDraft.trim()) return null; const chatAnswers = [...st.chatAnswers]; chatAnswers[st.editingChatIndex] = st.chatDraft.trim(); return { chatAnswers, chatDraft: '', editingChatIndex: null }; });
@@ -1201,11 +1283,14 @@ export function App() {
   const hasWebsiteForBrand = s.website.trim().length > 0;
   const livePreviewBrand = buildBrand(s);
   const livePreviewSwatches = [livePreviewBrand.primary, livePreviewBrand.secondary, livePreviewBrand.accent];
-  const chatLog = CHAT_QUESTIONS.slice(0, s.chatStep).map((q, i) => ({ question: q, answer: s.chatAnswers[i], editing: s.editingChatIndex === i, onEdit: () => editChatAnswerClick(i) }));
+  const chatVertical: VerticalId = s.vertical ?? 'other';
+  const chatQuestions = VERTICAL_QUESTIONS[chatVertical];
+  const chatSuggestions = VERTICAL_SUGGESTIONS[chatVertical];
+  const chatLog = chatQuestions.slice(0, s.chatStep).map((q, i) => ({ question: q, answer: s.chatAnswers[i], editing: s.editingChatIndex === i, onEdit: () => editChatAnswerClick(i) }));
   const chatHasCurrentQuestion = s.chatStep < 4 && s.editingChatIndex === null;
   const chatComplete = s.chatStep >= 4;
   const chatDraftEmpty = !s.chatDraft.trim();
-  const chatReviewRows = CHAT_QUESTIONS.map((q, i) => ({ question: q, answer: s.chatAnswers[i] || 'Not answered', rationale: CHAT_RATIONALES[i], editing: s.editingChatIndex === i, onEdit: () => editChatAnswerClick(i) }));
+  const chatReviewRows = chatQuestions.map((q, i) => ({ question: q, answer: s.chatAnswers[i] || 'Not answered', rationale: CHAT_RATIONALES[i], editing: s.editingChatIndex === i, onEdit: () => editChatAnswerClick(i) }));
   const verticalAiRationale = s.vertical === 'other' ? 'Based on your description, we\u2019re tailoring compliance checks and suggestions to your business.' : `We\u2019ll tailor terminology, fees and compliance checks for the ${(VERTICALS.find((v) => v.id === s.vertical) || { label: '' }).label} vertical.`;
   const locationAiRationale = s.selectedStates.length ? `We pulled compliance requirements for ${s.selectedStates.length} state${s.selectedStates.length > 1 ? 's' : ''}, including any state-specific AutoPay restrictions.` : 'Select at least one state so we can surface the right compliance requirements.';
 
@@ -1574,12 +1659,18 @@ export function App() {
                       <>
                         <div style={css('display:flex;gap:8px;margin-bottom:6px')}>
                           <div style={css('width:24px;height:24px;border-radius:50%;background:var(--invoicecloud-primary-tint);flex:none;display:flex;align-items:center;justify-content:center')}><img src={asset('assets/icons/Magic.svg')} alt="" style={css('width:13px;height:13px')} /></div>
-                          <div style={css('background:var(--invoicecloud-slate-10);border-radius:10px;padding:8px 12px;font-size:13px;max-width:80%')}>{CHAT_QUESTIONS[s.chatStep]}</div>
+                          <div style={css('background:var(--invoicecloud-slate-10);border-radius:10px;padding:8px 12px;font-size:13px;max-width:80%')}>{chatQuestions[s.chatStep]}</div>
                         </div>
                         <div style={css('display:flex;gap:8px;margin-left:32px')}>
                           <input type="text" value={s.chatDraft} onChange={setChatDraft} onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); submitChatAnswer(); } }} placeholder="Type your answer&hellip;" style={css('flex:1;padding:10px 12px;border-radius:10px;border:1px solid var(--invoicecloud-surface-default-border);font-size:13px')} />
                           <button type="button" onClick={submitChatAnswer} disabled={chatDraftEmpty} style={css(`background:var(--invoicecloud-primary);color:#fff;border:none;border-radius:8px;padding:10px 16px;font-size:13px;font-weight:700;cursor:pointer;opacity:${chatDraftEmpty ? 0.5 : 1}`)}>Enter</button>
                         </div>
+                        {chatDraftEmpty && chatSuggestions[s.chatStep] && (
+                          <button type="button" onClick={() => applyChatSuggestion(chatSuggestions[s.chatStep])} style={css('display:flex;align-items:center;gap:6px;margin-left:32px;background:var(--invoicecloud-primary-tint);border:1px solid var(--invoicecloud-primary);color:var(--invoicecloud-primary);border-radius:10px;padding:8px 12px;font-size:12px;text-align:left;cursor:pointer')}>
+                            <img src={asset('assets/icons/Magic.svg')} alt="" style={css('width:12px;height:12px;flex:none')} />
+                            <span><strong>Suggested:</strong> {chatSuggestions[s.chatStep]}</span>
+                          </button>
+                        )}
                       </>
                     )}
                     {chatComplete && (
@@ -1721,16 +1812,19 @@ export function App() {
       {/* ================= ANALYZING ================= */}
       {s.screen === 'analyzing' && (
         <div style={css('min-height:100vh;display:flex;flex-direction:column;align-items:center;justify-content:center;padding:var(--invoicecloud-spacing-l)')}>
-          <div style={css('position:relative;width:120px;height:120px;margin-bottom:var(--invoicecloud-spacing-l)')}>
-            <div style={css(`position:absolute;top:50%;left:50%;width:44px;height:44px;margin:-22px;border-radius:50%;background:${brand.primary};animation:corePulse 1.5s ease-in-out infinite`)}></div>
-            {[{ icon: 'Card', delay: '' }, { icon: 'Bank', delay: '-0.87s' }, { icon: 'AutoPay', delay: '-1.73s' }].map((o, i) => (
-              <div key={i} style={css(`position:absolute;top:50%;left:50%;width:26px;height:26px;margin:-13px;animation:orbitSpin 2.6s linear infinite${o.delay ? `;animation-delay:${o.delay}` : ''}`)}>
-                <div style={css('width:100%;height:100%;background:#fff;border-radius:8px;box-shadow:var(--invoicecloud-elevation-2);display:flex;align-items:center;justify-content:center;animation:badgeBob 1.3s ease-in-out infinite')}>
-                  <img src={asset(`assets/icons/${o.icon}.svg`)} alt="" style={css('width:16px;height:16px')} />
-                </div>
-              </div>
-            ))}
+          <div role="img" aria-label="Pronto" style={css('position:relative;width:232px;height:60px;margin-bottom:var(--invoicecloud-spacing-l)')}>
+            <svg viewBox="0 0 401 104" style={css('position:absolute;top:0;left:0;width:100%;height:100%;overflow:visible')}>
+              {PRONTO_PATHS.map((d, i) => (
+                <path key={i} d={d} style={css('fill:none;stroke:#197D00;stroke-width:2;stroke-linejoin:round;stroke-dasharray:1500;stroke-dashoffset:1500;animation:prontoStroke 2.6s ease-in-out infinite')} />
+              ))}
+            </svg>
+            <svg viewBox="0 0 401 104" style={css('position:absolute;top:0;left:0;width:100%;height:100%;overflow:visible;animation:prontoFillReveal 2.6s ease-in-out infinite')}>
+              {PRONTO_PATHS.map((d, i) => (
+                <path key={i} d={d} style={css('fill:#197D00')} />
+              ))}
+            </svg>
           </div>
+
           <h2 style={css('margin-bottom:var(--invoicecloud-spacing-m)')}>{!s.analysisComplete ? 'Building your preview...' : runOutcome(s.agentActivity) === 'failed' ? 'Preview built — some steps failed' : runOutcome(s.agentActivity) === 'warnings' ? 'Completed with warnings — research unavailable, using supplied info' : 'Research completed successfully'}</h2>
           <div style={css('display:flex;flex-direction:column;gap:var(--invoicecloud-spacing-s);width:100%;max-width:440px')}>
             {analyzeStages.map((st, i) => (
