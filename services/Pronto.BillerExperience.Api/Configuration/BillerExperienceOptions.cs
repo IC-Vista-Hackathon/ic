@@ -50,6 +50,8 @@ public sealed class ResearchOptions
 public sealed class SupportingServicesOptions
 {
     public string InvoiceBaseUrl { get; set; } = string.Empty;
+    public string PaymentBaseUrl { get; set; } = string.Empty;
+    public string PayerAccountBaseUrl { get; set; } = string.Empty;
 }
 
 public sealed class PublishedExperienceOptions
