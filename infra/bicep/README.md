@@ -25,10 +25,11 @@ az deployment sub create \
   --parameters aksDeploymentPrincipalIds='["<github-deploy-service-principal-object-id>"]'
 ```
 
-The authenticated MCP project connection is fail-closed while the checked-in kgateway listener
-is HTTP-only: `mcpConnectionEnabled` currently permits only `false`. Add the planned TLS ingress,
-change the public endpoint to HTTPS, and then remove that restriction before provisioning an MCP
-API key.
+The hackathon demo can enable the authenticated MCP project connection over the checked-in
+HTTP-only kgateway listener by passing `mcpConnectionEnabled=true`, the public `/mcp` URL, and a
+secure `mcpApiKey`. The same value must be stored as `api-key` in the `ic-agent-mcp` Kubernetes
+secret; `capability-signing-key` is a separate secret used for scoped context capabilities. This
+HTTP exception is demo-onlyâ€”use HTTPS before carrying the pattern forward.
 
 ARM incremental deployments do not delete a connection that was created by an older template.
 After applying this version, list any legacy connection with the read-only command below and
@@ -46,7 +47,8 @@ Bicep creates their authenticated project connection and publishes the tool defi
 API's opt-in `FoundryAgentReconciler` creates immutable versions from `agents/*/instructions.md`,
 attaches that definition to each approved agent, and reads the version back to verify the MCP
 attachment. Enable `BillerExperience__AgentProvisioning__Enabled=true` only after the MCP connection
-has been provisioned; reconciliation fails closed if the latest version lacks the reviewed tool.
+and `ic-agent-mcp` secret have been provisioned; reconciliation and API startup fail closed when
+MCP is unavailable or the latest version lacks the reviewed tool.
 
 Re-run the same command to apply changes; Bicep is idempotent (ARM incremental deployment).
 Pass the object IDs of CI service principals that publish the compliance corpus and prompt-agent

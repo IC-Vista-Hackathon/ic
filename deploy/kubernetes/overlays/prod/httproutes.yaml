@@ -16,6 +16,17 @@ spec:
       namespace: kgateway-system
       sectionName: http
   rules:
+    # Preserve /mcp for Foundry remote-tool requests. The API validates the project connection's
+    # X-IC-MCP-Key and a scoped capability token before serving context tools.
+    - matches:
+        - path:
+            type: PathPrefix
+            value: /mcp
+      backendRefs:
+        - group: ""
+          kind: Service
+          name: ic-biller-experience-api
+          port: 8080
     - matches:
         - path:
             type: PathPrefix

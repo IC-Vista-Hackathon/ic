@@ -9,6 +9,7 @@ param appInsightsId string
 @secure()
 param appInsightsConnectionString string
 @allowed([
+  true
   false
 ])
 param mcpConnectionEnabled bool = false
