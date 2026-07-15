@@ -44,6 +44,9 @@ spec:
             - { name: BillerExperience__AgentProvisioning__McpConnectionId, value: ic-shared-context-mcp }
             # The public Gateway is HTTP-only; authenticated MCP remains disabled until TLS exists.
             - { name: BillerExperience__Mcp__Enabled, value: "false" }
+            # Required as a valid absolute URL whenever AgentProvisioning is enabled: the Foundry
+            # agent gateway validates it at construction even while MCP itself is disabled above.
+            - { name: BillerExperience__Mcp__PublicEndpoint, value: "http://pronto.eastus2.cloudapp.azure.com/mcp" }
             - { name: BillerExperience__PublishedExperience__StorageEndpoint, value: "https://stichackjk4zmntatjem4.blob.core.windows.net/" }
             - { name: BillerExperience__PublishedExperience__ContainerName, value: payer-experiences }
             - { name: BillerExperience__SupportingServices__InvoiceBaseUrl, value: "http://ic-invoice-api.ic.svc.cluster.local:8080/" }
