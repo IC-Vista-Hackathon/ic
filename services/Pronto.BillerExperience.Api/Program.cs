@@ -8,6 +8,7 @@ using Azure.Monitor.OpenTelemetry.AspNetCore;
 using Azure.Storage.Blobs;
 using Pronto.BillerExperience.Api;
 using Pronto.BillerExperience.Api.Application;
+using Pronto.BillerExperience.Api.Application.Agents;
 using Pronto.BillerExperience.Api.Application.Compliance;
 using Pronto.BillerExperience.Api.Configuration;
 using Pronto.BillerExperience.Api.Infrastructure;
@@ -51,6 +52,14 @@ builder.Services.Configure<MaintenanceOptions>(builder.Configuration.GetSection(
 builder.Services.AddSingleton<IOrchestrationRunner, OrchestrationRunner>();
 builder.Services.AddSingleton<BillerOnboardingService>();
 builder.Services.AddSingleton<AgentContextService>();
+
+// Payer pipeline (Bill Intelligence → Financial Planning → validate). Deterministic, Foundry-free
+// stages behind their interfaces; the Azure planner slots in behind IFinancialPlanningAgent later.
+builder.Services.AddSingleton<IBillIntelligenceAgent, DeterministicBillIntelligenceAgent>();
+builder.Services.AddSingleton<IPaymentQuoteFetcher, PaymentQuoteFetcher>();
+builder.Services.AddSingleton<IFinancialPlanningAgent, DeterministicFinancialPlanningAgent>();
+builder.Services.AddSingleton<PaymentPlanValidator>();
+builder.Services.AddSingleton<PayerChatService>();
 builder.Services.AddSingleton(TimeProvider.System);
 builder.Services.AddSingleton<AgentContextCapabilityService>();
 builder.Services.AddSingleton<CompliancePolicyEngine>();
