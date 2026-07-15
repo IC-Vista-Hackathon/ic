@@ -71,6 +71,10 @@ public sealed class BillerOnboardingRegressionTests
         Assert.Null(await repository.GetBillerAsync(seeder.BillerId!, CancellationToken.None));
         Assert.Null(await repository.GetLatestExperienceAsync(seeder.BillerId!, CancellationToken.None));
         Assert.Null(await repository.GetRunAsync(seeder.BillerId!, "onboarding", CancellationToken.None));
+        Assert.Null(await repository.GetAgentContextAsync(
+            seeder.BillerId!,
+            "onboarding",
+            CancellationToken.None));
 
         var retried = await CreateService(repository).CreateAsync(Request(), CancellationToken.None);
         Assert.Equal(Request().Slug, retried.Biller.Slug);
@@ -140,6 +144,9 @@ public sealed class BillerOnboardingRegressionTests
                 NullLogger<DeterministicExperienceDraftGenerator>.Instance),
             new OrchestrationRunner(),
             NullLogger<BillerOnboardingService>.Instance,
+            agentContextService: new AgentContextService(
+                repository,
+                NullLogger<AgentContextService>.Instance),
             invoiceSeeder: seeder);
 
     private static CreateBillerRequest Request() =>

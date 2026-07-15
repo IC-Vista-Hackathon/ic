@@ -88,7 +88,7 @@ public sealed partial class BillerOnboardingService(
             LogBillerCreated(logger, id, savedRun.Id, draftGenerator.Provider);
             return (Map(biller), Map(savedRun), Map(savedExperience));
         }
-        catch
+        catch (Exception exception) when (!IsCriticalException(exception))
         {
             await CleanupFailedCreationAsync(id);
             throw;
