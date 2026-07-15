@@ -120,6 +120,24 @@ public sealed class BrandScannerTests
         Assert.Equal("https://example.com/apple-touch-icon.png", response.LogoUrl!.ToString());
     }
 
+    [Fact]
+    public async Task ScanTruncatesOversizedHomepageInsteadOfFailing()
+    {
+        var oversized = "<html><head>"
+            + "<meta name=\"theme-color\" content=\"#1a73e8\">"
+            + "<link rel=\"apple-touch-icon\" href=\"/apple-touch-icon.png\">"
+            + "</head><body>"
+            + new string('x', 400_000)
+            + "</body></html>";
+        var handler = new FakeHandler(_ => Html(oversized));
+
+        var response = await Create(handler).ScanAsync(new BrandScanRequest(new Uri("https://example.com/")));
+
+        Assert.NotEqual(BrandScanOutcome.Failed, response.Outcome);
+        Assert.Equal("#1a73e8", response.PrimaryColor);
+        Assert.Equal("https://example.com/apple-touch-icon.png", response.LogoUrl!.ToString());
+    }
+
     private static HttpBrandScanner Create(HttpMessageHandler handler)
     {
         var options = Options.Create(new BillerExperienceOptions

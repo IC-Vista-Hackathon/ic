@@ -164,12 +164,7 @@ public sealed partial class HttpBrandScanner(
                     return FetchResult.Failure("brand_scan.unsupported_content_type");
                 }
 
-                if (response.Content.Headers.ContentLength > _options.MaxResponseBytes)
-                {
-                    return FetchResult.Failure("brand_scan.response_too_large");
-                }
-
-                string? text;
+                string text;
                 try
                 {
                     text = await ReadBoundedAsync(response, Math.Max(1, _options.MaxResponseBytes), timeout.Token);
@@ -187,37 +182,36 @@ public sealed partial class HttpBrandScanner(
                     return FetchResult.Failure("brand_scan.request_failed");
                 }
 
-                return text is null
-                    ? FetchResult.Failure("brand_scan.response_too_large")
-                    : FetchResult.Success(response.RequestMessage?.RequestUri ?? current, text);
+                return FetchResult.Success(response.RequestMessage?.RequestUri ?? current, text);
             }
         }
 
         return FetchResult.Failure("brand_scan.invalid_redirect");
     }
 
-    private static async Task<string?> ReadBoundedAsync(HttpResponseMessage response, int maximumBytes, CancellationToken cancellationToken)
+    // Reads at most <paramref name="maximumBytes"/> from the response, truncating (not failing) a
+    // larger body. Brand signals — theme-color/icon/stylesheet links in <head> and CSS colors —
+    // are near the top, so a partial read still yields a useful scan for heavy homepages/stylesheets.
+    private static async Task<string> ReadBoundedAsync(HttpResponseMessage response, int maximumBytes, CancellationToken cancellationToken)
     {
         await using var stream = await response.Content.ReadAsStreamAsync(cancellationToken);
         using var memory = new MemoryStream(Math.Min(maximumBytes, 81920));
         var buffer = new byte[81920];
         var total = 0;
-        while (true)
+        while (total < maximumBytes)
         {
             var read = await stream.ReadAsync(buffer, cancellationToken);
             if (read == 0)
             {
-                return Encoding.UTF8.GetString(memory.GetBuffer(), 0, total);
+                break;
             }
 
-            total += read;
-            if (total > maximumBytes)
-            {
-                return null;
-            }
-
-            memory.Write(buffer, 0, read);
+            var toWrite = Math.Min(read, maximumBytes - total);
+            memory.Write(buffer, 0, toWrite);
+            total += toWrite;
         }
+
+        return Encoding.UTF8.GetString(memory.GetBuffer(), 0, total);
     }
 
     private static IEnumerable<Uri> ExtractStylesheetLinks(string html, Uri baseUri)
