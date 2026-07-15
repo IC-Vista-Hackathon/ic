@@ -696,7 +696,7 @@ export function App() {
   const setChatDraft = (e: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement>) => patch({ chatDraft: e.target.value });
   const submitChatAnswer = () => patch((st) => { if (!st.chatDraft.trim()) return null; const chatAnswers = [...st.chatAnswers]; chatAnswers[st.chatStep] = st.chatDraft.trim(); return { chatAnswers, chatDraft: '', chatStep: Math.min(4, st.chatStep + 1) }; });
   const editChatAnswerClick = (i: number) => patch((st) => ({ editingChatIndex: i, chatDraft: st.chatAnswers[i] }));
-  const saveChatAnswerEdit = () => patch((st) => { if (st.editingChatIndex === null) return null; const chatAnswers = [...st.chatAnswers]; chatAnswers[st.editingChatIndex] = st.chatDraft.trim(); return { chatAnswers, chatDraft: '', editingChatIndex: null }; });
+  const saveChatAnswerEdit = () => patch((st) => { if (st.editingChatIndex === null || !st.chatDraft.trim()) return null; const chatAnswers = [...st.chatAnswers]; chatAnswers[st.editingChatIndex] = st.chatDraft.trim(); return { chatAnswers, chatDraft: '', editingChatIndex: null }; });
   const editBrandLogoClick = () => patch((st) => ({ editingSection: st.editingSection === 'brandlogo' ? null : 'brandlogo' }));
   const editBrandColorsClick = () => patch((st) => ({ editingSection: st.editingSection === 'brandcolors' ? null : 'brandcolors' }));
   const editBrandFontClick = () => patch((st) => ({ editingSection: st.editingSection === 'brandfont' ? null : 'brandfont' }));
@@ -1075,7 +1075,7 @@ export function App() {
   const lineLabels = LINEITEM_LABELS[s.vertical ?? 'insurance'];
 
   const verticals = VERTICALS.map((v) => ({ ...v, iconSrc: asset(`assets/icons/${v.icon}.svg`), selected: v.id === s.vertical, onSelect: () => selectVertical(v.id) }));
-  const manualQuestionsComplete = s.chatStep >= 4;
+  const manualQuestionsComplete = s.setupPath !== 'manual' || s.chatStep >= 4;
   const stepValid = [
     !!s.vertical && (s.vertical !== 'other' || s.otherVerticalDescription.trim().length > 0),
     s.bizName.trim().length > 1 && s.selectedStates.length > 0 && !!s.setupPath && manualQuestionsComplete,
