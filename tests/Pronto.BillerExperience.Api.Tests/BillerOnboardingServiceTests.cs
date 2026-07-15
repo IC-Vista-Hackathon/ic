@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using System.Diagnostics;
 using System.Net;
 using System.Text;
@@ -79,7 +80,10 @@ public sealed class BillerOnboardingServiceTests
     [Fact]
     public async Task CompleteWorkflowProducesPublicationRequestAndTelemetry()
     {
-        var activities = new List<Activity>();
+        // ConcurrentBag + biller-scoped assertions keep this robust against the process-global
+        // ActivityListener: parallel test assemblies emit to the same source, so a plain List
+        // would be mutated mid-enumeration and foreign activities would satisfy the assertions.
+        var activities = new ConcurrentBag<Activity>();
         using var listener = new ActivityListener
         {
             ShouldListenTo = source => source.Name == BillerExperienceTelemetry.SourceName,
@@ -112,8 +116,11 @@ public sealed class BillerOnboardingServiceTests
         Assert.True(chat.Draft.Definition.Preferences.OfferAutopay);
         Assert.Equal(ExperienceRevisionState.Approved, approved.State);
         Assert.Equal(DeploymentState.Requested, deployment.State);
-        Assert.Contains(activities, activity => activity.OperationName == "onboarding.chat");
-        Assert.Contains(activities, activity => activity.OperationName == "experience.approve");
+        var billerId = created.Biller.BillerId;
+        Assert.Contains(activities, activity => activity.OperationName == "onboarding.chat"
+            && (activity.GetTagItem("ic.biller_id") as string) == billerId);
+        Assert.Contains(activities, activity => activity.OperationName == "experience.approve"
+            && (activity.GetTagItem("ic.biller_id") as string) == billerId);
         var (_, agentActivity) = await service.GetSessionActivityAsync(created.Biller.BillerId, CancellationToken.None);
         Assert.Contains(agentActivity, item => item.AgentId == "experience-designer" && item.Status == AgentActivityStatus.Completed);
     }
