@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { agentActivityMeta, partitionAgentActivity } from './agentActivityMeta';
+import { agentActivityMeta, partitionAgentActivity, shouldShowAgentId } from './agentActivityMeta';
 import type { AgentActivity } from './types';
 
 const activity = (duration_ms: number | null | undefined): AgentActivity => ({
@@ -47,5 +47,10 @@ describe('agentActivityMeta', () => {
 
     expect(result.invoked.map(item => item.agent_id)).toEqual(['biller-research']);
     expect(result.inventory.map(item => item.agent_id)).toEqual(['policy']);
+  });
+
+  it('does not repeat an agent id that is equivalent to its display name', () => {
+    expect(shouldShowAgentId({ agent_id: 'biller-payment-policy-research', display_name: 'Biller Payment Policy Research' })).toBe(false);
+    expect(shouldShowAgentId({ agent_id: 'policy-v2', display_name: 'Policy' })).toBe(true);
   });
 });

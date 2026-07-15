@@ -5,7 +5,7 @@ import { toBillerSlug } from './slug';
 import { trackEvent } from './insights';
 import { categorizeError } from './telemetryPolicy';
 import { logError, logEvent } from './telemetry';
-import { agentActivityMeta, partitionAgentActivity } from './agentActivityMeta';
+import { agentActivityMeta, partitionAgentActivity, shouldShowAgentId } from './agentActivityMeta';
 import { billingInterviewPending, billingInterviewPrompt } from './billingReadiness';
 import type { AgentActivity, Deployment, ExperienceDefinition, ExperienceRevision, Session } from './types';
 
@@ -690,7 +690,8 @@ function AgentActivityPanel({
           <div style={css('display:grid;gap:8px;margin-top:8px')}>
             {inventory.map(item => (
               <div key={item.agent_id} style={css('padding:8px 10px;border-radius:8px;background:var(--invoicecloud-utility-neutral-10);font-size:12px')}>
-                <strong>{item.display_name}</strong> <code style={css('font-size:11px')}>{item.agent_id}</code>
+                <strong>{item.display_name}</strong>
+                {shouldShowAgentId(item) && <> <code style={css('font-size:11px')}>{item.agent_id}</code></>}
                 <span style={css('display:block;margin-top:3px;color:var(--invoicecloud-utility-neutral-70)')}>{item.summary}</span>
               </div>
             ))}
@@ -977,7 +978,12 @@ export function App() {
         `Use the supplied website and preserve the existing payment rails.`,
         billingAnswers,
       );
-      await new Promise(resolve => window.setTimeout(resolve, 500));
+      let finalActivity: AgentActivity[] | undefined;
+      try {
+        finalActivity = (await api.activity(billerId)).activity;
+      } catch (caught) {
+        logError('studio.activity.final_snapshot_failed', caught, { biller_id: billerId });
+      }
       logEvent('studio.orchestration.completed', { biller_id: billerId, revision: chat.draft.revision });
       patch(st => ({
         compliance: recomputeCompliance(st),
@@ -987,6 +993,7 @@ export function App() {
         backendSession: chat.session,
         previewChatReply: chat.reply,
         acceptedMethods: chat.draft.definition.preferences?.accepted_methods ?? st.acceptedMethods,
+        agentActivity: finalActivity ?? st.agentActivity,
         analysisComplete: true,
         activityConnection: 'idle',
       }));
@@ -1031,6 +1038,12 @@ export function App() {
         ? s.previewChatInput.trim()
         : `Modify the existing payer experience preview only as requested. Preserve existing payment rails. Request: ${s.previewChatInput.trim()}`;
       const response = await api.chat(s.backendBillerId, message);
+      let finalActivity: AgentActivity[] | undefined;
+      try {
+        finalActivity = (await api.activity(s.backendBillerId)).activity;
+      } catch (caught) {
+        logError('studio.preview_chat.activity_snapshot_failed', caught, { biller_id: s.backendBillerId });
+      }
       patch({
         previewChatBusy: false,
         backendSession: response.session,
@@ -1039,6 +1052,7 @@ export function App() {
         previewChatInput: discoveryActive ? '' : s.previewChatInput,
         previewChatReply: response.reply,
         previewGenerationMode: response.generation_mode ?? null,
+        ...(finalActivity ? { agentActivity: finalActivity } : {}),
       });
     } catch (caught) {
       logError('studio.preview_chat.failed', caught, { biller_id: s.backendBillerId });

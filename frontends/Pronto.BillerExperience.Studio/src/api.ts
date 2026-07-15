@@ -1,19 +1,22 @@
-import type { Bootstrap, ChatResponse, Deployment, ExperienceDefinition, ExperienceRevision, PreviewInvoice, Session } from './types';
+import type { AgentActivitySnapshot, Bootstrap, ChatResponse, Deployment, ExperienceDefinition, ExperienceRevision, PreviewInvoice, Session } from './types';
 import { logError, logEvent, newTrace } from './telemetry';
 import { fetchWithTimeout, requestError } from './http';
 
 const baseUrl = import.meta.env.VITE_API_URL ?? (import.meta.env.PROD ? '/api' : 'http://localhost:5000');
 const supportingServicesBaseUrl = import.meta.env.VITE_SUPPORTING_SERVICES_URL ?? '';
+// Three research workers run in bounded waves, followed by consolidation and draft generation.
+// Keep the browser budget above the backend's combined agent budgets while SSE reports progress.
+export const CHAT_REQUEST_TIMEOUT_MS = 120_000;
 export const activityUrl = (billerId: string) => `${baseUrl}/billers/${billerId}/events`;
 
-async function request<T>(path: string, init?: RequestInit, billerId?: string): Promise<T> {
+async function request<T>(path: string, init?: RequestInit, billerId?: string, timeoutMs?: number): Promise<T> {
   const trace = newTrace();
   const started = performance.now();
   try {
     const response = await fetchWithTimeout(`${baseUrl}${path}`, {
       ...init,
       headers: { 'content-type': 'application/json', 'x-correlation-id': trace.correlationId, traceparent: trace.traceparent, ...(billerId ? { 'x-ic-biller-id': billerId } : {}), ...init?.headers },
-    });
+    }, timeoutMs);
     if (!response.ok) {
       throw await requestError(response, `Request failed with ${response.status}.`);
     }
@@ -29,7 +32,8 @@ export const api = {
   create: (input: { display_name: string; slug: string; bill_type: string; postal_code: string; website?: string }) =>
     request<Bootstrap>('/billers', { method: 'POST', body: JSON.stringify(input) }),
   chat: (billerId: string, message: string, billingAnswers?: Array<{ dimension: 'categories'|'cadence'|'state_rules'|'payment_terms'; answer: string }>) =>
-    request<ChatResponse>(`/billers/${billerId}/chat`, { method: 'POST', body: JSON.stringify({ message, billing_answers: billingAnswers }) }, billerId),
+    request<ChatResponse>(`/billers/${billerId}/chat`, { method: 'POST', body: JSON.stringify({ message, billing_answers: billingAnswers }) }, billerId, CHAT_REQUEST_TIMEOUT_MS),
+  activity: (billerId: string) => request<AgentActivitySnapshot>(`/billers/${billerId}/activity`, undefined, billerId),
   reopenBillingQuestion: (billerId: string, questionId: string) =>
     request<Session>(`/billers/${billerId}/billing-discovery/reopen`, { method: 'POST', body: JSON.stringify({ question_id: questionId }) }, billerId),
   update: (billerId: string, definition: ExperienceDefinition, expectedETag?: string) =>

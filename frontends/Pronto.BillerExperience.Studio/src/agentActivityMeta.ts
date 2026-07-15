@@ -35,3 +35,8 @@ export function partitionAgentActivity(activity: AgentActivity[]): {
     inventory,
   };
 }
+
+export function shouldShowAgentId(item: Pick<AgentActivity, 'agent_id' | 'display_name'>): boolean {
+  const normalize = (value: string) => value.trim().toLowerCase().replaceAll(/[-_\s]+/g, '');
+  return normalize(item.agent_id) !== normalize(item.display_name);
+}

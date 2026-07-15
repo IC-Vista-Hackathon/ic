@@ -44,6 +44,22 @@ public sealed class FoundryAgentReconcilerTests
     }
 
     [Fact]
+    public async Task ReconcilesAgentWhoseCapabilityMetadataDrifted()
+    {
+        var root = FindRepositoryRoot();
+        var options = new AgentProvisioningOptions { Enabled = true, DefinitionsPath = "agents" };
+        var desired = Assert.Single(FoundryAgentReconciler.LoadDesired(options, root), item => item.Name == "biller-payment-policy-research");
+        var gateway = new RecordingGateway(true,
+            new ExistingFoundryAgent(desired.Name, desired.Fingerprint, true, "biller_payment_policy_research"));
+        var configuration = new BillerExperienceOptions { AgentProvisioning = options };
+        var reconciler = new FoundryAgentReconciler(gateway, Options.Create(configuration), new TestEnvironment(root), NullLogger<FoundryAgentReconciler>.Instance);
+
+        await reconciler.ReconcileAsync(CancellationToken.None);
+
+        Assert.Contains(gateway.Created, item => item.Name == desired.Name && item.Capability == "biller_research");
+    }
+
+    [Fact]
     public void BillerResearchDefinitionMatchesProvisionedToolsAndWireContract()
     {
         var desired = FoundryAgentReconciler.LoadDesired(
@@ -66,11 +82,15 @@ public sealed class FoundryAgentReconcilerTests
         return directory?.FullName ?? throw new DirectoryNotFoundException("Repository root was not found.");
     }
 
-    private sealed class RecordingGateway(bool attachMcp) : IFoundryAgentAdministrationGateway
+    private sealed class RecordingGateway(bool attachMcp, ExistingFoundryAgent? initial = null) : IFoundryAgentAdministrationGateway
     {
         public List<DesiredFoundryAgent> Created { get; } = [];
-        public Task<IReadOnlyList<ExistingFoundryAgent>> ListAsync(CancellationToken cancellationToken) =>
-            Task.FromResult<IReadOnlyList<ExistingFoundryAgent>>(Created.Select(item => new ExistingFoundryAgent(item.Name, item.Fingerprint, attachMcp)).ToArray());
+        public Task<IReadOnlyList<ExistingFoundryAgent>> ListAsync(CancellationToken cancellationToken)
+        {
+            var current = Created.Select(item => new ExistingFoundryAgent(item.Name, item.Fingerprint, attachMcp, item.Capability)).ToList();
+            if (initial is not null && current.All(item => item.Name != initial.Name)) current.Add(initial);
+            return Task.FromResult<IReadOnlyList<ExistingFoundryAgent>>(current);
+        }
         public Task CreateVersionAsync(DesiredFoundryAgent agent, CancellationToken cancellationToken) { Created.Add(agent); return Task.CompletedTask; }
     }
 
