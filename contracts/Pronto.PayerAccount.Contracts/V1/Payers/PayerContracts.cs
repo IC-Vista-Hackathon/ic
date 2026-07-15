@@ -31,6 +31,14 @@ public sealed record UpdatePayerPreferencesRequest(
     IReadOnlyList<NotificationChannel>? Channels = null,
     int? PaymentDay = null);
 
+/// <summary>
+/// Link one or more biller account numbers to an existing payer. Linking is idempotent:
+/// re-linking accounts the payer already holds is a no-op, and a link already owned by a
+/// different payer for the same biller is rejected with 409 <c>account_already_linked</c>.
+/// </summary>
+public sealed record LinkAccountsRequest(
+    IReadOnlyList<string> AccountNumbers);
+
 /// <summary>Wire tokens pinned at the type level so serialization is host-independent.</summary>
 [JsonConverter(typeof(NotificationChannelJsonConverter))]
 public enum NotificationChannel
