@@ -50,7 +50,7 @@ public sealed class InfrastructureConfigurationTests
                      Path.Join(root, "infra", "bicep", "modules", "aiFoundry.bicep"),
                  })
         {
-            var bicep = File.ReadAllText(path);
+            var bicep = File.ReadAllText(path).ReplaceLineEndings("\n");
             Assert.Contains("@allowed([\n  true\n  false\n])", bicep, StringComparison.Ordinal);
         }
 
