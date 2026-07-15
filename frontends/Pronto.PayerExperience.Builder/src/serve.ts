@@ -1,6 +1,6 @@
 import { createReadStream, existsSync, statSync } from 'node:fs';
 import { createServer, type Server } from 'node:http';
-import { join, normalize } from 'node:path';
+import { join, normalize, sep } from 'node:path';
 
 const CONTENT_TYPES: Record<string, string> = {
   '.html': 'text/html; charset=utf-8',
@@ -28,6 +28,8 @@ export interface StaticSite {
 // gate exercises matches what payers get.
 export async function serveBundle(distDir: string, slug: string, port = 0): Promise<StaticSite> {
   const prefix = `/pay/${slug}/`;
+  const root = normalize(distDir);
+  const rootWithSep = root.endsWith(sep) ? root : root + sep;
   const server = createServer((request, response) => {
     const requestUrl = new URL(request.url ?? '/', 'http://localhost');
     let pathname = decodeURIComponent(requestUrl.pathname);
@@ -36,13 +38,13 @@ export async function serveBundle(distDir: string, slug: string, port = 0): Prom
       return;
     }
     const relative = pathname.slice(prefix.length) || 'index.html';
-    let filePath = normalize(join(distDir, relative));
-    if (!filePath.startsWith(distDir)) {
+    let filePath = normalize(join(root, relative));
+    if (filePath !== root && !filePath.startsWith(rootWithSep)) {
       response.writeHead(403).end();
       return;
     }
     if (!existsSync(filePath) || statSync(filePath).isDirectory()) {
-      filePath = join(distDir, 'index.html'); // SPA fallback
+      filePath = join(root, 'index.html'); // SPA fallback
     }
     const ext = filePath.slice(filePath.lastIndexOf('.'));
     response.writeHead(200, { 'content-type': CONTENT_TYPES[ext] ?? 'application/octet-stream' });
