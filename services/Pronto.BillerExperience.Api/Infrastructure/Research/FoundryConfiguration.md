@@ -1,18 +1,20 @@
 # Foundry research adapter configuration
 
-The adapter uses `Azure.AI.Agents.Persistent` 1.1.0 and Microsoft Entra authentication. Configure:
+The adapter uses the GA Foundry Agent Service SDK (`Azure.AI.Projects` 2.0.1,
+`Azure.AI.Projects.Agents` 2.0.0, and `Azure.AI.Extensions.OpenAI` 2.0.0) with Microsoft Entra
+authentication. Configure:
 
 ```text
 BillerExperience__Research__FoundryProjectEndpoint=https://<ai-resource>.services.ai.azure.com/api/projects/<project-name>
-BillerExperience__Research__AllowedAgentIds__0=<approved-worker-agent-id>
-BillerExperience__Research__CoordinatorAgentId=<optional-consolidator-agent-id>
+BillerExperience__Research__AllowedAgentIds__0=<approved-worker-agent-name>
+BillerExperience__Research__CoordinatorAgentId=<optional-consolidator-agent-name>
 ```
 
 Assign the API workload identity a role that permits Foundry agent data-plane operations. This
 repository grants the built-in **Cognitive Services User** role at the AI Services account scope;
-its data actions cover persisted-agent discovery and invocation. No API key is read by this adapter.
+its data actions cover versioned-agent discovery and Responses API invocation. No API key is read by this adapter.
 
-Each worker agent must be a persisted Foundry agent and carry this metadata:
+Each worker agent must be a versioned Foundry agent and carry this metadata on its latest version:
 
 ```text
 ic.approved=true
@@ -25,7 +27,7 @@ ic.enabled=true
 enabled agent with the required capability is eligible. The coordinator agent is invoked only
 through `IFoundryResearchConsolidator`; it is not included automatically in worker fan-out.
 
-Web access is a property of each persisted worker agent. Provision a Bing Grounding tool (or an
+Web access is a property of each versioned worker agent. Provision a web-search or Bing Grounding tool (or an
 approved `research_website` function backed by the hardened same-site reader) on every worker that
 is expected to browse. The orchestration service does not accept uncited output: every retained
 fact must contain an absolute HTTPS source.

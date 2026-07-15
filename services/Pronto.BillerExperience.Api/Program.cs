@@ -57,7 +57,7 @@ builder.Services.AddHttpClient<IBillerWebsiteResearcher, HttpBillerWebsiteResear
 if (!string.IsNullOrWhiteSpace(options.Research.FoundryProjectEndpoint))
 {
     builder.Services.AddSingleton<TokenCredential>(_ => new DefaultAzureCredential());
-    builder.Services.AddSingleton<IFoundryPersistentAgentGateway, FoundryPersistentAgentGateway>();
+    builder.Services.AddSingleton<IFoundryAgentServiceGateway, FoundryAgentServiceGateway>();
     builder.Services.AddSingleton<FoundryResearchAgentAdapter>();
     builder.Services.AddSingleton<IResearchAgentCatalog>(services => services.GetRequiredService<FoundryResearchAgentAdapter>());
     builder.Services.AddSingleton<IResearchAgentDispatcher>(services => services.GetRequiredService<FoundryResearchAgentAdapter>());
@@ -172,7 +172,8 @@ var openTelemetry = builder.Services.AddOpenTelemetry()
     .ConfigureResource(resource => resource.AddService("Pronto.BillerExperience.Api"))
     .WithTracing(tracing => tracing
         .AddSource(BillerExperienceTelemetry.SourceName)
-        .AddSource(OrchestrationTelemetry.ActivitySourceName))
+        .AddSource(OrchestrationTelemetry.ActivitySourceName)
+        .AddSource("Azure.AI.Projects.*"))
     .WithMetrics(metrics => metrics
         .AddMeter(BillerExperienceTelemetry.MeterName)
         .AddMeter(OrchestrationTelemetry.MeterName));

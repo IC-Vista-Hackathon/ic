@@ -18,7 +18,7 @@ public interface IFoundryResearchConsolidator
 
 /// <summary>Maps approved Foundry agents and invokes them through the provider-neutral research seams.</summary>
 public sealed partial class FoundryResearchAgentAdapter(
-    IFoundryPersistentAgentGateway gateway,
+    IFoundryAgentServiceGateway gateway,
     IOptions<BillerExperienceOptions> options,
     ILogger<FoundryResearchAgentAdapter> logger)
     : IResearchAgentCatalog, IResearchAgentDispatcher, IFoundryResearchConsolidator

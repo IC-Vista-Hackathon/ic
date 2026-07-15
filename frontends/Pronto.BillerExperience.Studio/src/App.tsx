@@ -2,7 +2,7 @@ import { CSSProperties, FormEvent, useEffect, useRef, useState } from 'react';
 import { activityUrl, api } from './api';
 import { errorMessage } from './http';
 import { logError } from './telemetry';
-import type { AgentActivity } from './types';
+import type { AgentActivity, Deployment, ExperienceDefinition, ExperienceRevision } from './types';
 
 /* ------------------------------------------------------------------ *
  * Pronto Payment Portal Builder — Biller Experience Studio
@@ -132,6 +132,10 @@ interface State {
   scenarioLoading: boolean;
   previewDevice: 'desktop' | 'mobile';
   backendBillerId: string | null;
+  backendDraft: ExperienceRevision | null;
+  deployment: Deployment | null;
+  publishing: boolean;
+  publishError: string | null;
   agentActivity: AgentActivity[];
   activityConnection: 'idle' | 'connecting' | 'connected' | 'disconnected';
   orchestrationError: string | null;
@@ -303,7 +307,8 @@ const INITIAL_STATE: State = {
   csvFileName: null, importedFields: [], csvOverriddenFields: [], accountNumber: null,
   previewScenario: 'payment', complexScenarioText: '', complexScenarioResult: null, scenarioLoading: false,
   previewDevice: 'desktop',
-  backendBillerId: null, agentActivity: [], activityConnection: 'idle', orchestrationError: null,
+  backendBillerId: null, backendDraft: null, deployment: null, publishing: false, publishError: null,
+  agentActivity: [], activityConnection: 'idle', orchestrationError: null,
 };
 
 const TINT = 'var(--invoicecloud-primary-tint)';
@@ -364,6 +369,45 @@ export function App() {
   const later = (fn: () => void, ms: number) => { timers.current.push(setTimeout(fn, ms)); };
 
   const s = state;
+
+  const publishableDefinition = (st: State): ExperienceDefinition => {
+    if (!st.backendDraft) throw new Error('The generated experience is not ready to publish. Run the agent analysis again.');
+    const definition = st.backendDraft.definition;
+    const brand = st.brand ?? buildBrand(st);
+    return {
+      ...definition,
+      brand: {
+        ...definition.brand,
+        display_name: st.bizName,
+        primary_color: brand.primary,
+        secondary_color: brand.secondary,
+        font_family: brand.font,
+      },
+      pwa: {
+        ...definition.pwa,
+        name: `${st.bizName} Payments`,
+        short_name: st.bizName.slice(0, 24),
+        theme_color: brand.primary,
+        background_color: brand.accent,
+      },
+      preferences: {
+        guest_checkout_allowed: st.guestCheckoutAllowed,
+        offer_autopay: st.offerAutopay,
+        enroll_during_payment: st.enrollDuringPayment,
+        offer_paperless: st.offerPaperless,
+        reminder_channel: st.reminderChannel as 'email' | 'text' | 'both' | 'none',
+        accepted_methods: st.acceptedMethods,
+        self_service_history: st.selfServiceHistory,
+        self_service_updates: st.selfServiceUpdate,
+        fee_handling: (st.feeHandling === 'unsure' ? 'undecided' : st.feeHandling) as 'absorb' | 'charge' | 'mixed' | 'undecided',
+        preview: {
+          default_device: st.previewDevice,
+          enabled_scenarios: ['payment', 'history', 'communication', 'complex'],
+        },
+        recommendation_rationale: st.aiRationale,
+      },
+    };
+  };
 
   const buildBrand = (st: State): Brand => {
     const { vertical, website, skipWebsite, colorChoice, customPrimary, customSecondary, customAccent, fontChoice, extractedColors } = st;
@@ -498,7 +542,7 @@ export function App() {
           website,
         });
         billerId = created.biller.biller_id;
-        patch({ backendBillerId: billerId });
+        patch({ backendBillerId: billerId, backendDraft: created.draft });
       }
 
       events = new EventSource(activityUrl(billerId));
@@ -523,13 +567,13 @@ export function App() {
       });
       events.onerror = () => patch({ activityConnection: 'disconnected' });
 
-      await api.chat(
+      const chat = await api.chat(
         billerId,
         `Build a ${s.vertical ?? 'custom'} payment experience for ${s.bizName}. ` +
         `Serve ${s.selectedStates.join(', ') || 'the selected market'}; methods: ${s.acceptedMethods.join(', ')}. ` +
         `Use the supplied website and preserve the existing payment rails.`,
       );
-      patch(st => ({ screen: 'results', compliance: recomputeCompliance(st), brand: buildBrand(st), analyzeStage: 2 }));
+      patch(st => ({ screen: 'results', compliance: recomputeCompliance(st), brand: buildBrand(st), analyzeStage: 2, backendDraft: chat.draft }));
     } catch (caught) {
       const message = errorMessage(caught);
       logError('studio.orchestration.failed', caught, { biller_id: s.backendBillerId });
@@ -587,7 +631,56 @@ export function App() {
     return { lobs, accountCreated: true, purchased: st.purchased || published, screen: 'dashboard', modal: null, editingLobId: null, pendingLob: false };
   });
   const submitSignup = (e: FormEvent) => { e.preventDefault(); if (s.pendingLob) saveLob(false); else patch({ modal: null }); };
-  const submitCheckout = (e: FormEvent) => { e.preventDefault(); if (s.pendingLob) saveLob(true); else patch({ purchased: true, modal: null }); };
+  const submitCheckout = async (e: FormEvent) => {
+    e.preventDefault();
+    if (s.publishing) return;
+    patch({ publishing: true, publishError: null });
+    try {
+      if (!s.backendBillerId) throw new Error('This experience is not connected to a biller. Run the agent analysis before publishing.');
+
+      let deployment = s.deployment;
+      const currentState = deployment?.state.toLowerCase();
+      if (!deployment || currentState === 'failed' || currentState === 'rolled_back' || currentState === 'ready') {
+        if (currentState === 'failed' || currentState === 'rolled_back') {
+          throw new Error(deployment?.failure_message || 'Publication failed. Run the agent analysis again to create a new revision.');
+        }
+        const updated = await api.update(s.backendBillerId, publishableDefinition(s), s.backendDraft?.e_tag);
+        patch({ backendDraft: updated });
+        const approved = await api.approve(s.backendBillerId, updated.revision);
+        deployment = await api.publish(s.backendBillerId, approved.revision);
+        patch({ backendDraft: approved, deployment });
+      }
+
+      for (let attempt = 0; attempt < 45 && deployment.state.toLowerCase() !== 'ready'; attempt += 1) {
+        const state = deployment.state.toLowerCase();
+        if (state === 'failed' || state === 'rolled_back') {
+          throw new Error(deployment.failure_message || `Publication ${state.replace('_', ' ')}.`);
+        }
+        await new Promise(resolve => window.setTimeout(resolve, 1000));
+        deployment = await api.deployment(s.backendBillerId, deployment.deployment_id);
+        patch({ deployment });
+      }
+      if (deployment.state.toLowerCase() !== 'ready') {
+        throw new Error('Publication is still processing. You can safely retry status checking.');
+      }
+
+      if (s.pendingLob) saveLob(true);
+      else patch(st => ({
+        purchased: true,
+        modal: null,
+        lobs: st.lobs.map(lob => lob.id === st.editingLobId || (!st.editingLobId && lob.bizName === st.bizName) ? { ...lob, published: true } : lob),
+      }));
+      patch({ deployment, publishing: false, publishError: null });
+    } catch (caught) {
+      const message = errorMessage(caught);
+      logError('studio.publish.failed', caught, {
+        biller_id: s.backendBillerId,
+        revision: s.backendDraft?.revision,
+        deployment_id: s.deployment?.deployment_id,
+      });
+      patch({ publishing: false, publishError: message });
+    }
+  };
 
   const addLob = () => patch({ screen: 'wizard', ...WIZARD_RESET });
   const editLob = (lob: Lob) => {
@@ -1630,6 +1723,12 @@ export function App() {
                 <button type="button" onClick={openCheckout} style={css('background:var(--invoicecloud-intent-info);color:#fff;border:none;border-radius:8px;padding:8px 16px;font-size:13px;font-weight:700;cursor:pointer')}>Publish</button>
               </div>
             )}
+            {s.purchased && s.deployment?.published_url && (
+              <div style={css('display:flex;align-items:center;justify-content:space-between;gap:16px;background:var(--invoicecloud-intent-success-background);border:1px solid var(--invoicecloud-intent-success-border);border-radius:10px;padding:var(--invoicecloud-spacing-s) var(--invoicecloud-spacing-m);margin-bottom:var(--invoicecloud-spacing-l)')}>
+                <span style={css('font-size:14px;color:var(--invoicecloud-intent-success)')}>Your payer experience is live.</span>
+                <a href={s.deployment.published_url} target="_blank" rel="noreferrer" style={css('font-size:13px;font-weight:700;color:var(--invoicecloud-intent-success)')}>Open payment site &rarr;</a>
+              </div>
+            )}
             <div style={css('display:flex;justify-content:space-between;align-items:center;margin-bottom:var(--invoicecloud-spacing-s)')}>
               <h3 style={css('font-size:16px')}>Lines of business</h3>
               <button type="button" onClick={addLob} style={css('display:flex;align-items:center;gap:6px;background:var(--invoicecloud-primary);color:#fff;border:none;border-radius:8px;padding:8px 16px;font-size:13px;font-weight:700;cursor:pointer')}><img src={asset('assets/icons/Plus.svg')} alt="" style={css('width:14px;height:14px;filter:brightness(0) invert(1)')} />Add line of business</button>
@@ -1689,7 +1788,17 @@ export function App() {
               <input type="text" required placeholder="MM/YY" style={css('width:100%;padding:12px 14px;border-radius:4px;border:1px solid var(--invoicecloud-surface-default-border);font-family:var(--invoicecloud-font-family-mono)')} />
               <input type="text" required placeholder="CVC" style={css('width:100%;padding:12px 14px;border-radius:4px;border:1px solid var(--invoicecloud-surface-default-border);font-family:var(--invoicecloud-font-family-mono)')} />
             </div>
-            <button type="submit" style={css('width:100%;background:var(--invoicecloud-intent-success-hover);color:#fff;border:none;border-radius:10px;padding:14px;font-size:15px;font-weight:700;cursor:pointer')}>Pay &amp; Publish</button>
+            {(s.publishing || s.deployment) && (
+              <div role="status" aria-live="polite" style={css('background:var(--invoicecloud-primary-tint);border-radius:8px;padding:10px 12px;font-size:13px;margin-bottom:var(--invoicecloud-spacing-s)')}>
+                {s.publishing ? `Publishing: ${(s.deployment?.state || 'preparing').replaceAll('_', ' ')}...` : `Publication status: ${s.deployment?.state.replaceAll('_', ' ')}`}
+              </div>
+            )}
+            {s.publishError && (
+              <div role="alert" style={css('background:var(--invoicecloud-intent-error-background);border:1px solid var(--invoicecloud-intent-error-border);color:var(--invoicecloud-intent-error);border-radius:8px;padding:10px 12px;font-size:13px;margin-bottom:var(--invoicecloud-spacing-s)')}>
+                <strong>Could not publish.</strong> {s.publishError}
+              </div>
+            )}
+            <button type="submit" disabled={s.publishing} style={css(`width:100%;background:var(--invoicecloud-intent-success-hover);color:#fff;border:none;border-radius:10px;padding:14px;font-size:15px;font-weight:700;cursor:${s.publishing ? 'wait' : 'pointer'};opacity:${s.publishing ? '.65' : '1'}`)}>{s.publishing ? 'Publishing...' : s.deployment && !['failed', 'rolled_back', 'ready'].includes(s.deployment.state.toLowerCase()) ? 'Check Publish Status' : 'Pay & Publish'}</button>
             <div style={css('font-size:12px;color:var(--invoicecloud-utility-neutral-60);text-align:center;margin-top:var(--invoicecloud-spacing-s)')}>Fake checkout - no real card is charged in this demo.</div>
           </form>
         </div>

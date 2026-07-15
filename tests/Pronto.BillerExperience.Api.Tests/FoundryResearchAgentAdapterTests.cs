@@ -138,7 +138,7 @@ public sealed class FoundryResearchAgentAdapterTests
         [new ResearchSource(new Uri("https://example.com"), "Home", DateTimeOffset.UtcNow)],
         []);
 
-    private sealed class StubGateway : IFoundryPersistentAgentGateway
+    private sealed class StubGateway : IFoundryAgentServiceGateway
     {
         public IReadOnlyList<FoundryAgentDefinition> Agents { get; init; } = [];
         public FoundryAgentOutput Output { get; init; } = new("{}", []);

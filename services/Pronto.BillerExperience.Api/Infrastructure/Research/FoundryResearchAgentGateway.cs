@@ -1,12 +1,16 @@
 using System.Diagnostics;
-using Azure.AI.Agents.Persistent;
+using Azure.AI.Extensions.OpenAI;
+using Azure.AI.Projects;
 using Azure.Core;
 using Pronto.BillerExperience.Api.Configuration;
 using Microsoft.Extensions.Options;
+using OpenAI.Responses;
+
+#pragma warning disable OPENAI001 // The GA Foundry Agent Service SDK currently exposes Responses API models under this diagnostic.
 
 namespace Pronto.BillerExperience.Api.Infrastructure.Research;
 
-public interface IFoundryPersistentAgentGateway
+public interface IFoundryAgentServiceGateway
 {
     Task<IReadOnlyList<FoundryAgentDefinition>> ListAgentsAsync(CancellationToken cancellationToken);
     Task<FoundryAgentOutput> InvokeAsync(string agentId, string prompt, CancellationToken cancellationToken);
@@ -21,17 +25,16 @@ public sealed record FoundryCitation(Uri Url, string? Title);
 
 public sealed record FoundryAgentOutput(string Text, IReadOnlyList<FoundryCitation> Citations);
 
-/// <summary>Uses the stable Azure AI Persistent Agents SDK against a Foundry project endpoint.</summary>
-public sealed partial class FoundryPersistentAgentGateway : IFoundryPersistentAgentGateway
+/// <summary>Uses the current Foundry Agent Service SDK and Responses API against a Foundry project endpoint.</summary>
+public sealed partial class FoundryAgentServiceGateway : IFoundryAgentServiceGateway
 {
-    private readonly PersistentAgentsClient _client;
-    private readonly TimeSpan _pollInterval;
-    private readonly ILogger<FoundryPersistentAgentGateway> _logger;
+    private readonly AIProjectClient _project;
+    private readonly ILogger<FoundryAgentServiceGateway> _logger;
 
-    public FoundryPersistentAgentGateway(
+    public FoundryAgentServiceGateway(
         IOptions<BillerExperienceOptions> options,
         TokenCredential credential,
-        ILogger<FoundryPersistentAgentGateway> logger)
+        ILogger<FoundryAgentServiceGateway> logger)
     {
         var research = options.Value.Research;
         if (!Uri.TryCreate(research.FoundryProjectEndpoint, UriKind.Absolute, out var endpoint) ||
@@ -40,26 +43,36 @@ public sealed partial class FoundryPersistentAgentGateway : IFoundryPersistentAg
             throw new InvalidOperationException("BillerExperience:Research:FoundryProjectEndpoint must be an absolute HTTPS Foundry project endpoint.");
         }
 
-        _client = new PersistentAgentsClient(endpoint.ToString(), credential);
-        _pollInterval = TimeSpan.FromMilliseconds(Math.Clamp(research.FoundryPollIntervalMilliseconds, 100, 5_000));
+        _project = new AIProjectClient(endpoint, credential);
         _logger = logger;
     }
 
     public async Task<IReadOnlyList<FoundryAgentDefinition>> ListAgentsAsync(CancellationToken cancellationToken)
     {
         using var activity = BillerExperienceTelemetry.Source.StartActivity("foundry.agents.list");
-        var agents = new List<FoundryAgentDefinition>();
-        await foreach (var agent in _client.Administration
-                           .GetAgentsAsync(limit: 100, cancellationToken: cancellationToken))
+        try
         {
-            agents.Add(new FoundryAgentDefinition(
-                agent.Id,
-                string.IsNullOrWhiteSpace(agent.Name) ? agent.Id : agent.Name,
-                agent.Metadata));
-        }
+            var agents = new List<FoundryAgentDefinition>();
+            await foreach (var agent in _project.AgentAdministrationClient
+                               .GetAgentsAsync(limit: 100, cancellationToken: cancellationToken))
+            {
+                var latest = agent.GetLatestVersion();
+                agents.Add(new FoundryAgentDefinition(
+                    agent.Name,
+                    string.IsNullOrWhiteSpace(agent.Name) ? agent.Id : agent.Name,
+                    new Dictionary<string, string>(latest.Metadata, StringComparer.OrdinalIgnoreCase)));
+            }
 
-        activity?.SetTag("foundry.agent.count", agents.Count);
-        return agents;
+            activity?.SetTag("foundry.agent.count", agents.Count);
+            activity?.SetStatus(ActivityStatusCode.Ok);
+            return agents;
+        }
+        catch (Exception exception) when (exception is not OperationCanceledException)
+        {
+            activity?.SetStatus(ActivityStatusCode.Error, "research.foundry_inventory_failed");
+            LogInventoryFailure(_logger, Activity.Current?.TraceId.ToString(), exception);
+            throw new FoundryResearchException("research.foundry_inventory_failed", "Foundry agent inventory failed.", true, exception);
+        }
     }
 
     public async Task<FoundryAgentOutput> InvokeAsync(
@@ -69,54 +82,24 @@ public sealed partial class FoundryPersistentAgentGateway : IFoundryPersistentAg
     {
         using var activity = BillerExperienceTelemetry.Source.StartActivity("foundry.agent.invoke");
         activity?.SetTag("gen_ai.agent.id", agentId);
-        PersistentAgentThread? thread = null;
         try
         {
-            var agent = (await _client.Administration.GetAgentAsync(agentId, cancellationToken)).Value;
-            thread = (await _client.Threads.CreateThreadAsync(cancellationToken: cancellationToken)).Value;
-            await _client.Messages.CreateMessageAsync(
-                thread.Id,
-                MessageRole.User,
+            var responses = _project.ProjectOpenAIClient
+                .GetProjectResponsesClientForAgent(new AgentReference(agentId));
+            var response = (await responses.CreateResponseAsync(
                 prompt,
-                cancellationToken: cancellationToken);
-
-            var run = (await _client.Runs.CreateRunAsync(thread, agent, cancellationToken)).Value;
-            while (run.Status == RunStatus.Queued || run.Status == RunStatus.InProgress)
-            {
-                await Task.Delay(_pollInterval, cancellationToken);
-                run = (await _client.Runs.GetRunAsync(thread.Id, run.Id, cancellationToken)).Value;
-            }
-
-            if (run.Status != RunStatus.Completed)
-            {
-                activity?.SetStatus(ActivityStatusCode.Error, run.Status.ToString());
-                throw new FoundryResearchException(
-                    "research.foundry_run_failed",
-                    $"Foundry run ended with status {run.Status}; provider code {run.LastError?.Code}.",
-                    retryable: run.Status == RunStatus.Failed || run.Status == RunStatus.Expired);
-            }
-
+                previousResponseId: null,
+                cancellationToken)).Value;
             var texts = new List<string>();
             var citations = new List<FoundryCitation>();
-            await foreach (var message in _client.Messages.GetMessagesAsync(
-                               thread.Id,
-                               order: ListSortOrder.Ascending,
-                               cancellationToken: cancellationToken))
+            foreach (var message in response.OutputItems.OfType<MessageResponseItem>())
             {
-                if (message.Role != MessageRole.Agent)
+                foreach (var content in message.Content)
                 {
-                    continue;
-                }
-
-                foreach (var content in message.ContentItems.OfType<MessageTextContent>())
-                {
-                    texts.Add(content.Text);
-                    foreach (var citation in content.Annotations.OfType<MessageTextUriCitationAnnotation>())
+                    if (!string.IsNullOrWhiteSpace(content.Text)) texts.Add(content.Text);
+                    foreach (var citation in content.OutputTextAnnotations.OfType<UriCitationMessageAnnotation>())
                     {
-                        if (Uri.TryCreate(citation.UriCitation.Uri, UriKind.Absolute, out var uri))
-                        {
-                            citations.Add(new FoundryCitation(uri, citation.UriCitation.Title));
-                        }
+                        citations.Add(new FoundryCitation(citation.Uri, citation.Title));
                     }
                 }
             }
@@ -137,28 +120,14 @@ public sealed partial class FoundryPersistentAgentGateway : IFoundryPersistentAg
             LogInvocationFailure(_logger, agentId, Activity.Current?.TraceId.ToString(), exception);
             throw new FoundryResearchException("research.foundry_request_failed", "Foundry request failed.", true, exception);
         }
-        finally
-        {
-            if (thread is not null)
-            {
-                try
-                {
-                    using var cleanupTimeout = new CancellationTokenSource(TimeSpan.FromSeconds(5));
-                    await _client.Threads.DeleteThreadAsync(thread.Id, cleanupTimeout.Token);
-                }
-                catch (Exception exception)
-                {
-                    LogThreadCleanupFailure(_logger, thread.Id, Activity.Current?.TraceId.ToString(), exception);
-                }
-            }
-        }
     }
+
+    [LoggerMessage(2669, LogLevel.Error, "Foundry agent inventory failed; trace {TraceId}")]
+    private static partial void LogInventoryFailure(ILogger logger, string? traceId, Exception exception);
 
     [LoggerMessage(2670, LogLevel.Error, "Foundry agent {AgentId} invocation failed; trace {TraceId}")]
     private static partial void LogInvocationFailure(ILogger logger, string agentId, string? traceId, Exception exception);
 
-    [LoggerMessage(2671, LogLevel.Error, "Foundry thread {ThreadId} cleanup failed; trace {TraceId}")]
-    private static partial void LogThreadCleanupFailure(ILogger logger, string threadId, string? traceId, Exception exception);
 }
 
 public sealed class FoundryResearchException : Exception
