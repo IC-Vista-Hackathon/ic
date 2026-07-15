@@ -43,6 +43,34 @@ export interface Session {
   state: SessionState;
   missing_fields: string[];
   updated_at: string;
+  billing_profile?: BillingProfile;
+  current_question?: BillingDiscoveryQuestion | null;
+  discovery_progress?: { completed: number; total: number; is_complete: boolean };
+}
+
+export interface BillingProfile {
+  schema_version: string;
+  confirmed: boolean;
+  categories: BillingCategory[];
+}
+
+export interface BillingCategory {
+  id: string;
+  display_name: string;
+  cadence?: { kind: 'monthly'|'quarterly'|'annual'|'one_time'|'ad_hoc'|'custom'; details?: string | null } | null;
+  state_rules?: Array<{ description: string; grace_period_days?: number | null; resulting_state?: string | null }> | null;
+  payment_terms?: { mode: 'pay_in_full'|'installments_allowed'; maximum_installments?: number | null; details?: string | null; limits_confirmed?: boolean } | null;
+  confirmed: boolean;
+}
+
+export interface BillingDiscoveryQuestion {
+  question_id: string;
+  dimension: 'categories'|'cadence'|'state_rules'|'payment_terms'|'confirmation';
+  prompt: string;
+  category_id?: string | null;
+  category_name?: string | null;
+  sequence: number;
+  reason_code?: string | null;
 }
 
 export interface Bootstrap {

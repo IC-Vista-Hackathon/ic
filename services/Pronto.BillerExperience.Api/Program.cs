@@ -48,6 +48,7 @@ builder.Services.Configure<BillerExperienceOptions>(builder.Configuration.GetSec
 builder.Services.Configure<MaintenanceOptions>(builder.Configuration.GetSection(MaintenanceOptions.SectionName));
 builder.Services.AddSingleton<IOrchestrationRunner, OrchestrationRunner>();
 builder.Services.AddSingleton<BillerOnboardingService>();
+builder.Services.AddSingleton<BillingDiscoveryEngine>();
 builder.Services.AddSingleton<AgentContextService>();
 builder.Services.AddSingleton(TimeProvider.System);
 builder.Services.AddSingleton<AgentContextCapabilityService>();

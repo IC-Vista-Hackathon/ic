@@ -1,5 +1,6 @@
 using Pronto.BillerExperience.Contracts.V1.Billers;
 using Pronto.BillerExperience.Contracts.V1.AgentContext;
+using Pronto.BillerExperience.Contracts.V1.Billing;
 using Pronto.BillerExperience.Contracts.V1.Experiences;
 using Pronto.BillerExperience.Contracts.V1.Onboarding;
 using Newtonsoft.Json;
@@ -42,6 +43,7 @@ public sealed record OnboardingRunRecord(
     [property: JsonProperty("messages")] IReadOnlyList<OnboardingChatMessage> Messages,
     [property: JsonProperty("missing_fields")] IReadOnlyList<string> MissingFields,
     [property: JsonProperty("updated_at")] DateTimeOffset UpdatedAt,
+    [property: JsonProperty("billing_profile")] BillingProfile? BillingProfile = null,
     [property: JsonProperty("agent_activity")] IReadOnlyList<AgentActivityEvent>? AgentActivity = null,
     [property: JsonIgnore] string? ETag = null);
 

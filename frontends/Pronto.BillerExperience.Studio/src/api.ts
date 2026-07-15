@@ -1,4 +1,4 @@
-import type { Bootstrap, ChatResponse, Deployment, ExperienceDefinition, ExperienceRevision, PreviewInvoice } from './types';
+import type { Bootstrap, ChatResponse, Deployment, ExperienceDefinition, ExperienceRevision, PreviewInvoice, Session } from './types';
 import { logError, logEvent, newTrace } from './telemetry';
 import { fetchWithTimeout, requestError } from './http';
 
@@ -30,6 +30,8 @@ export const api = {
     request<Bootstrap>('/billers', { method: 'POST', body: JSON.stringify(input) }),
   chat: (billerId: string, message: string) =>
     request<ChatResponse>(`/billers/${billerId}/chat`, { method: 'POST', body: JSON.stringify({ message }) }, billerId),
+  reopenBillingQuestion: (billerId: string, questionId: string) =>
+    request<Session>(`/billers/${billerId}/billing-discovery/reopen`, { method: 'POST', body: JSON.stringify({ question_id: questionId }) }, billerId),
   update: (billerId: string, definition: ExperienceDefinition, expectedETag?: string) =>
     request<ExperienceRevision>(`/billers/${billerId}/config`, { method: 'PATCH', body: JSON.stringify({ definition, expected_etag: expectedETag }) }, billerId),
   invoices: (billerId: string, accountNumber = '4421') => supportingRequest<{ invoices: PreviewInvoice[] }>(

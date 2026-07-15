@@ -1,5 +1,6 @@
 using System.Diagnostics;
 using System.Text.RegularExpressions;
+using System.Text.Json;
 using Pronto.Agentic.Orchestration.Abstractions;
 using Pronto.BillerExperience.Api.Application.Orchestration;
 using Pronto.BillerExperience.Api.Application.Agents;
@@ -10,6 +11,8 @@ using Pronto.BillerExperience.Api.Infrastructure.Persistence;
 using Pronto.BillerExperience.Api.Infrastructure.Research;
 using Pronto.BillerExperience.Api.Infrastructure.SupportingServices;
 using Pronto.BillerExperience.Contracts.V1.Billers;
+using Pronto.BillerExperience.Contracts.V1.Billing;
+using Pronto.BillerExperience.Contracts.V1.AgentContext;
 using Pronto.BillerExperience.Contracts.V1.Deployments;
 using Pronto.BillerExperience.Contracts.V1.Experiences;
 using Pronto.BillerExperience.Contracts.V1.Onboarding;
@@ -23,7 +26,8 @@ public sealed partial class BillerOnboardingService(
     ILogger<BillerOnboardingService> logger,
     IBillerResearchCoordinator? researchCoordinator = null,
     IInvoiceSeeder? invoiceSeeder = null,
-    AgentContextService? agentContextService = null)
+    AgentContextService? agentContextService = null,
+    BillingDiscoveryEngine? billingDiscovery = null)
 {
     private const string RunId = "onboarding";
 
@@ -49,15 +53,19 @@ public sealed partial class BillerOnboardingService(
             definition,
             Array.Empty<ComplianceFinding>(),
             now);
+        var discovery = billingDiscovery?.Inspect(BillingProfile.Empty);
         var run = new OnboardingRunRecord(
             RunId,
             id,
             "biller-onboarding",
             OnboardingSessionState.CollectingInformation,
             0,
-            [new OnboardingChatMessage("assistant", $"Welcome! I created a starting preview for {biller.Name}. Tell me what you want customers to feel or change.", now)],
-            ["review_brand", "review_legal_links", "review_payment_methods"],
-            now);
+            [new OnboardingChatMessage("assistant", discovery is null
+                ? $"Welcome! I created a starting preview for {biller.Name}. Tell me what you want customers to feel or change."
+                : $"Welcome! I created a starting preview for {biller.Name}. {discovery.CurrentQuestion!.Prompt}", now)],
+            discovery?.MissingFields ?? ["review_brand", "review_legal_links", "review_payment_methods"],
+            now,
+            discovery?.Profile);
 
         try
         {
@@ -181,6 +189,7 @@ public sealed partial class BillerOnboardingService(
 
         var userMessage = new OnboardingChatMessage("user", request.Message.Trim(), DateTimeOffset.UtcNow);
         var messages = run.Messages.Append(userMessage).ToArray();
+        var discoveryTurn = billingDiscovery?.ApplyAnswer(billerId, run.BillingProfile, request.Message.Trim());
         var orchestrationContext = new OrchestrationContext(
             run.Id,
             Activity.Current?.TraceId.ToString() ?? Guid.NewGuid().ToString("N"),
@@ -199,8 +208,12 @@ public sealed partial class BillerOnboardingService(
             new BillerExperienceChatWorkflowInput(biller, experience, messages, eventSink),
             orchestrationContext,
             cancellationToken);
-        var assistantMessage = new OnboardingChatMessage("assistant", generated.Reply, DateTimeOffset.UtcNow);
-        var nextState = generated.MissingFields.Count == 0
+        var boundedReply = discoveryTurn is null
+            ? generated.Reply
+            : $"{generated.Reply.Trim()}\n\n{discoveryTurn.Reply}";
+        var assistantMessage = new OnboardingChatMessage("assistant", boundedReply, DateTimeOffset.UtcNow);
+        var missingFields = discoveryTurn?.State.MissingFields ?? generated.MissingFields;
+        var nextState = missingFields.Count == 0
             ? OnboardingSessionState.DraftReady
             : OnboardingSessionState.CollectingInformation;
         var updatedExperience = experience with
@@ -216,16 +229,79 @@ public sealed partial class BillerOnboardingService(
             State = nextState,
             Step = run.Step + 1,
             Messages = messages.Append(assistantMessage).ToArray(),
-            MissingFields = generated.MissingFields,
+            MissingFields = missingFields,
+            BillingProfile = discoveryTurn?.State.Profile ?? run.BillingProfile,
             UpdatedAt = DateTimeOffset.UtcNow
         };
 
         var savedExperience = await repository.SaveExperienceAsync(updatedExperience, experience.ETag, cancellationToken);
         var savedRun = await repository.SaveRunAsync(updatedRun, latestRun.ETag, cancellationToken);
+        if (discoveryTurn?.AnswerAccepted == true && agentContextService is not null)
+        {
+            await ShareBillingProfileAsync(billerId, savedRun.Id, discoveryTurn.State.Profile, cancellationToken);
+        }
         BillerExperienceTelemetry.ChatTurns.Add(1, new KeyValuePair<string, object?>("provider", draftGenerator.Provider));
         RecordTransition(run.State, nextState);
         LogChatCompleted(logger, billerId, savedRun.Id, savedRun.Step, nextState, draftGenerator.Provider);
-        return new OnboardingChatResponse(generated.Reply, Map(savedRun), Map(savedExperience), generated.GenerationMode);
+        return new OnboardingChatResponse(boundedReply, Map(savedRun), Map(savedExperience), generated.GenerationMode);
+    }
+
+    private async ValueTask ShareBillingProfileAsync(
+        string billerId,
+        string runId,
+        BillingProfile profile,
+        CancellationToken cancellationToken)
+    {
+        try
+        {
+            var snapshot = await agentContextService!.GetAsync(billerId, runId, cancellationToken);
+            await agentContextService.AppendAsync(billerId, runId, new AppendAgentContextRequest(
+                snapshot.Version,
+                profile.Confirmed ? AgentContextEntryKind.AcceptedArtifact : AgentContextEntryKind.CandidateArtifact,
+                "onboarding-agent",
+                "billing_discovery",
+                JsonSerializer.Serialize(profile),
+                []), cancellationToken);
+        }
+        catch (Exception exception)
+        {
+            // The typed run document remains authoritative. Context sharing is supplementary and
+            // must not erase a biller's accepted answer when an MCP consumer is unavailable.
+            LogBillingContextShareFailed(logger, billerId, runId, exception);
+        }
+    }
+
+    public async ValueTask<OnboardingSessionResponse> ReopenBillingQuestionAsync(
+        string billerId,
+        ReopenBillingQuestionRequest request,
+        CancellationToken cancellationToken)
+    {
+        if (string.IsNullOrWhiteSpace(request.QuestionId))
+        {
+            LogValidationError(logger, billerId, "question_id", "Question id is required.");
+            throw new ArgumentException("question_id is required.", nameof(request));
+        }
+
+        var run = await GetRequiredRunAsync(billerId, cancellationToken);
+        if (run.State is OnboardingSessionState.Approved or OnboardingSessionState.Publishing or OnboardingSessionState.Published)
+        {
+            LogValidationError(logger, billerId, "state", "Approved or published billing profiles cannot be reopened through onboarding chat.");
+            throw new ArgumentException("Only a draft billing profile can be edited.");
+        }
+
+        if (billingDiscovery is null)
+        {
+            throw new InvalidOperationException("Billing discovery is not configured.");
+        }
+        var reopened = billingDiscovery.Reopen(billerId, run.BillingProfile, request.QuestionId);
+        var saved = await repository.SaveRunAsync(run with
+        {
+            State = OnboardingSessionState.CollectingInformation,
+            MissingFields = reopened.MissingFields,
+            BillingProfile = reopened.Profile,
+            UpdatedAt = DateTimeOffset.UtcNow
+        }, run.ETag, cancellationToken);
+        return Map(saved);
     }
 
     public async ValueTask<ExperienceRevisionResponse> GetDraftAsync(string billerId, CancellationToken cancellationToken) =>
@@ -267,6 +343,19 @@ public sealed partial class BillerOnboardingService(
         {
             LogValidationError(logger, billerId, "revision", "The requested revision is not current.");
             throw new ArgumentException("The requested revision is not current.");
+        }
+
+        var discovery = billingDiscovery?.Inspect(run.BillingProfile);
+        if (discovery is not null && !discovery.Progress.IsComplete)
+        {
+            var finding = new ComplianceFinding(
+                "BILLING_DISCOVERY_INCOMPLETE",
+                $"Complete the billing interview before approval. Next required item: {discovery.CurrentQuestion?.Prompt}",
+                ComplianceFindingSeverity.Blocking);
+            LogBlockingFinding(logger, billerId, experience.Id, finding.Code, finding.Message);
+            throw new ExperienceValidationException(
+                "The billing policy is incomplete. Continue the chat and confirm category-specific cadence, state rules, and payment terms.",
+                [finding]);
         }
 
         var findings = ValidateDefinition(billerId, experience.Definition);
@@ -715,8 +804,12 @@ public sealed partial class BillerOnboardingService(
     private static BillerResponse Map(BillerRecord record) =>
         new(record.Id, record.Name, record.Slug, record.BillType, record.PostalCode, record.Website, record.Brand, record.Support, record.PaymentRails, record.Status, record.CreatedAt, record.Tier);
 
-    private static OnboardingSessionResponse Map(OnboardingRunRecord record) =>
-        new(record.Id, record.BillerId, record.State, record.MissingFields, record.UpdatedAt);
+    private OnboardingSessionResponse Map(OnboardingRunRecord record)
+    {
+        var discovery = billingDiscovery?.Inspect(record.BillingProfile);
+        return new(record.Id, record.BillerId, record.State, discovery?.MissingFields ?? record.MissingFields, record.UpdatedAt,
+            discovery?.Profile, discovery?.CurrentQuestion, discovery?.Progress);
+    }
 
     private static ExperienceRevisionResponse Map(ExperienceRecord record) =>
         new(record.BillerId, record.Id, record.Definition, record.State, record.CreatedAt, record.ApprovedAt, record.ETag, record.Findings);
@@ -816,6 +909,13 @@ public sealed partial class BillerOnboardingService(
         ILogger logger,
         string billerId,
         string operation,
+        Exception exception);
+
+    [LoggerMessage(1906, LogLevel.Error, "Sharing the billing profile through agent context failed for biller {BillerId}, run {RunId}; the typed profile remains persisted")]
+    private static partial void LogBillingContextShareFailed(
+        ILogger logger,
+        string billerId,
+        string runId,
         Exception exception);
 }
 

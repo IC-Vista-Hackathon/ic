@@ -48,7 +48,10 @@ public sealed record OnboardingSessionResponse(
     string BillerId,
     OnboardingSessionState State,
     IReadOnlyList<string> MissingFields,
-    DateTimeOffset UpdatedAt);
+    DateTimeOffset UpdatedAt,
+    Billing.BillingProfile? BillingProfile = null,
+    Billing.BillingDiscoveryQuestion? CurrentQuestion = null,
+    Billing.BillingDiscoveryProgress? DiscoveryProgress = null);
 
 public enum OnboardingSessionState
 {

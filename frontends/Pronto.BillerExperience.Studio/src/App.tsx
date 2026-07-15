@@ -6,7 +6,7 @@ import { trackEvent } from './insights';
 import { categorizeError } from './telemetryPolicy';
 import { logError, logEvent } from './telemetry';
 import { agentActivityMeta } from './agentActivityMeta';
-import type { AgentActivity, Deployment, ExperienceDefinition, ExperienceRevision } from './types';
+import type { AgentActivity, Deployment, ExperienceDefinition, ExperienceRevision, Session } from './types';
 
 const PUBLISH_FAILURE_MESSAGE = 'We could not publish your payer site. Please try again. If the problem continues, contact support.';
 
@@ -146,6 +146,7 @@ interface Lob {
   feeHandling: string;
   backendBillerId: string | null;
   backendDraft: ExperienceRevision | null;
+  backendSession: Session | null;
   deployment: Deployment | null;
 }
 
@@ -232,6 +233,7 @@ interface State {
   previewPaperlessEnrolled: boolean;
   backendBillerId: string | null;
   backendDraft: ExperienceRevision | null;
+  backendSession: Session | null;
   deployment: Deployment | null;
   publishing: boolean;
   publishError: { message: string; findings: ValidationFinding[]; reference?: string } | null;
@@ -424,7 +426,7 @@ const WIZARD_RESET: Partial<State> = {
   selfServiceHistory: true, selfServiceUpdate: true, feeHandling: 'absorb', aiApplied: false, aiRationale: {}, editingSection: null,
   setupPath: null, manualInvoiceTypes: [], manualInvoiceVolume: '', manualInvoiceNotes: '',
   csvFileName: null, importedFields: [], csvOverriddenFields: [], accountNumber: null,
-  backendBillerId: null, backendDraft: null, deployment: null, publishing: false, publishError: null,
+  backendBillerId: null, backendDraft: null, backendSession: null, deployment: null, publishing: false, publishError: null,
   agentActivity: [], activityConnection: 'idle', orchestrationError: null, analysisComplete: false,
   previewProposal: null, previewChatInput: '', previewChatBusy: false, previewChatError: null, previewChatReply: null, previewGenerationMode: null,
 };
@@ -451,7 +453,7 @@ const INITIAL_STATE: State = {
   statementTab: 'current', accountEmail: '', accountPassword: '',
   previewAutopayEnrolled: false, previewAutopayEnrolling: false, previewAutopaySource: 'existing', previewAutopayMethodType: 'card',
   previewPaperlessEnrolled: false,
-  backendBillerId: null, backendDraft: null, deployment: null, publishing: false, publishError: null,
+  backendBillerId: null, backendDraft: null, backendSession: null, deployment: null, publishing: false, publishError: null,
   agentActivity: [], activityConnection: 'idle', orchestrationError: null, analysisComplete: false,
   previewChatInput: '', previewChatBusy: false, previewChatError: null, previewProposal: null, previewChatReply: null, previewGenerationMode: null,
 };
@@ -753,7 +755,7 @@ export function App() {
           website,
         });
         billerId = created.biller.biller_id;
-        patch({ backendBillerId: billerId, backendDraft: created.draft });
+        patch({ backendBillerId: billerId, backendDraft: created.draft, backendSession: created.session });
       }
 
       events = new EventSource(activityUrl(billerId));
@@ -792,6 +794,8 @@ export function App() {
         brand: buildBrand(st),
         analyzeStage: 2,
         backendDraft: chat.draft,
+        backendSession: chat.session,
+        previewChatReply: chat.reply,
         acceptedMethods: chat.draft.definition.preferences?.accepted_methods ?? st.acceptedMethods,
         analysisComplete: true,
         activityConnection: 'idle',
@@ -832,13 +836,35 @@ export function App() {
     });
     events.onerror = () => patch({ activityConnection: 'disconnected' });
     try {
-      const response = await api.chat(s.backendBillerId,
-        `Modify the existing payer experience preview only as requested. Preserve existing payment rails. Request: ${s.previewChatInput.trim()}`);
-      patch({ previewChatBusy: false, previewProposal: response.draft, previewChatReply: response.reply, previewGenerationMode: response.generation_mode ?? null });
+      const discoveryActive = !!s.backendSession?.current_question;
+      const message = discoveryActive
+        ? s.previewChatInput.trim()
+        : `Modify the existing payer experience preview only as requested. Preserve existing payment rails. Request: ${s.previewChatInput.trim()}`;
+      const response = await api.chat(s.backendBillerId, message);
+      patch({
+        previewChatBusy: false,
+        backendSession: response.session,
+        backendDraft: discoveryActive ? response.draft : s.backendDraft,
+        previewProposal: discoveryActive ? null : response.draft,
+        previewChatInput: discoveryActive ? '' : s.previewChatInput,
+        previewChatReply: response.reply,
+        previewGenerationMode: response.generation_mode ?? null,
+      });
     } catch (caught) {
       logError('studio.preview_chat.failed', caught, { biller_id: s.backendBillerId });
       patch({ previewChatBusy: false, previewChatError: errorMessage(caught) });
     } finally { window.setTimeout(() => { events.close(); patch({ activityConnection: 'idle' }); }, 500); }
+  };
+  const reopenBillingQuestion = async (questionId: string) => {
+    if (!s.backendBillerId || s.previewChatBusy) return;
+    patch({ previewChatBusy: true, previewChatError: null, previewProposal: null });
+    try {
+      const session = await api.reopenBillingQuestion(s.backendBillerId, questionId);
+      patch({ backendSession: session, previewChatBusy: false, previewChatReply: session.current_question?.prompt ?? 'Answer reopened.', previewChatInput: '' });
+    } catch (caught) {
+      logError('studio.billing_discovery.reopen_failed', caught, { biller_id: s.backendBillerId, question_id: questionId });
+      patch({ previewChatBusy: false, previewChatError: errorMessage(caught) });
+    }
   };
   const acceptPreviewChange = () => patch(st => {
     const proposal = st.previewProposal;
@@ -923,6 +949,7 @@ export function App() {
       reminderChannel: st.reminderChannel, acceptedMethods: st.acceptedMethods, selfServiceHistory: st.selfServiceHistory, selfServiceUpdate: st.selfServiceUpdate, feeHandling: st.feeHandling,
       backendBillerId: st.backendBillerId,
       backendDraft: st.backendDraft,
+      backendSession: st.backendSession,
       deployment: st.deployment,
     };
     const exists = st.lobs.some((l) => l.id === lob.id);
@@ -1019,7 +1046,7 @@ export function App() {
       brand: lob.brand, compliance: lob.compliance, editingLobId: lob.id, agreedToCompliance: true, docs: lob.docs || [], newDocName: '', logoDataUrl: lob.logoDataUrl || null, logoFetchOk: false, extractedColors: null,
       guestCheckoutAllowed: lob.guestCheckoutAllowed, offerAutopay: lob.offerAutopay, enrollDuringPayment: lob.enrollDuringPayment, offerPaperless: lob.offerPaperless,
       reminderChannel: lob.reminderChannel, acceptedMethods: lob.acceptedMethods || ['card', 'ach'], selfServiceHistory: lob.selfServiceHistory, selfServiceUpdate: lob.selfServiceUpdate, feeHandling: lob.feeHandling, accountNumber: lob.accountNumber || null,
-      backendBillerId: lob.backendBillerId, backendDraft: lob.backendDraft, deployment: lob.deployment, publishing: false, publishError: null,
+      backendBillerId: lob.backendBillerId, backendDraft: lob.backendDraft, backendSession: lob.backendSession, deployment: lob.deployment, publishing: false, publishError: null,
       aiApplied: true, aiRationale: {}, editingSection: null,
     });
     checkLogoFetch(lob.website, !!lob.skipWebsite);
@@ -1029,7 +1056,7 @@ export function App() {
     patch({
       screen: 'preview', payerStep: 0, brand: lob.brand, compliance: lob.compliance, bizName: lob.bizName, vertical: lob.vertical, website: lob.website, skipWebsite: !!lob.skipWebsite, logoDataUrl: lob.logoDataUrl || null, logoFetchOk: false,
       guestCheckoutAllowed: lob.guestCheckoutAllowed, offerAutopay: lob.offerAutopay, enrollDuringPayment: lob.enrollDuringPayment, offerPaperless: lob.offerPaperless, acceptedMethods: lob.acceptedMethods || ['card', 'ach'], accountNumber: lob.accountNumber || null,
-      editingLobId: lob.id, backendBillerId: lob.backendBillerId, backendDraft: lob.backendDraft, deployment: lob.deployment, publishing: false, publishError: null,
+      editingLobId: lob.id, backendBillerId: lob.backendBillerId, backendDraft: lob.backendDraft, backendSession: lob.backendSession, deployment: lob.deployment, publishing: false, publishError: null,
       methodType: 'card', autopayOptIn: false, paperlessOptIn: false,
     });
     checkLogoFetch(lob.website, !!lob.skipWebsite);
@@ -1945,11 +1972,41 @@ export function App() {
           </div>
 
           <section style={css(`width:100%;max-width:${previewMaxWidth};background:#fff;border:1px solid var(--invoicecloud-surface-default-border);border-radius:14px;padding:var(--invoicecloud-spacing-m);margin-bottom:var(--invoicecloud-spacing-s);box-shadow:var(--invoicecloud-elevation-1)`)}>
-            <h3 style={css('font-size:16px;margin-bottom:4px')}>Extend this experience with the agent</h3>
-            <p style={css('font-size:13px;color:var(--invoicecloud-utility-neutral-70);margin-bottom:12px')}>Describe a change. The agent will propose a new revision; the preview changes only after you accept it.</p>
+            <h3 style={css('font-size:16px;margin-bottom:4px')}>{s.backendSession?.current_question ? 'Complete billing discovery with the agent' : 'Extend this experience with the agent'}</h3>
+            <p style={css('font-size:13px;color:var(--invoicecloud-utility-neutral-70);margin-bottom:12px')}>{s.backendSession?.current_question ? 'The server controls the required interview. The agent interprets your answer but cannot skip a category or invent policy.' : 'Describe a change. The agent will propose a new revision; the preview changes only after you accept it.'}</p>
+            {s.backendSession?.discovery_progress && (
+              <div style={css('margin-bottom:12px;padding:12px;border:1px solid var(--invoicecloud-surface-default-border);border-radius:10px;background:var(--invoicecloud-utility-neutral-10)')}>
+                <div style={css('display:flex;justify-content:space-between;align-items:center;gap:12px;margin-bottom:8px')}>
+                  <strong>Billing policy</strong>
+                  <span style={css(`font-size:12px;font-weight:700;color:${s.backendSession.discovery_progress.is_complete ? '#197d00' : 'var(--invoicecloud-primary)'}`)}>
+                    {s.backendSession.discovery_progress.completed} of {s.backendSession.discovery_progress.total} confirmed
+                  </span>
+                </div>
+                {s.backendSession.current_question && <div role="status" style={css('padding:9px 10px;border-left:3px solid var(--invoicecloud-primary);background:#fff;font-size:13px;margin-bottom:10px')}><strong>Next:</strong> {s.backendSession.current_question.prompt}</div>}
+                {(s.backendSession.billing_profile?.categories.length ?? 0) === 0 ? (
+                  <div style={css('font-size:12px;color:var(--invoicecloud-utility-neutral-70)')}>No billing categories confirmed yet.</div>
+                ) : (
+                  <div style={css('display:grid;gap:8px')}>
+                    {s.backendSession.billing_profile?.categories.map(category => (
+                      <div key={category.id} style={css('padding:9px;background:#fff;border:1px solid var(--invoicecloud-surface-default-border);border-radius:8px')}>
+                        <div style={css('display:flex;justify-content:space-between;gap:8px;align-items:center')}>
+                          <strong style={css('font-size:13px')}>{category.display_name}</strong>
+                          <button type="button" onClick={() => void reopenBillingQuestion(`billing.category.${category.id}.cadence`)} disabled={s.previewChatBusy} style={css('border:0;background:transparent;color:var(--invoicecloud-primary);font-size:12px;cursor:pointer')}>Edit cadence</button>
+                        </div>
+                        <div style={css('display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px;margin-top:6px;font-size:12px')}>
+                          <span><b>Cadence:</b> {category.cadence?.kind.replace('_', ' ') ?? 'Needs input'}</span>
+                          <span><b>Late/state:</b> {category.state_rules?.[0]?.description ?? 'Needs input'} {category.state_rules?.length ? <button type="button" onClick={() => void reopenBillingQuestion(`billing.category.${category.id}.state_rules`)} disabled={s.previewChatBusy} style={css('border:0;background:transparent;color:var(--invoicecloud-primary);font-size:11px;cursor:pointer')}>Edit</button> : null}</span>
+                          <span><b>Terms:</b> {category.payment_terms?.mode === 'installments_allowed' ? `Installments${category.payment_terms.maximum_installments ? ` (max ${category.payment_terms.maximum_installments})` : ''}` : category.payment_terms?.mode === 'pay_in_full' ? 'Pay in full' : 'Needs input'} {category.payment_terms ? <button type="button" onClick={() => void reopenBillingQuestion(`billing.category.${category.id}.payment_terms`)} disabled={s.previewChatBusy} style={css('border:0;background:transparent;color:var(--invoicecloud-primary);font-size:11px;cursor:pointer')}>Edit</button> : null}</span>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            )}
             <form onSubmit={submitPreviewChange} style={css('display:flex;gap:8px')}>
-              <input value={s.previewChatInput} onChange={event => patch({ previewChatInput: event.target.value })} disabled={s.previewChatBusy || !!s.previewProposal} placeholder="e.g. Make the heading friendlier and change the button to Pay later" style={css('flex:1;padding:11px 12px;border:1px solid var(--invoicecloud-surface-default-border);border-radius:8px;font-size:14px')} />
-              <button type="submit" disabled={s.previewChatBusy || !!s.previewProposal || !s.previewChatInput.trim()} style={css('border:0;border-radius:8px;padding:10px 16px;background:var(--invoicecloud-primary);color:#fff;font-weight:700;cursor:pointer')}>{s.previewChatBusy ? 'Working...' : 'Propose change'}</button>
+              <input value={s.previewChatInput} onChange={event => patch({ previewChatInput: event.target.value })} disabled={s.previewChatBusy || !!s.previewProposal} placeholder={s.backendSession?.current_question ? 'Answer the required question…' : 'e.g. Make the heading friendlier and change the button to Pay later'} style={css('flex:1;padding:11px 12px;border:1px solid var(--invoicecloud-surface-default-border);border-radius:8px;font-size:14px')} />
+              <button type="submit" disabled={s.previewChatBusy || !!s.previewProposal || !s.previewChatInput.trim()} style={css('border:0;border-radius:8px;padding:10px 16px;background:var(--invoicecloud-primary);color:#fff;font-weight:700;cursor:pointer')}>{s.previewChatBusy ? 'Working...' : s.backendSession?.current_question ? 'Send answer' : 'Propose change'}</button>
             </form>
             {s.previewChatError && <div role="alert" style={css('margin-top:10px;padding:10px;border-radius:8px;background:var(--invoicecloud-intent-error-background);color:var(--invoicecloud-intent-error)')}>{s.previewChatError}</div>}
             {s.previewGenerationMode && s.previewGenerationMode !== 'azure_ai' && (
