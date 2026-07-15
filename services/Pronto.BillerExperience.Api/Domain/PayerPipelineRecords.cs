@@ -14,7 +14,7 @@ namespace Pronto.BillerExperience.Api.Domain;
 /// plan is built from. Bill Intelligence produces this from <c>get_invoice</c>; Financial Planning
 /// reasons over it and never looks the invoice up itself.
 /// </summary>
-internal sealed record BillSummary(
+public sealed record BillSummary(
     string InvoiceId,
     int AmountCents,
     DateOnly DueDate,
@@ -29,7 +29,7 @@ internal sealed record BillSummary(
 /// selects a quote, it never computes fees — so the numbers the payer approves are the numbers the
 /// Payment Service will charge.
 /// </summary>
-internal sealed record PaymentPlan(
+public sealed record PaymentPlan(
     string Method,
     DateOnly? ScheduledFor,
     int FeeCents,

@@ -10,7 +10,7 @@ namespace Pronto.BillerExperience.Api.Application.Agents;
 /// (method + timing). It is a reasoning stage: it <em>selects</em> among quotes and explains the
 /// choice — it never computes fees and never moves money. See agents/financial-planning/instructions.md.
 /// </summary>
-internal interface IFinancialPlanningAgent
+public interface IFinancialPlanningAgent
 {
     /// <param name="quotes">
     /// Pre-fetched, server-authoritative quotes — one per enabled method — for <paramref name="bill"/>'s
@@ -35,7 +35,7 @@ internal interface IFinancialPlanningAgent
 /// </list>
 /// It reads fees only from the supplied quotes; it performs no fee arithmetic.
 /// </summary>
-internal sealed class DeterministicFinancialPlanningAgent : IFinancialPlanningAgent
+public sealed class DeterministicFinancialPlanningAgent : IFinancialPlanningAgent
 {
     /// <summary>A due date more than this many days out is worth scheduling for rather than paying now.</summary>
     private const int ScheduleThresholdDays = 3;
