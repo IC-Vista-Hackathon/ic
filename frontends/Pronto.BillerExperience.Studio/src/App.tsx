@@ -948,7 +948,7 @@ export function App() {
 
   const amount = s.amount;
   const total = amount + 2.5;
-  const cardDisabledForAutopay = isFlorida && s.autopayOptIn;
+  const nonBankDisabledForAutopay = isFlorida && s.autopayOptIn;
   const acceptedMethodTypes = s.acceptedMethods.length ? s.acceptedMethods : ['card', 'ach'];
   const ALL_METHOD_TYPES: { id: MethodType; label: string }[] = [
     { id: 'card', label: 'Card' },
@@ -959,7 +959,7 @@ export function App() {
   ];
   let methodTypesBase = ALL_METHOD_TYPES.filter((mt) => acceptedMethodTypes.includes(mt.id === 'bank' ? 'ach' : mt.id));
   if (!methodTypesBase.length) methodTypesBase = [{ id: 'card', label: 'Card' }, { id: 'bank', label: 'Bank account' }];
-  const methodTypes = methodTypesBase.map((mt) => { const disabled = mt.id === 'card' && cardDisabledForAutopay; return { ...mt, disabled, opacity: disabled ? 0.5 : 1, onSelect: disabled ? () => {} : () => selectMethodType(mt.id) }; });
+  const methodTypes = methodTypesBase.map((mt) => { const disabled = mt.id !== 'bank' && nonBankDisabledForAutopay; return { ...mt, disabled, opacity: disabled ? 0.5 : 1, onSelect: disabled ? () => {} : () => selectMethodType(mt.id) }; });
   const methodTypeIsWallet = (['applepay', 'googlepay', 'paypal'] as MethodType[]).includes(s.methodType);
   const methodTypeWalletLabel = ({ applepay: 'Apple Pay', googlepay: 'Google Pay', paypal: 'PayPal' } as Record<string, string>)[s.methodType] || '';
 
