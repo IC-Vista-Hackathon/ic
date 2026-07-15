@@ -4,6 +4,7 @@ using System.Text;
 using Pronto.Agentic.Orchestration.Abstractions;
 using Pronto.Agentic.Orchestration.Execution;
 using Pronto.BillerExperience.Api.Application;
+using Pronto.BillerExperience.Api.Application.Compliance;
 using Pronto.BillerExperience.Api.Infrastructure;
 using Pronto.BillerExperience.Api.Infrastructure.AI;
 using Pronto.BillerExperience.Api.Infrastructure.Persistence;
@@ -103,6 +104,57 @@ public sealed class BillerOnboardingServiceTests
         var second = await service.PublishAsync(created.Biller.BillerId, request, CancellationToken.None);
 
         Assert.Equal(first.DeploymentId, second.DeploymentId);
+    }
+
+    [Fact]
+    public async Task PublishRevalidatesTheExactApprovedRevision()
+    {
+        var compliance = new RecordingComplianceReviewService();
+        var service = CreateService(complianceReviewService: compliance);
+        var created = await service.CreateAsync(CreateRequest(), CancellationToken.None);
+        var chat = await service.SendMessageAsync(
+            created.Biller.BillerId,
+            new("Use #174A5B and get ready to publish."),
+            CancellationToken.None);
+        var approved = await service.ApproveAsync(
+            created.Biller.BillerId,
+            new(chat.Draft!.Revision, "test-user"),
+            CancellationToken.None);
+
+        await service.PublishAsync(
+            created.Biller.BillerId,
+            new(created.Biller.BillerId, approved.Revision),
+            CancellationToken.None);
+
+        var publish = Assert.Single(compliance.Reviews, review => review.Stage == ComplianceReviewStage.Publish);
+        Assert.Equal(approved.Revision, chat.Draft.Revision);
+        Assert.Equal("#174A5B", publish.Definition.Brand.PrimaryColor);
+        Assert.Equal(created.Biller.BillerId, publish.Definition.BillerId);
+    }
+
+    [Fact]
+    public async Task PublishFailsWhenRevalidationFindsANewBlockingIssue()
+    {
+        var compliance = new RecordingComplianceReviewService(blockPublish: true);
+        var service = CreateService(complianceReviewService: compliance);
+        var created = await service.CreateAsync(CreateRequest(), CancellationToken.None);
+        var chat = await service.SendMessageAsync(
+            created.Biller.BillerId,
+            new("Ready for review"),
+            CancellationToken.None);
+        var approved = await service.ApproveAsync(
+            created.Biller.BillerId,
+            new(chat.Draft!.Revision, "test-user"),
+            CancellationToken.None);
+
+        var exception = await Assert.ThrowsAsync<ArgumentException>(async () =>
+            await service.PublishAsync(
+                created.Biller.BillerId,
+                new(created.Biller.BillerId, approved.Revision),
+                CancellationToken.None));
+
+        Assert.Contains("Blocking validation findings", exception.Message, StringComparison.Ordinal);
+        Assert.Contains(compliance.Reviews, review => review.Stage == ComplianceReviewStage.Publish);
     }
 
     [Fact]
@@ -223,12 +275,14 @@ public sealed class BillerOnboardingServiceTests
         IOrchestrationRunner? runner = null,
         IExperienceDraftGenerator? generator = null,
         ILogger<BillerOnboardingService>? logger = null,
-        IBillerResearchCoordinator? researchCoordinator = null)
+        IBillerResearchCoordinator? researchCoordinator = null,
+        IComplianceReviewService? complianceReviewService = null)
     {
         var repository = new InMemoryBillerExperienceRepository();
         generator ??= new DeterministicExperienceDraftGenerator(NullLogger<DeterministicExperienceDraftGenerator>.Instance);
         return new(repository, generator, runner ?? new OrchestrationRunner(),
-            logger ?? NullLogger<BillerOnboardingService>.Instance, researchCoordinator, seeder);
+            logger ?? NullLogger<BillerOnboardingService>.Instance, researchCoordinator, seeder,
+            complianceReviewService: complianceReviewService);
     }
 
     private static CreateBillerRequest CreateRequest() =>
@@ -322,6 +376,25 @@ public sealed class BillerOnboardingServiceTests
             BillerResearchRequest request,
             ResearchExecutionContext? executionContext = null,
             CancellationToken cancellationToken = default) => Task.FromResult(response);
+    }
+
+    private sealed class RecordingComplianceReviewService(bool blockPublish = false) : IComplianceReviewService
+    {
+        public List<(ComplianceReviewStage Stage, BillerExperienceDefinition Definition)> Reviews { get; } = [];
+
+        public ValueTask<IReadOnlyList<ComplianceFinding>> ReviewAsync(
+            Pronto.BillerExperience.Api.Domain.BillerRecord biller,
+            BillerExperienceDefinition definition,
+            ComplianceReviewStage stage,
+            CancellationToken cancellationToken)
+        {
+            Reviews.Add((stage, definition));
+            IReadOnlyList<ComplianceFinding> findings =
+                blockPublish && stage == ComplianceReviewStage.Publish
+                    ? [new("PUBLISH_REVALIDATION_FAILED", "Publish-time review failed.", ComplianceFindingSeverity.Blocking)]
+                    : [];
+            return ValueTask.FromResult(findings);
+        }
     }
 
     private sealed class RecordingLogger<T> : ILogger<T>

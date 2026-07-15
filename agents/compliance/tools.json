@@ -1,22 +1,9 @@
 {
   "tools": [
     {
-      "type": "function",
-      "function": {
-        "name": "run_compliance_check",
-        "description": "Evaluate a BillerConfiguration against publish policy (fee disclosure, required text, payment-method rules) and return structured pass/fail findings. Backed by the rules engine. This evaluates only; it does not persist the 'compliance' field or publish — the publish endpoint re-runs this server-side and writes the result itself.",
-        "parameters": {
-          "type": "object",
-          "properties": {
-            "config": {
-              "type": "object",
-              "description": "The BillerConfiguration version to evaluate.",
-              "additionalProperties": true
-            }
-          },
-          "required": ["config"]
-        }
-      }
+      "type": "file_search",
+      "name": "compliance_knowledge",
+      "description": "Search the versioned federal and state compliance corpus. The provisioning workflow binds this tool to the active compliance-knowledge vector store."
     }
   ]
 }

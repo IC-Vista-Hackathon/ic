@@ -7,9 +7,11 @@ using Azure.Monitor.OpenTelemetry.AspNetCore;
 using Azure.Storage.Blobs;
 using Pronto.BillerExperience.Api;
 using Pronto.BillerExperience.Api.Application;
+using Pronto.BillerExperience.Api.Application.Compliance;
 using Pronto.BillerExperience.Api.Configuration;
 using Pronto.BillerExperience.Api.Infrastructure;
 using Pronto.BillerExperience.Api.Infrastructure.AI;
+using Pronto.BillerExperience.Api.Infrastructure.Compliance;
 using Pronto.BillerExperience.Api.Infrastructure.Persistence;
 using Pronto.BillerExperience.Api.Infrastructure.Mcp;
 using Pronto.BillerExperience.Api.Infrastructure.Publication;
@@ -44,6 +46,7 @@ builder.Services.AddSingleton<BillerOnboardingService>();
 builder.Services.AddSingleton<AgentContextService>();
 builder.Services.AddSingleton(TimeProvider.System);
 builder.Services.AddSingleton<AgentContextCapabilityService>();
+builder.Services.AddSingleton<CompliancePolicyEngine>();
 builder.Services.AddSingleton<IAgentContextCapabilityIssuer>(services =>
     services.GetRequiredService<AgentContextCapabilityService>());
 builder.Services.AddMcpServer()
@@ -73,6 +76,11 @@ if (!string.IsNullOrWhiteSpace(options.Research.FoundryProjectEndpoint))
 }
 else
 {
+    if (!string.IsNullOrWhiteSpace(options.Compliance.FoundryAgentId))
+    {
+        throw new InvalidOperationException(
+            "BillerExperience:Research:FoundryProjectEndpoint is required when BillerExperience:Compliance:FoundryAgentId is configured.");
+    }
     builder.Services.AddSingleton<IResearchAgentCatalog, LocalResearchAgentCatalog>();
     builder.Services.AddSingleton<IResearchAgentDispatcher, SameSiteResearchAgentDispatcher>();
     builder.Services.AddSingleton<IBillerResearchCoordinator>(services => new BillerResearchCoordinator(
@@ -82,6 +90,15 @@ else
         services.GetRequiredService<ILogger<BillerResearchCoordinator>>(),
         capabilityIssuer: services.GetRequiredService<IAgentContextCapabilityIssuer>()));
 }
+if (!string.IsNullOrWhiteSpace(options.Compliance.FoundryAgentId))
+{
+    builder.Services.AddSingleton<IComplianceKnowledgeReviewer, FoundryComplianceKnowledgeReviewer>();
+}
+builder.Services.AddSingleton<IComplianceReviewService>(services => new ComplianceReviewService(
+    services.GetRequiredService<CompliancePolicyEngine>(),
+    services.GetRequiredService<Microsoft.Extensions.Options.IOptions<BillerExperienceOptions>>(),
+    services.GetRequiredService<ILogger<ComplianceReviewService>>(),
+    services.GetService<IComplianceKnowledgeReviewer>()));
 if (Uri.TryCreate(options.SupportingServices.InvoiceBaseUrl, UriKind.Absolute, out var invoiceBaseUri))
 {
     builder.Services.AddHttpClient("invoice-seeder", client => client.BaseAddress = invoiceBaseUri);

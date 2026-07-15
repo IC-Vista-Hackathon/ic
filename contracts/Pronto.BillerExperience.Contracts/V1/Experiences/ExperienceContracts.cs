@@ -94,7 +94,11 @@ public sealed record ComplianceFinding(
     string Code,
     string Message,
     ComplianceFindingSeverity Severity,
-    bool RequiresReview = true);
+    bool RequiresReview = true,
+    string? FieldPath = null,
+    string? Jurisdiction = null,
+    IReadOnlyList<Uri>? Sources = null,
+    string? PolicyVersion = null);
 
 public enum ComplianceFindingSeverity
 {

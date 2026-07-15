@@ -82,7 +82,7 @@ internal sealed partial class BillerExperienceChatWorkflow(
             (result, _, token) => accessibilityAgent.ReviewAsync(result.Definition, token), input.EventSink, logger);
         var complianceStep = new ObservableOrchestrationStep<DraftGenerationResult, IReadOnlyList<ComplianceFinding>>(
             "compliance", "Compliance", "Checking payment capabilities and required review guidance",
-            (result, _, token) => complianceAgent.ReviewAsync(input.Biller.Id, result.Definition, token),
+            (result, _, token) => complianceAgent.ReviewAsync(input.Biller, result.Definition, token),
             input.EventSink, logger);
         var accessibilityTask = accessibilityStep.ExecuteAsync(generated, context, cancellationToken).AsTask();
         var complianceTask = complianceStep.ExecuteAsync(generated, context, cancellationToken).AsTask();
