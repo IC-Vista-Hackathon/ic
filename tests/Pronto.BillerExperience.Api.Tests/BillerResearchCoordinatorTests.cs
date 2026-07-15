@@ -73,6 +73,7 @@ public sealed class BillerResearchCoordinatorTests
 
         Assert.Contains(sink.Events, item => item.AgentId == "eligible" && item.Status == OrchestrationEventStatus.Discovered);
         Assert.Contains(sink.Events, item => item.AgentId == "rejected" && item.Status == OrchestrationEventStatus.Discovered && item.Summary.Contains("not approved"));
+        Assert.Contains(sink.Events, item => item.AgentId == "rejected" && item.Status == OrchestrationEventStatus.Skipped && item.ErrorCode == "research.agent_ineligible");
         Assert.Contains(sink.Events, item => item.AgentId == "eligible" && item.Status == OrchestrationEventStatus.Running);
         Assert.Contains(sink.Events, item => item.AgentId == "eligible" && item.Status == OrchestrationEventStatus.Completed && item.DurationMs >= 0);
         Assert.DoesNotContain(sink.Events, item => item.AgentId == "rejected" && item.Status == OrchestrationEventStatus.Running);

@@ -23,7 +23,10 @@ public sealed class FoundryAgentReconcilerTests
 
         await reconciler.ReconcileAsync(CancellationToken.None);
 
+        Assert.Equal(3, gateway.Created.Count(item => item.Capability == "biller_research"));
         Assert.Contains(gateway.Created, item => item.Name == "biller-research" && item.Capability == "biller_research");
+        Assert.Contains(gateway.Created, item => item.Name == "biller-brand-research" && item.Capability == "biller_research");
+        Assert.Contains(gateway.Created, item => item.Name == "biller-payment-policy-research" && item.Capability == "biller_research");
         Assert.All(gateway.Created, item => Assert.Equal(64, item.Fingerprint.Length));
     }
 

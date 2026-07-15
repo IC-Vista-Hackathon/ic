@@ -191,6 +191,9 @@ public sealed partial class FoundryResearchAgentAdapter(
                 $"Foundry output contained {candidateFacts.Count} candidate facts but none had valid HTTPS citations.");
         }
 
+        LogParsedCitedFacts(logger, agentId, facts.Length, sources.Length, output.Citations.Count,
+            Activity.Current?.TraceId.ToString());
+
         return new BillerResearchResponse(ResearchOutcome.Completed, facts, sources, document.Warnings ?? []);
     }
 
@@ -214,6 +217,9 @@ public sealed partial class FoundryResearchAgentAdapter(
 
     [LoggerMessage(2677, LogLevel.Warning, "Foundry agent {AgentId} returned no citable research facts with {CitationCount} SDK citations; trace {TraceId}")]
     private static partial void LogNoCitedFacts(ILogger logger, string agentId, int citationCount, string? traceId);
+
+    [LoggerMessage(2678, LogLevel.Information, "Parsed {FactCount} cited JSON facts and {SourceCount} total sources from Foundry agent {AgentId}; {SdkCitationCount} sources came from SDK-native citations; trace {TraceId}")]
+    private static partial void LogParsedCitedFacts(ILogger logger, string agentId, int factCount, int sourceCount, int sdkCitationCount, string? traceId);
 
     private sealed record FoundryResearchDocument(
         IReadOnlyList<FoundryFactDocument>? Facts,

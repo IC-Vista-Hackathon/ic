@@ -24,7 +24,9 @@ workflow can proceed. No prompt-defined agent is the system orchestrator.
 |---|---|---|
 | onboarding | Biller — lead experience agent for chat-driven configuration | gpt-5.4 |
 | research-coordinator | Biller — consolidates independently gathered cited results | gpt-5.4-mini |
-| biller-research | Biller — extract brand/facts from the biller's website | gpt-5.4-mini |
+| biller-research | Biller — general public identity and payment-context research | gpt-5.4-mini |
+| biller-brand-research | Biller — first-party brand evidence specialist | gpt-5.4-mini |
+| biller-payment-policy-research | Biller — public billing and payment-policy evidence specialist | gpt-5.4-mini |
 | aesthetics-accessibility | Biller — review generated experience (contrast, WCAG) | gpt-5.4-mini |
 | compliance | Biller — policy check, gates publish | gpt-5.4-mini |
 | bill-intelligence | Payer — find and explain the bill | gpt-5.4-mini |

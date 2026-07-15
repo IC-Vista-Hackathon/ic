@@ -46,14 +46,25 @@ public sealed partial class BillerResearchCoordinator(
         foreach (var agent in discovered)
         {
             var eligible = IsEligible(agent, _options.AllowedAgentIds);
+            var eligibilitySummary = eligible
+                ? $"Discovered approved {agent.Provider} agent with capability {_options.RequiredCapability}."
+                : DescribeIneligibility(agent, _options.AllowedAgentIds);
             await PublishActivityAsync(
                 executionContext,
                 agent,
                 OrchestrationEventStatus.Discovered,
-                eligible
-                    ? $"Discovered approved {agent.Provider} agent with capability {_options.RequiredCapability}."
-                    : DescribeIneligibility(agent, _options.AllowedAgentIds),
+                eligibilitySummary,
                 cancellationToken: cancellationToken);
+            if (!eligible)
+            {
+                await PublishActivityAsync(
+                    executionContext,
+                    agent,
+                    OrchestrationEventStatus.Skipped,
+                    eligibilitySummary,
+                    "research.agent_ineligible",
+                    cancellationToken: cancellationToken);
+            }
         }
 
         var allowlist = _options.AllowedAgentIds.ToHashSet(StringComparer.OrdinalIgnoreCase);
@@ -349,7 +360,7 @@ public sealed partial class BillerResearchCoordinator(
         if (!agent.Capabilities.Any(capability =>
                 capability.Equals(_options.RequiredCapability, StringComparison.OrdinalIgnoreCase)))
             reasons.Add($"missing capability {_options.RequiredCapability}");
-        return $"Discovered {agent.Provider} agent; not invoked ({string.Join(", ", reasons)}).";
+        return $"Available in the {agent.Provider} inventory; not invoked ({string.Join(", ", reasons)}).";
     }
 
     private async ValueTask PublishActivityAsync(

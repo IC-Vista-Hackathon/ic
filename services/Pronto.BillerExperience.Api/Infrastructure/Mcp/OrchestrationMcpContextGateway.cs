@@ -1,5 +1,6 @@
 using System.Diagnostics;
 using System.Text.Json;
+using System.Text.Json.Serialization;
 using Microsoft.Extensions.Options;
 using ModelContextProtocol.Client;
 using ModelContextProtocol.Protocol;
@@ -19,7 +20,7 @@ public sealed partial class OrchestrationMcpContextGateway(
     ILoggerFactory loggerFactory,
     ILogger<OrchestrationMcpContextGateway> logger) : IAgentContextMcpGateway
 {
-    private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web);
+    private static readonly JsonSerializerOptions JsonOptions = CreateJsonOptions();
     private readonly McpOptions _options = options.Value.Mcp;
 
     public Task<AgentContextSnapshot> GetAsync(
@@ -84,10 +85,7 @@ public sealed partial class OrchestrationMcpContextGateway(
 
             var structured = result.StructuredContent
                 ?? throw new InvalidOperationException($"MCP tool '{toolName}' returned no structured context.");
-            var snapshot = JsonSerializer.Deserialize<AgentContextSnapshot>(
-                    JsonSerializer.Serialize(structured, JsonOptions),
-                    JsonOptions)
-                ?? throw new JsonException($"MCP tool '{toolName}' returned an empty context snapshot.");
+            var snapshot = DeserializeSnapshot(structured, toolName);
             LogCompleted(logger, toolName, snapshot.BillerId, snapshot.RunId, snapshot.Version,
                 Stopwatch.GetElapsedTime(startedAt).TotalMilliseconds, Activity.Current?.TraceId.ToString());
             return snapshot;
@@ -98,6 +96,19 @@ public sealed partial class OrchestrationMcpContextGateway(
                 Activity.Current?.TraceId.ToString(), exception);
             throw;
         }
+    }
+
+    internal static AgentContextSnapshot DeserializeSnapshot(object structured, string toolName = "context") =>
+        JsonSerializer.Deserialize<AgentContextSnapshot>(
+            JsonSerializer.Serialize(structured, JsonOptions),
+            JsonOptions)
+        ?? throw new JsonException($"MCP tool '{toolName}' returned an empty context snapshot.");
+
+    private static JsonSerializerOptions CreateJsonOptions()
+    {
+        var jsonOptions = new JsonSerializerOptions(JsonSerializerDefaults.Web);
+        jsonOptions.Converters.Add(new JsonStringEnumConverter(JsonNamingPolicy.CamelCase, allowIntegerValues: false));
+        return jsonOptions;
     }
 
     [LoggerMessage(2760, LogLevel.Information, "Orchestration MCP {ToolName} completed for biller {BillerId}, run {RunId}, version {Version} in {ElapsedMs:F1} ms; trace {TraceId}")]
