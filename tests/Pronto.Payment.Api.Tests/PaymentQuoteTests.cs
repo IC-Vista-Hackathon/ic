@@ -12,7 +12,7 @@ using Xunit;
 namespace Pronto.Payment.Api.Tests;
 
 /// <summary>The quote a payer approves must equal what the payment then charges.</summary>
-public sealed class PaymentQuoteTests : IClassFixture<WebApplicationFactory<Program>>
+public sealed class PaymentQuoteTests : IClassFixture<TestingAppFactory>
 {
     private static readonly JsonSerializerOptions Wire = new(JsonSerializerDefaults.Web)
     {
@@ -23,7 +23,7 @@ public sealed class PaymentQuoteTests : IClassFixture<WebApplicationFactory<Prog
     private readonly FakeInvoiceClient fakeInvoices = new();
     private readonly HttpClient client;
 
-    public PaymentQuoteTests(WebApplicationFactory<Program> factory)
+    public PaymentQuoteTests(TestingAppFactory factory)
     {
         client = factory.WithWebHostBuilder(builder =>
             builder.ConfigureServices(services =>

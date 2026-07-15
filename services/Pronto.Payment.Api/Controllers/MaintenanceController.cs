@@ -1,5 +1,7 @@
 using Pronto.Payment.Api.Storage;
 using Pronto.ServiceDefaults.Errors;
+using Pronto.ServiceDefaults.Security;
+using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.Extensions.Options;
 
@@ -8,10 +10,12 @@ namespace Pronto.Payment.Api.Controllers;
 /// <summary>
 /// Test-data maintenance. Lets functional tests running against a shared (Cosmos) environment
 /// delete the payments and purchases they create. Disabled unless <c>Maintenance:PurgeEnabled</c>
-/// is true (nonprod only) — returns 404 otherwise, so the route is invisible in prod.
+/// is true (nonprod only) — returns 404 otherwise, so the route is invisible in prod — and
+/// gated by the maintenance role on top.
 /// </summary>
 [ApiController]
 [Route("internal/test-data")]
+[Authorize(Policy = ServiceAuthorization.Maintenance)]
 public sealed class MaintenanceController : ControllerBase
 {
     private readonly IPaymentStore payments;

@@ -12,7 +12,7 @@ using Xunit;
 
 namespace Pronto.Payment.Api.Tests;
 
-public sealed class PaymentsApiTests : IClassFixture<WebApplicationFactory<Program>>
+public sealed class PaymentsApiTests : IClassFixture<TestingAppFactory>
 {
     private static readonly JsonSerializerOptions Wire = new(JsonSerializerDefaults.Web)
     {
@@ -24,7 +24,7 @@ public sealed class PaymentsApiTests : IClassFixture<WebApplicationFactory<Progr
     private readonly FakeBillerAccountClient fakeBillers = new();
     private readonly HttpClient client;
 
-    public PaymentsApiTests(WebApplicationFactory<Program> factory)
+    public PaymentsApiTests(TestingAppFactory factory)
     {
         client = factory.WithWebHostBuilder(builder =>
             builder.ConfigureServices(services =>

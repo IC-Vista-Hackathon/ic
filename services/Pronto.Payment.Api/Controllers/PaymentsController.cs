@@ -6,12 +6,15 @@ using Pronto.Payment.Api.Fees;
 using Pronto.Payment.Api.Storage;
 using Pronto.Payment.Contracts.V1.Payments;
 using Pronto.ServiceDefaults.Errors;
+using Pronto.ServiceDefaults.Security;
+using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 
 namespace Pronto.Payment.Api.Controllers;
 
 [ApiController]
 [Route("payments")]
+[Authorize]
 public sealed partial class PaymentsController : ControllerBase
 {
     private const string ConfirmationAlphabet = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
@@ -30,9 +33,12 @@ public sealed partial class PaymentsController : ControllerBase
     }
 
     [HttpPost]
+    [Authorize(Policy = ServiceAuthorization.PaymentsWrite)]
     public async Task<ActionResult<PaymentResponse>> Create(
         CreatePaymentRequest request, CancellationToken cancellationToken)
     {
+        BillerClaims.RequireBillerAccess(User, request.BillerId);
+
         var config = await configs.GetAsync(request.BillerId, cancellationToken).ConfigureAwait(false);
 
         if (!config.PaymentMethods.Contains(request.Method))
@@ -97,6 +103,7 @@ public sealed partial class PaymentsController : ControllerBase
         var requiredBillerId = RequireQueryValue(billerId, "biller_id");
         var requiredInvoiceId = RequireQueryValue(invoiceId, "invoice_id");
         var requiredMethod = RequireQueryValue(method, "method");
+        BillerClaims.RequireBillerAccess(User, requiredBillerId);
         var config = await configs.GetAsync(requiredBillerId, cancellationToken).ConfigureAwait(false);
         if (!config.PaymentMethods.Contains(requiredMethod))
         {
@@ -120,8 +127,11 @@ public sealed partial class PaymentsController : ControllerBase
     [HttpGet("{paymentId}")]
     public async Task<ActionResult<PaymentResponse>> Get(
         string paymentId, [FromQuery(Name = "biller_id")] string billerId, CancellationToken cancellationToken)
-        => await store.FindAsync(billerId, paymentId, cancellationToken).ConfigureAwait(false)
+    {
+        BillerClaims.RequireBillerAccess(User, billerId);
+        return await store.FindAsync(billerId, paymentId, cancellationToken).ConfigureAwait(false)
             ?? throw ServiceException.NotFound("not_found", $"payment {paymentId} not found");
+    }
 
     [HttpGet]
     public async Task<ActionResult<IReadOnlyList<PaymentResponse>>> List(
@@ -130,6 +140,7 @@ public sealed partial class PaymentsController : ControllerBase
         [FromQuery(Name = "invoice_id")] string? invoiceId,
         CancellationToken cancellationToken)
     {
+        BillerClaims.RequireBillerAccess(User, billerId);
         var results = await store.ListAsync(billerId, payerAccountId, invoiceId, cancellationToken).ConfigureAwait(false);
         LogPaymentsListed(logger, billerId, payerAccountId, invoiceId, results.Count, Activity.Current?.TraceId.ToString());
         return Ok(results);

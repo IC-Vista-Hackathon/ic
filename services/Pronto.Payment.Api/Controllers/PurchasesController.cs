@@ -2,12 +2,15 @@ using Pronto.Payment.Api.Clients;
 using Pronto.Payment.Api.Storage;
 using Pronto.Payment.Contracts.V1.Purchases;
 using Pronto.ServiceDefaults.Errors;
+using Pronto.ServiceDefaults.Security;
+using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 
 namespace Pronto.Payment.Api.Controllers;
 
 [ApiController]
 [Route("purchases")]
+[Authorize]
 public sealed class PurchasesController : ControllerBase
 {
     private readonly IPurchaseStore store;
@@ -23,10 +26,7 @@ public sealed class PurchasesController : ControllerBase
     public async Task<ActionResult<PurchaseResponse>> Create(
         CreatePurchaseRequest request, CancellationToken cancellationToken)
     {
-        if (string.IsNullOrWhiteSpace(request.BillerId))
-        {
-            throw ServiceException.BadRequest("biller_id_required", "biller_id is required");
-        }
+        BillerClaims.RequireBillerAccess(User, request.BillerId);
 
         if (string.IsNullOrWhiteSpace(request.IdempotencyKey))
         {
@@ -69,6 +69,9 @@ public sealed class PurchasesController : ControllerBase
     [HttpGet("{purchaseId}")]
     public async Task<ActionResult<PurchaseResponse>> Get(
         string purchaseId, [FromQuery(Name = "biller_id")] string billerId, CancellationToken cancellationToken)
-        => await store.FindAsync(billerId, purchaseId, cancellationToken).ConfigureAwait(false)
+    {
+        BillerClaims.RequireBillerAccess(User, billerId);
+        return await store.FindAsync(billerId, purchaseId, cancellationToken).ConfigureAwait(false)
             ?? throw ServiceException.NotFound("not_found", $"purchase {purchaseId} not found");
+    }
 }

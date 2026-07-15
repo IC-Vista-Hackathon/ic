@@ -4,12 +4,15 @@ using System.Diagnostics;
 using System.Net.Mail;
 using Pronto.PayerAccount.Contracts.V1.Payers;
 using Pronto.ServiceDefaults.Errors;
+using Pronto.ServiceDefaults.Security;
+using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 
 namespace Pronto.PayerAccount.Api.Controllers;
 
 [ApiController]
 [Route("payers")]
+[Authorize]
 public sealed partial class PayersController : ControllerBase
 {
     private readonly IPayerStore store;
@@ -25,14 +28,11 @@ public sealed partial class PayersController : ControllerBase
     }
 
     [HttpPost]
+    [Authorize(Policy = ServiceAuthorization.PayersWrite)]
     public async Task<ActionResult<PayerResponse>> Register(
         RegisterPayerRequest request, CancellationToken cancellationToken)
     {
-        if (string.IsNullOrWhiteSpace(request.BillerId))
-        {
-            throw ServiceException.BadRequest("validation_failed", "biller_id is required");
-        }
-
+        BillerClaims.RequireBillerAccess(User, request.BillerId);
         if (string.IsNullOrWhiteSpace(request.Name) || string.IsNullOrWhiteSpace(request.Email))
         {
             throw ServiceException.BadRequest("validation_failed", "name and email are required");
@@ -69,8 +69,11 @@ public sealed partial class PayersController : ControllerBase
     [HttpGet("{payerId}")]
     public async Task<ActionResult<PayerResponse>> Get(
         string payerId, [FromQuery(Name = "biller_id")] string billerId, CancellationToken cancellationToken)
-        => await store.FindAsync(billerId, payerId, cancellationToken).ConfigureAwait(false)
+    {
+        BillerClaims.RequireBillerAccess(User, billerId);
+        return await store.FindAsync(billerId, payerId, cancellationToken).ConfigureAwait(false)
             ?? throw ServiceException.NotFound("not_found", $"payer {payerId} not found");
+    }
 
     [HttpGet]
     public async Task<ActionResult<PayerResponse>> FindByAccount(
@@ -78,6 +81,7 @@ public sealed partial class PayersController : ControllerBase
         [FromQuery(Name = "account_number")] string accountNumber,
         CancellationToken cancellationToken)
     {
+        BillerClaims.RequireBillerAccess(User, billerId);
         var payer = await store.FindByAccountAsync(billerId, accountNumber, cancellationToken).ConfigureAwait(false)
             ?? throw ServiceException.NotFound("not_found", $"no payer is registered for account {accountNumber}");
         return Ok(payer);
@@ -89,12 +93,15 @@ public sealed partial class PayersController : ControllerBase
     /// are merged under optimistic concurrency in the store so none are lost.
     /// </summary>
     [HttpPatch("{payerId}/preferences")]
+    [Authorize(Policy = ServiceAuthorization.PayersWrite)]
     public async Task<ActionResult<PayerPreferences>> UpdatePreferences(
         string payerId,
         [FromQuery(Name = "biller_id")] string billerId,
         UpdatePayerPreferencesRequest request,
         CancellationToken cancellationToken)
     {
+        BillerClaims.RequireBillerAccess(User, billerId);
+
         var updated = await store.UpdatePreferencesAsync(
             billerId,
             payerId,
@@ -120,16 +127,14 @@ public sealed partial class PayersController : ControllerBase
     /// <c>POST /payers/{payerId}/accounts?biller_id=</c>.
     /// </summary>
     [HttpPost("{payerId}/accounts")]
+    [Authorize(Policy = ServiceAuthorization.PayersWrite)]
     public async Task<ActionResult<PayerResponse>> LinkAccounts(
         string payerId,
         [FromQuery(Name = "biller_id")] string billerId,
         LinkAccountsRequest request,
         CancellationToken cancellationToken)
     {
-        if (string.IsNullOrWhiteSpace(billerId))
-        {
-            throw ServiceException.BadRequest("validation_failed", "biller_id is required");
-        }
+        BillerClaims.RequireBillerAccess(User, billerId);
 
         var accountNumbers = NormalizeAccounts(request.AccountNumbers);
         if (accountNumbers.Count == 0)

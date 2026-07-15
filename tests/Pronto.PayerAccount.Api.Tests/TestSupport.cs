@@ -18,6 +18,7 @@ public sealed class PayerAccountApiFactory : WebApplicationFactory<Program>
 
     protected override void ConfigureWebHost(IWebHostBuilder builder)
     {
+        builder.UseEnvironment("Testing");
         builder.ConfigureTestServices(services =>
         {
             services.RemoveAll<IAccountOwnershipVerifier>();

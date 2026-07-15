@@ -4,6 +4,8 @@ using Pronto.Invoice.Api.Domain;
 using Pronto.Invoice.Api.Repositories;
 using Pronto.Invoice.Api.Seeding;
 using Pronto.Invoice.Contracts.V1.Invoices;
+using Pronto.ServiceDefaults.Security;
+using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 
 namespace Pronto.Invoice.Api.Controllers;
@@ -14,6 +16,7 @@ namespace Pronto.Invoice.Api.Controllers;
 /// </summary>
 [ApiController]
 [Route("billers/{billerId}/invoices")]
+[Authorize]
 public sealed partial class InvoicesController : ControllerBase
 {
     private readonly IInvoiceRepository _repository;
@@ -32,6 +35,7 @@ public sealed partial class InvoicesController : ControllerBase
     /// <c>POST /billers/{billerId}/invoices/seed</c>.
     /// </summary>
     [HttpPost("seed")]
+    [Authorize(Policy = ServiceAuthorization.InvoiceSeed)]
     [ProducesResponseType<SeedInvoicesResponse>(StatusCodes.Status201Created)]
     [ProducesResponseType<ApiError>(StatusCodes.Status400BadRequest)]
     public async Task<IActionResult> Seed(
@@ -43,6 +47,8 @@ public sealed partial class InvoicesController : ControllerBase
         {
             return BadRequest(ApiError.Of("invalid_biller", "biller_id is required."));
         }
+
+        BillerClaims.RequireBillerAccess(User, billerId);
 
         request ??= new SeedInvoicesRequest();
 
@@ -83,6 +89,8 @@ public sealed partial class InvoicesController : ControllerBase
             return BadRequest(ApiError.Of("invalid_biller", "biller_id is required."));
         }
 
+        BillerClaims.RequireBillerAccess(User, billerId);
+
         if (string.IsNullOrWhiteSpace(accountNumber))
         {
             return BadRequest(ApiError.Of("invalid_account_number", "account_number is required."));
@@ -110,6 +118,8 @@ public sealed partial class InvoicesController : ControllerBase
             return BadRequest(ApiError.Of("invalid_biller", "biller_id is required."));
         }
 
+        BillerClaims.RequireBillerAccess(User, billerId);
+
         var invoice = await _repository.FindAsync(billerId, invoiceId, cancellationToken);
         return invoice is null
             ? NotFound(ApiError.Of("not_found", $"invoice {invoiceId} not found."))
@@ -122,6 +132,7 @@ public sealed partial class InvoicesController : ControllerBase
     /// Idempotent per <c>payment_id</c>.
     /// </summary>
     [HttpPost("{invoiceId}/status")]
+    [Authorize(Policy = ServiceAuthorization.InvoiceStatusWrite)]
     [ProducesResponseType<InvoiceResponse>(StatusCodes.Status200OK)]
     [ProducesResponseType<ApiError>(StatusCodes.Status400BadRequest)]
     [ProducesResponseType<ApiError>(StatusCodes.Status404NotFound)]
@@ -136,6 +147,8 @@ public sealed partial class InvoicesController : ControllerBase
         {
             return BadRequest(ApiError.Of("invalid_biller", "biller_id is required."));
         }
+
+        BillerClaims.RequireBillerAccess(User, billerId);
 
         if (request.Status == Contracts.V1.Invoices.InvoiceStatus.Due)
         {
