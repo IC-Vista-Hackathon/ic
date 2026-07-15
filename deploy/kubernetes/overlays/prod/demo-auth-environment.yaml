@@ -1,0 +1,70 @@
+# HACKATHON DEMO ONLY — relax fail-closed production auth on the .NET API pods.
+#
+# The shared service defaults (libraries/Pronto.ServiceDefaults/Security/ServiceAuthentication.cs)
+# fail closed in the Production environment: they require a real Microsoft Entra identity provider
+# (`Authentication__Authority` + `Authentication__Audience` + `Authentication__ServiceScope`) and
+# refuse to start without one. This sandbox has no Entra app registration wired up, so on `main`
+# every API pod crash-loops on startup with:
+#   InvalidOperationException: Authentication:Authority must be configured ... fail closed.
+#
+# For the hackathon demo we don't need real bearer auth. Naming the environment `Staging` (any
+# non-Production name works) selects the built-in in-process test authentication scheme
+# (TestAuthenticationHandler) instead of Entra JWT bearer — the same supported path used locally
+# and in nonprod. No code or test changes, and the fail-closed guard itself is untouched (it still
+# protects a genuinely-Production deployment). `Staging` (rather than `Development`) keeps
+# Production-like middleware — no developer exception page / Swagger — and preserves real
+# payer-account ownership validation, which is gated on a configured endpoint, not the env name.
+#
+# To make this a real production deployment, delete this patch and provide the three
+# `Authentication__*` settings from a real Entra app registration.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: ic-biller-experience-api
+spec:
+  template:
+    spec:
+      containers:
+        - name: biller-experience-api
+          env:
+            - name: ASPNETCORE_ENVIRONMENT
+              value: Staging
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: ic-invoice-api
+spec:
+  template:
+    spec:
+      containers:
+        - name: invoice-api
+          env:
+            - name: ASPNETCORE_ENVIRONMENT
+              value: Staging
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: ic-payment-api
+spec:
+  template:
+    spec:
+      containers:
+        - name: payment-api
+          env:
+            - name: ASPNETCORE_ENVIRONMENT
+              value: Staging
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: ic-payer-account-api
+spec:
+  template:
+    spec:
+      containers:
+        - name: payer-account-api
+          env:
+            - name: ASPNETCORE_ENVIRONMENT
+              value: Staging
