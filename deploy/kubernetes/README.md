@@ -34,8 +34,10 @@ each pins every image to the commit SHA (`kustomize`/`newTag`) and runs
 same-repository PRs after a maintainer applies the `safe-to-deploy` label, and the shared
 namespace serializes those deployments. A new PR commit requires removing and reapplying the
 label so approval is tied to the reviewed head SHA. The CI identity must use cluster-user
-credentials plus the AKS RBAC Writer role; the workflows do not request AKS admin credentials
-or permit role-binding changes. Set the `SMOKE_PUBLISHED_EXPERIENCE_SLUG` repository variable to
+credentials plus the AKS RBAC Cluster Admin role (needed to apply the overlays' own
+Role/RoleBinding and Gateway API `HTTPRoute` resources); the workflows still authenticate via
+Entra/Azure RBAC and do not request the AKS `system:masters` administrator certificate. Set the
+`SMOKE_PUBLISHED_EXPERIENCE_SLUG` repository variable to
 a stable published fixture to exercise both its public API pointer and Router bundle. To apply
 manually:
 

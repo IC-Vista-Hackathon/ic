@@ -10,7 +10,7 @@ param workloadNamespace string = 'ic'
 param nonprodWorkloadNamespace string = 'ic-nonprod'
 param workloadServiceAccountName string = 'ic-workload'
 param publisherServiceAccountName string = 'biller-publisher'
-@description('Service-principal object IDs allowed to deploy Kubernetes workloads through Azure RBAC. These receive AKS Cluster User + AKS RBAC Writer, never cluster-admin.')
+@description('Service-principal object IDs allowed to deploy Kubernetes workloads through Azure RBAC. These receive AKS Cluster User + AKS RBAC Cluster Admin (needed to apply the overlays\' own Role/RoleBinding and Gateway API CRs), authenticated via Entra/Azure RBAC — never the system:masters administrator certificate.')
 param aksDeploymentPrincipalIds array = []
 param aksNodeCountMin int = 2
 param aksNodeCountMax int = 4
