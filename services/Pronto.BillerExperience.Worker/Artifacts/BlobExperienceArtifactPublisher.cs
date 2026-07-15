@@ -56,7 +56,11 @@ public sealed partial class BlobExperienceArtifactPublisher(
             {
                 throw;
             }
-            catch (Exception exception)
+            catch (InvalidOperationException)
+            {
+                throw;
+            }
+            catch (RequestFailedException exception)
             {
                 throw new ArtifactActivationException(
                     $"Could not verify active artifact for biller '{plan.BillerId}'.",
