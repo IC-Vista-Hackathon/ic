@@ -41,8 +41,14 @@ const isTerminalStatus = (status: AgentActivity['status']) => TERMINAL_AGENT_STA
 // "success" when nothing failed, nothing degraded, and no agent was left stranded in a
 // non-terminal state; otherwise it is reported as warnings/failed rather than success.
 function runOutcome(activity: AgentActivity[]): 'success' | 'warnings' | 'failed' {
-  if (activity.some(item => item.status === 'failed')) return 'failed';
-  if (activity.some(item => item.status === 'degraded' || !isTerminalStatus(item.status))) return 'warnings';
+  // Collapse the accumulated event history to the latest event per agent; the raw array keeps
+  // superseded statuses (discovered -> running -> completed) that would otherwise read as in-flight.
+  const latest = [...activity]
+    .reverse()
+    .filter((item, index, all) => all.findIndex(candidate => candidate.agent_id === item.agent_id) === index)
+    .reverse();
+  if (latest.some(item => item.status === 'failed')) return 'failed';
+  if (latest.some(item => item.status === 'degraded' || !isTerminalStatus(item.status))) return 'warnings';
   return 'success';
 }
 
