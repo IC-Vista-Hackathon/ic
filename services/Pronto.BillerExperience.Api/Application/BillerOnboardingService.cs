@@ -219,7 +219,7 @@ public sealed partial class BillerOnboardingService(
             // The two writes span separate documents (and Cosmos containers), so they can't share a
             // transaction. Compensate the already-approved experience back to its prior revision
             // state so we never leave an experience Approved while its run is not.
-            await CompensateExperienceAsync(experience, saved.ETag, cancellationToken);
+            await CompensateExperienceAsync(experience, saved.ETag);
             throw;
         }
         RecordTransition(run.State, OnboardingSessionState.Approved);
@@ -314,16 +314,16 @@ public sealed partial class BillerOnboardingService(
     /// <summary>
     /// Best-effort rollback of an experience write when a follow-on write in the same logical
     /// transition fails. Restores <paramref name="original"/> using the ETag produced by the write
-    /// being rolled back. A failed rollback is logged, not thrown, so the original failure surfaces.
+    /// being rolled back. Runs with <see cref="CancellationToken.None"/> because the triggering
+    /// failure may be the caller's cancellation — a cancelled rollback would leave the exact
+    /// inconsistency it exists to prevent. A failed rollback is logged, not thrown, so the original
+    /// failure surfaces.
     /// </summary>
-    private async ValueTask CompensateExperienceAsync(
-        ExperienceRecord original,
-        string? currentETag,
-        CancellationToken cancellationToken)
+    private async ValueTask CompensateExperienceAsync(ExperienceRecord original, string? currentETag)
     {
         try
         {
-            await repository.SaveExperienceAsync(original, currentETag, cancellationToken);
+            await repository.SaveExperienceAsync(original, currentETag, CancellationToken.None);
         }
         catch (Exception rollbackFailure)
         {
