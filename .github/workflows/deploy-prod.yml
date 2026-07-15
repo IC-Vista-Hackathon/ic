@@ -65,9 +65,12 @@ jobs:
             --resource-group "$AKS_RG" --app appi-ic-hack \
             --query connectionString -o tsv)"
           export APPLICATIONINSIGHTS_CONNECTION_STRING
+          # Pin the bundle-build Job image (a Worker env value, not a kustomize-managed
+          # container image) to the same merged SHA the matrix build pushed.
+          export BUILDER_IMAGE_TAG="${IMAGE_TAG}"
           for f in "${OVERLAY}/biller-experience.yaml" "${OVERLAY}/biller-experience-api-env-patch.yaml"; do
             # shellcheck disable=SC2016
-            envsubst '${APPLICATIONINSIGHTS_CONNECTION_STRING}' < "$f" > "$f.tmp" && mv "$f.tmp" "$f"
+            envsubst '${APPLICATIONINSIGHTS_CONNECTION_STRING} ${BUILDER_IMAGE_TAG}' < "$f" > "$f.tmp" && mv "$f.tmp" "$f"
           done
 
       - name: Deploy

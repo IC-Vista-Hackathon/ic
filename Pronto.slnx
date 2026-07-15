@@ -16,6 +16,7 @@
     <Project Path="services/Pronto.Invoice.Api/Pronto.Invoice.Api.csproj" />
     <Project Path="services/Pronto.Payment.Api/Pronto.Payment.Api.csproj" />
     <Project Path="services/Pronto.PayerAccount.Api/Pronto.PayerAccount.Api.csproj" />
+    <Project Path="services/Pronto.PayerExperience.Router/Pronto.PayerExperience.Router.csproj" />
   </Folder>
   <Folder Name="/tests/">
     <Project Path="tests/Pronto.Agentic.Orchestration.Tests/Pronto.Agentic.Orchestration.Tests.csproj" />
@@ -27,6 +28,7 @@
     <Project Path="tests/Pronto.Payment.Contracts.Tests/Pronto.Payment.Contracts.Tests.csproj" />
     <Project Path="tests/Pronto.PayerAccount.Api.Tests/Pronto.PayerAccount.Api.Tests.csproj" />
     <Project Path="tests/Pronto.PayerAccount.Contracts.Tests/Pronto.PayerAccount.Contracts.Tests.csproj" />
+    <Project Path="tests/Pronto.PayerExperience.Router.Tests/Pronto.PayerExperience.Router.Tests.csproj" />
     <Project Path="tests/Pronto.Persistence.Cosmos.Tests/Pronto.Persistence.Cosmos.Tests.csproj" />
   </Folder>
 </Solution>

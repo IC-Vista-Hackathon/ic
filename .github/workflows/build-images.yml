@@ -45,6 +45,10 @@ jobs:
             dockerfile: frontends/Pronto.BillerExperience.Studio/Dockerfile
           - image: ic-biller-payments-pwa
             dockerfile: frontends/Pronto.BillerPayments.Pwa/Dockerfile
+          - image: ic-payer-experience-router
+            dockerfile: services/Pronto.PayerExperience.Router/Dockerfile
+          - image: ic-payer-experience-builder
+            dockerfile: frontends/Pronto.PayerExperience.Builder/Dockerfile
           - image: ic-invoice-api
             dockerfile: services/Pronto.Invoice.Api/Dockerfile
           - image: ic-payment-api

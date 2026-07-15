@@ -1,6 +1,7 @@
 using System.Collections.Concurrent;
 using Pronto.BillerExperience.Contracts.V1.Experiences;
 using Pronto.BillerExperience.Worker.Artifacts;
+using Pronto.BillerExperience.Worker.Building;
 using Pronto.BillerExperience.Worker.Persistence;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
@@ -64,6 +65,8 @@ public sealed class PublicationWorkerTests
             repository,
             new PublicationArtifactPlanFactory(options),
             new AlwaysSucceedsPublisher(),
+            new NoOpBundleBuilder(),
+            options,
             NullLogger<PublicationProcessor>.Instance);
         return new PublicationWorker(
             repository, processor, options, NullLogger<PublicationWorker>.Instance);
