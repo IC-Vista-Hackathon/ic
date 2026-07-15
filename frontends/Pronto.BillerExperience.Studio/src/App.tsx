@@ -84,7 +84,7 @@ interface Lob {
   feeHandling: string;
 }
 
-type Screen = 'landing' | 'wizard' | 'analyzing' | 'results' | 'preview' | 'pricing' | 'dashboard';
+type Screen = 'landing' | 'wizard' | 'analyzing' | 'results' | 'preview' | 'dashboard';
 
 interface State {
   screen: Screen;
@@ -133,6 +133,10 @@ interface State {
   selfServiceHistory: boolean;
   selfServiceUpdate: boolean;
   feeHandling: string;
+  setupPath: 'upload' | 'manual' | null;
+  manualInvoiceTypes: string[];
+  manualInvoiceVolume: string;
+  manualInvoiceNotes: string;
   aiApplied: boolean;
   aiRationale: Record<string, string>;
   editingSection: string | null;
@@ -340,6 +344,7 @@ const WIZARD_RESET: Partial<State> = {
   colorChoice: 'auto', customPrimary: '#085368', customSecondary: '#18b4e9', customAccent: '#dffbfd', fontChoice: 'auto',
   guestCheckoutAllowed: true, offerAutopay: true, enrollDuringPayment: true, offerPaperless: true, reminderChannel: 'email', acceptedMethods: ['card', 'ach'],
   selfServiceHistory: true, selfServiceUpdate: true, feeHandling: 'absorb', aiApplied: false, aiRationale: {}, editingSection: null,
+  setupPath: null, manualInvoiceTypes: [], manualInvoiceVolume: '', manualInvoiceNotes: '',
   csvFileName: null, importedFields: [], csvOverriddenFields: [], accountNumber: null,
 };
 
@@ -356,6 +361,7 @@ const INITIAL_STATE: State = {
   guestCheckoutAllowed: true, offerAutopay: true, enrollDuringPayment: true, offerPaperless: true,
   reminderChannel: 'email', acceptedMethods: ['card', 'ach'],
   selfServiceHistory: true, selfServiceUpdate: true, feeHandling: 'absorb',
+  setupPath: null, manualInvoiceTypes: [], manualInvoiceVolume: '', manualInvoiceNotes: '',
   aiApplied: false, aiRationale: {}, editingSection: null,
   reviewEditingSection: null, reviewSaveError: false,
   csvFileName: null, importedFields: [], csvOverriddenFields: [], accountNumber: null,
@@ -526,23 +532,21 @@ export function App() {
 
   const setWebsite = (e: React.ChangeEvent<HTMLInputElement>) => { const website = e.target.value; patch({ website, skipWebsite: false, logoFetchOk: false, extractedColors: null }); checkLogoFetch(website, false); };
   const toggleSkipWebsite = () => { const skip = !s.skipWebsite; const website = skip ? '' : s.website; patch({ skipWebsite: skip, website, logoFetchOk: false }); checkLogoFetch(website, skip); };
+  const setBrandPathWebsite = () => { if (!s.skipWebsite) return; patch({ skipWebsite: false, logoFetchOk: false }); checkLogoFetch(s.website, false); };
+  const setBrandPathManual = () => { if (s.skipWebsite) return; patch({ skipWebsite: true, website: '', logoFetchOk: false }); checkLogoFetch('', true); };
   const setLogoFile = (e: React.ChangeEvent<HTMLInputElement>) => { const file = e.target.files && e.target.files[0]; if (!file) return; const reader = new FileReader(); reader.onload = () => patch({ logoDataUrl: reader.result as string }); reader.readAsDataURL(file); };
   const clearLogo = () => patch({ logoDataUrl: null });
+
+  const setSetupPathUpload = () => patch({ setupPath: 'upload' });
+  const setSetupPathManual = () => patch({ setupPath: 'manual' });
+  const toggleManualInvoiceType = (id: string) => patch((st) => ({ manualInvoiceTypes: st.manualInvoiceTypes.includes(id) ? st.manualInvoiceTypes.filter((x) => x !== id) : [...st.manualInvoiceTypes, id] }));
+  const setManualInvoiceVolume = (e: React.ChangeEvent<HTMLSelectElement>) => patch({ manualInvoiceVolume: e.target.value });
+  const setManualInvoiceNotes = (e: React.ChangeEvent<HTMLTextAreaElement>) => patch({ manualInvoiceNotes: e.target.value });
 
   const nextStep = () => {
     const completedStep = CHECKLIST_STEPS[s.wizardStep];
     if (completedStep) trackEvent('studio.checklist_step_completed', { step: completedStep, biller_id: s.backendBillerId ?? undefined });
-    patch((st) => {
-    const wizardStep = Math.min(4, st.wizardStep + 1);
-    if (wizardStep === 4 && !st.aiApplied) {
-      const rec = computeAiRecommendations(st.vertical, st.selectedStates, st.otherVerticalDescription);
-      const values: Partial<State> = { ...rec.values };
-      const rationale: Record<string, string> = { ...rec.rationale };
-      (st.csvOverriddenFields || []).forEach((f) => { delete (values as Record<string, unknown>)[f]; rationale[f] = 'Imported from your data file.'; });
-      return { wizardStep, ...values, aiApplied: true, aiRationale: rationale };
-    }
-    return { wizardStep };
-    });
+    patch((st) => ({ wizardStep: Math.min(2, st.wizardStep + 1) }));
   };
   const prevStep = () => patch((st) => ({ wizardStep: Math.max(0, st.wizardStep - 1) }));
 
@@ -586,7 +590,15 @@ export function App() {
 
   const runAnalysis = async () => {
     trackEvent('studio.checklist_step_completed', { step: 'customer_experience', biller_id: s.backendBillerId ?? undefined });
-    patch({ screen: 'analyzing', analyzeStage: 0, orchestrationError: null, agentActivity: [], analysisComplete: false });
+    let aiUpdates: Partial<State> = {};
+    if (!s.aiApplied) {
+      const rec = computeAiRecommendations(s.vertical, s.selectedStates, s.otherVerticalDescription);
+      const values: Partial<State> = { ...rec.values };
+      const rationale: Record<string, string> = { ...rec.rationale };
+      (s.csvOverriddenFields || []).forEach((f) => { delete (values as Record<string, unknown>)[f]; rationale[f] = 'Imported from your data file.'; });
+      aiUpdates = { ...values, aiApplied: true, aiRationale: rationale };
+    }
+    patch({ screen: 'analyzing', analyzeStage: 0, orchestrationError: null, agentActivity: [], analysisComplete: false, ...aiUpdates });
     later(() => patch({ analyzeStage: 1 }), 700);
     later(() => patch({ analyzeStage: 2 }), 1400);
     let events: EventSource | undefined;
@@ -661,7 +673,6 @@ export function App() {
   };
 
   const openReviewSection = (name: string) => patch({ reviewEditingSection: name });
-  const saveReviewSection = () => patch({ reviewEditingSection: null });
   const saveBrandSection = () => patch((st) => ({ reviewEditingSection: null, brand: buildBrand(st) }));
   const saveVerticalSection = () => patch((st) => ({ reviewEditingSection: null, compliance: recomputeCompliance(st) }));
   const saveLocationSection = () => patch((st) => ({ reviewEditingSection: null, compliance: recomputeCompliance(st) }));
@@ -758,10 +769,9 @@ export function App() {
   const closeStatement = () => patch({ viewingStatementId: null });
   const payFromStatement = () => patch({ viewingStatementId: null, payerStep: 1 });
 
-  const goPricing = () => patch({ screen: 'pricing', pendingLob: true });
-  const backToPreviewOrDashboard = () => patch((st) => ({ screen: st.accountCreated ? 'dashboard' : 'preview' }));
   const openSignup = () => patch({ modal: 'signup' });
   const openCheckout = () => { trackEvent('studio.purchase_started', { biller_id: s.backendBillerId ?? undefined }); patch({ modal: 'checkout' }); };
+  const publishFromPreview = () => { trackEvent('studio.purchase_started', { biller_id: s.backendBillerId ?? undefined }); patch({ pendingLob: true, modal: 'checkout' }); };
   const closeModal = () => patch({ modal: null });
 
   const saveLob = (published: boolean) => patch((st) => {
@@ -880,19 +890,41 @@ export function App() {
   const lineLabels = LINEITEM_LABELS[s.vertical ?? 'insurance'];
 
   const verticals = VERTICALS.map((v) => ({ ...v, iconSrc: asset(`assets/icons/${v.icon}.svg`), selected: v.id === s.vertical, onSelect: () => selectVertical(v.id) }));
+  const manualQuestionsComplete = s.setupPath !== 'manual' || (s.manualInvoiceTypes.length > 0 && s.manualInvoiceVolume !== '');
   const stepValid = [
     !!s.vertical && (s.vertical !== 'other' || s.otherVerticalDescription.trim().length > 3),
-    s.bizName.trim().length > 1 && s.selectedStates.length > 0,
-    true, true,
-    s.acceptedMethods.length > 0,
+    s.bizName.trim().length > 1 && s.selectedStates.length > 0 && !!s.setupPath && manualQuestionsComplete,
+    true,
   ];
   const wizardCanProceed = stepValid[s.wizardStep];
-  const isLastWizardStep = s.wizardStep === 4;
+  const isLastWizardStep = s.wizardStep === 2;
 
   const stateOptions = STATE_OPTIONS.filter((name) => name.toLowerCase().includes(s.stateSearch.trim().toLowerCase())).map((name) => ({ name, selected: s.selectedStates.includes(name), onToggle: () => toggleState(name) }));
-  const stepNames = ['Vertical', 'Business & Location', 'Brand Details', 'Import Data', 'Customer Experience'];
+  const stepNames = ['Vertical', 'Business Details', 'Brand Details', 'Review'];
   const stepLabels = stepNames.map((text, i) => ({ text, weight: i === s.wizardStep ? 700 : 400, color: i <= s.wizardStep ? PRIMARY : 'var(--invoicecloud-utility-neutral-50)' }));
-  const stepperPct = (s.wizardStep / 4) * 100;
+  const stepperPct = (s.wizardStep / (stepNames.length - 1)) * 100;
+
+  const MANUAL_INVOICE_TYPE_OPTIONS: Record<string, { id: string; label: string }[]> = {
+    insurance: [{ id: 'premium', label: 'Premium invoices' }, { id: 'claims', label: 'Claims payments' }, { id: 'renewal', label: 'Policy renewals' }, { id: 'other', label: 'Other' }],
+    utilities: [{ id: 'usage', label: 'Monthly usage bills' }, { id: 'deposit', label: 'Deposits / connection fees' }, { id: 'latefee', label: 'Late / reconnect fees' }, { id: 'other', label: 'Other' }],
+    tax: [{ id: 'property', label: 'Property tax bills' }, { id: 'courtfee', label: 'Court fees / fines' }, { id: 'municipal', label: 'Municipal fees' }, { id: 'other', label: 'Other' }],
+  };
+  const manualInvoiceTypeList = MANUAL_INVOICE_TYPE_OPTIONS[s.vertical ?? ''] ?? [{ id: 'onetime', label: 'One-time invoices' }, { id: 'recurring', label: 'Recurring / subscription' }, { id: 'installment', label: 'Installment plans' }, { id: 'other', label: 'Other' }];
+  const manualInvoiceTypeLabels: Record<string, string> = Object.fromEntries(manualInvoiceTypeList.map((it) => [it.id, it.label]));
+  const manualInvoiceTypeOptions = manualInvoiceTypeList.map((it) => ({ ...it, selected: s.manualInvoiceTypes.includes(it.id), onToggle: () => toggleManualInvoiceType(it.id) }));
+  const setupPathIsUpload = s.setupPath === 'upload';
+  const setupPathIsManual = s.setupPath === 'manual';
+  const setupPathBg = (active: boolean) => (active ? 'var(--invoicecloud-primary-tint)' : '#fff');
+  const setupPathBorder = (active: boolean) => (active ? 'var(--invoicecloud-primary)' : 'var(--invoicecloud-surface-default-border)');
+  const brandPathIsWebsite = !s.skipWebsite;
+  const setupPathSummaryLabel = s.setupPath === 'upload' ? 'Upload biller data' : s.setupPath === 'manual' ? 'Manually answer questions' : 'Not set';
+  const setupPathAiRationale = s.setupPath === 'upload' ? "We'll use your uploaded data to pre-fill your payment experience settings." : s.setupPath === 'manual' ? 'You answered manually \u2014 we still recommend AI defaults for anything left blank.' : 'Choose how you\u2019d like to configure your payment experience.';
+  const csvSummaryLabel = s.csvFileName ? `Loaded ${s.csvFileName}` : 'No file uploaded yet';
+  const invoiceTypesSummaryLabel = s.manualInvoiceTypes.length ? s.manualInvoiceTypes.map((id) => manualInvoiceTypeLabels[id] || id).join(', ') : 'Not set';
+  const invoiceVolumeSummaryLabel = ({ under100: 'Fewer than 100 / month', '100to1000': '100 \u2013 1,000 / month', over1000: 'Over 1,000 / month' } as Record<string, string>)[s.manualInvoiceVolume] || 'Not set';
+  const hasManualNotes = s.manualInvoiceNotes.trim().length > 0;
+  const verticalAiRationale = s.vertical === 'other' ? 'Based on your description, we\u2019re tailoring compliance checks and suggestions to your business.' : `We\u2019ll tailor terminology, fees and compliance checks for the ${(VERTICALS.find((v) => v.id === s.vertical) || { label: '' }).label} vertical.`;
+  const locationAiRationale = s.selectedStates.length ? `We pulled compliance requirements for ${s.selectedStates.length} state${s.selectedStates.length > 1 ? 's' : ''}, including any state-specific AutoPay restrictions.` : 'Select at least one state so we can surface the right compliance requirements.';
 
   const statesLabel = s.selectedStates.length ? s.selectedStates.join(', ') : 'your area';
   const analyzeLabels = [
@@ -993,8 +1025,6 @@ export function App() {
     { title: 'Matches your brand', desc: 'Scan your website to pull colors, logo and fonts automatically.', iconSrc: asset('assets/icons/Magic.svg') },
     { title: 'AutoPay & Paperless built in', desc: 'Payers can enroll in recurring billing and e-statements at checkout.', iconSrc: asset('assets/icons/AutoPay.svg') },
   ];
-  const pricingFeaturesDraft = ['Save your configuration', 'Edit anytime before launch', 'Not visible to payers yet'];
-  const pricingFeaturesPro = ['Everything in Draft', 'Live payer-facing payment link', 'AutoPay + Paperless enrollment built in', 'Compliance monitoring for your states'];
 
   const magic = <img src={asset('assets/icons/Magic.svg')} alt="" style={css('width:14px;height:14px;flex:none')} />;
 
@@ -1088,7 +1118,7 @@ export function App() {
 
             {s.wizardStep === 1 && (
               <>
-                <h2 style={css('margin-bottom:var(--invoicecloud-spacing-xs)')}>Tell us about the business</h2>
+                <h2 style={css('margin-bottom:var(--invoicecloud-spacing-xs)')}>Business Details</h2>
                 <p style={css('font-size:14px;color:var(--invoicecloud-utility-neutral-70);margin-bottom:var(--invoicecloud-spacing-m)')}>The states you operate in help us surface the right autopay, refund and fee-disclosure rules.</p>
                 <label style={css('display:block;font-size:13px;font-weight:500;margin-bottom:var(--invoicecloud-spacing-xxs)')}>Business name</label>
                 <input type="text" value={s.bizName} onChange={setBizName} placeholder="e.g. Riverside Water Co." style={css('width:100%;padding:12px 14px;border-radius:4px;border:1px solid var(--invoicecloud-surface-default-border);font-size:16px;margin-bottom:var(--invoicecloud-spacing-m)')} />
@@ -1102,18 +1132,78 @@ export function App() {
                     </button>
                   ))}
                 </div>
+
+                <label style={css('display:block;font-size:13px;font-weight:500;margin-top:var(--invoicecloud-spacing-l);margin-bottom:var(--invoicecloud-spacing-xs)')}>How would you like to set up your payment experience?</label>
+                <div style={css('display:grid;grid-template-columns:1fr 1fr;gap:var(--invoicecloud-spacing-s);margin-bottom:var(--invoicecloud-spacing-m)')}>
+                  <button type="button" onClick={setSetupPathUpload} style={css(`text-align:left;padding:var(--invoicecloud-spacing-s);border-radius:10px;cursor:pointer;background:${setupPathBg(setupPathIsUpload)};border:1.5px solid ${setupPathBorder(setupPathIsUpload)}`)}>
+                    <div style={css('font-weight:500;font-size:14px;margin-bottom:2px')}>Upload biller data</div>
+                    <div style={css('font-size:12px;color:var(--invoicecloud-utility-neutral-70)')}>Add any format of 30 days of invoice data and we'll scan it to understand how your business works.</div>
+                  </button>
+                  <button type="button" onClick={setSetupPathManual} style={css(`text-align:left;padding:var(--invoicecloud-spacing-s);border-radius:10px;cursor:pointer;background:${setupPathBg(setupPathIsManual)};border:1.5px solid ${setupPathBorder(setupPathIsManual)}`)}>
+                    <div style={css('font-weight:500;font-size:14px;margin-bottom:2px')}>Manually answer questions</div>
+                    <div style={css('font-size:12px;color:var(--invoicecloud-utility-neutral-70)')}>Tell us about your invoice types, volume and fee handling yourself.</div>
+                  </button>
+                </div>
+
+                {setupPathIsUpload && (
+                  <div style={css('border:1px solid var(--invoicecloud-surface-default-border);border-radius:10px;padding:var(--invoicecloud-spacing-s)')}>
+                    <input type="file" accept=".csv,.xlsx,.xls,.json,.yaml,.yml,.pdf" onChange={onCsvFile} style={css('font-size:13px;margin-bottom:var(--invoicecloud-spacing-s)')} />
+                    {s.csvFileName && <div style={css('font-size:13px;color:var(--invoicecloud-utility-neutral-70);margin-bottom:var(--invoicecloud-spacing-s)')}>Loaded <strong>{s.csvFileName}</strong></div>}
+                    {s.importedFields.length > 0 && (
+                      <div style={css('border:1px solid var(--invoicecloud-surface-default-border);border-radius:10px;padding:var(--invoicecloud-spacing-s);margin-bottom:var(--invoicecloud-spacing-s)')}>
+                        <div style={css('font-size:13px;font-weight:500;margin-bottom:var(--invoicecloud-spacing-xs)')}>Recognized values</div>
+                        {s.importedFields.map((im, i) => (
+                          <div key={i} style={css('display:flex;justify-content:space-between;font-size:13px;padding:4px 0')}>
+                            <span style={css('color:var(--invoicecloud-utility-neutral-70)')}>{im.label}</span><span style={css('font-weight:500')}>{im.value}</span>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                    <div style={css('font-size:12px;color:var(--invoicecloud-utility-neutral-60)')}>No file yet? We'll recommend settings for you instead.</div>
+                  </div>
+                )}
+
+                {setupPathIsManual && (
+                  <div style={css('border:1px solid var(--invoicecloud-surface-default-border);border-radius:10px;padding:var(--invoicecloud-spacing-s)')}>
+                    <label style={css('display:block;font-size:13px;font-weight:500;margin-bottom:var(--invoicecloud-spacing-xs)')}>What types of invoices do you send? <span style={css('color:var(--invoicecloud-intent-danger)')}>*</span></label>
+                    <div style={css('display:flex;flex-wrap:wrap;gap:var(--invoicecloud-spacing-xs);margin-bottom:var(--invoicecloud-spacing-m)')}>
+                      {manualInvoiceTypeOptions.map((it) => <button key={it.id} type="button" onClick={it.onToggle} style={css(`padding:8px 16px;border-radius:8px;font-size:13px;cursor:pointer;background:${selBg(it.selected)};border:1.5px solid ${selBorder(it.selected)}`)}>{it.label}</button>)}
+                    </div>
+                    <label style={css('display:block;font-size:13px;font-weight:500;margin-bottom:var(--invoicecloud-spacing-xs)')}>About how many invoices do you send per month? <span style={css('color:var(--invoicecloud-intent-danger)')}>*</span></label>
+                    <select value={s.manualInvoiceVolume} onChange={setManualInvoiceVolume} style={css('padding:10px 12px;border-radius:4px;border:1px solid var(--invoicecloud-surface-default-border);font-size:14px;margin-bottom:var(--invoicecloud-spacing-m)')}>
+                      <option value="">Select a range</option>
+                      <option value="under100">Fewer than 100</option>
+                      <option value="100to1000">100 &ndash; 1,000</option>
+                      <option value="over1000">Over 1,000</option>
+                    </select>
+                    <label style={css('display:block;font-size:13px;font-weight:500;margin-bottom:var(--invoicecloud-spacing-xs)')}>How would you like payment processing fees handled?</label>
+                    <div style={css('display:flex;flex-direction:column;gap:var(--invoicecloud-spacing-xs);margin-bottom:var(--invoicecloud-spacing-m)')}>
+                      {feeOptions.map((f) => <button key={f.id} type="button" onClick={f.onSelect} style={css(`text-align:left;padding:10px;border-radius:8px;font-size:13px;cursor:pointer;background:${selBg(f.selected)};border:1.5px solid ${selBorder(f.selected)}`)}>{f.label}</button>)}
+                    </div>
+                    <label style={css('display:block;font-size:13px;font-weight:500;margin-bottom:4px')}>Anything else we should know about your invoicing?</label>
+                    <textarea value={s.manualInvoiceNotes} onChange={setManualInvoiceNotes} placeholder="Optional" style={css('width:100%;min-height:60px;padding:12px 14px;border-radius:4px;border:1px solid var(--invoicecloud-surface-default-border);font-size:14px;font-family:var(--invoicecloud-font-family-primary)')}></textarea>
+                  </div>
+                )}
               </>
             )}
 
             {s.wizardStep === 2 && (
               <>
-                <h2 style={css('margin-bottom:var(--invoicecloud-spacing-xs)')}>Brand details</h2>
-                <p style={css('font-size:14px;color:var(--invoicecloud-utility-neutral-70);margin-bottom:var(--invoicecloud-spacing-m)')}>Got a website? We'll scan it for your logo, brand colors and fonts to match your preview to your existing brand.</p>
-                <input type="text" value={s.website} onChange={setWebsite} disabled={s.skipWebsite} placeholder="www.yourbusiness.com" style={css(`width:100%;padding:12px 14px;border-radius:4px;border:1px solid var(--invoicecloud-surface-default-border);font-size:16px;margin-bottom:var(--invoicecloud-spacing-s);opacity:${s.skipWebsite ? 0.5 : 1}`)} />
-                <label style={css('display:flex;align-items:center;gap:var(--invoicecloud-spacing-xs);font-size:14px;color:var(--invoicecloud-utility-neutral-70);cursor:pointer')}>
-                  <input type="checkbox" checked={s.skipWebsite} onChange={toggleSkipWebsite} />
-                  I don't have a website yet - use smart defaults for my vertical
-                </label>
+                <h2 style={css('margin-bottom:var(--invoicecloud-spacing-xs)')}>Brand Details</h2>
+                <p style={css('font-size:14px;color:var(--invoicecloud-utility-neutral-70);margin-bottom:var(--invoicecloud-spacing-m)')}>Match your preview to your existing brand, or style it yourself.</p>
+                <div style={css('display:grid;grid-template-columns:1fr 1fr;gap:var(--invoicecloud-spacing-s);margin-bottom:var(--invoicecloud-spacing-m)')}>
+                  <button type="button" onClick={setBrandPathWebsite} style={css(`text-align:left;padding:var(--invoicecloud-spacing-s);border-radius:10px;cursor:pointer;background:${setupPathBg(brandPathIsWebsite)};border:1.5px solid ${setupPathBorder(brandPathIsWebsite)}`)}>
+                    <div style={css('font-weight:500;font-size:14px;margin-bottom:2px')}>Input a website to match a brand</div>
+                    <div style={css('font-size:12px;color:var(--invoicecloud-utility-neutral-70)')}>We'll scan it for your logo, brand colors and fonts.</div>
+                  </button>
+                  <button type="button" onClick={setBrandPathManual} style={css(`text-align:left;padding:var(--invoicecloud-spacing-s);border-radius:10px;cursor:pointer;background:${setupPathBg(!brandPathIsWebsite)};border:1.5px solid ${setupPathBorder(!brandPathIsWebsite)}`)}>
+                    <div style={css('font-weight:500;font-size:14px;margin-bottom:2px')}>Manually select styling</div>
+                    <div style={css('font-size:12px;color:var(--invoicecloud-utility-neutral-70)')}>Upload a logo and pick your own colors and fonts.</div>
+                  </button>
+                </div>
+                {brandPathIsWebsite && (
+                  <input type="text" value={s.website} onChange={setWebsite} placeholder="www.yourbusiness.com" style={css('width:100%;padding:12px 14px;border-radius:4px;border:1px solid var(--invoicecloud-surface-default-border);font-size:16px;margin-bottom:var(--invoicecloud-spacing-s)')} />
+                )}
                 {s.skipWebsite && (
                   <>
                     <label style={css('display:block;font-size:13px;font-weight:500;margin-top:var(--invoicecloud-spacing-m);margin-bottom:4px')}>Upload your logo</label>
@@ -1151,143 +1241,6 @@ export function App() {
                     )}
                   </>
                 )}
-              </>
-            )}
-
-            {s.wizardStep === 3 && (
-              <>
-                <h2 style={css('margin-bottom:var(--invoicecloud-spacing-xs)')}>Import your data</h2>
-                <p style={css('font-size:14px;color:var(--invoicecloud-utility-neutral-70);margin-bottom:var(--invoicecloud-spacing-m)')}>Upload a CSV to pre-fill your payment experience settings. We'll match recognized columns automatically.</p>
-                <input type="file" accept=".csv" onChange={onCsvFile} style={css('font-size:13px;margin-bottom:var(--invoicecloud-spacing-s)')} />
-                {s.csvFileName && <div style={css('font-size:13px;color:var(--invoicecloud-utility-neutral-70);margin-bottom:var(--invoicecloud-spacing-s)')}>Loaded <strong>{s.csvFileName}</strong></div>}
-                {s.importedFields.length > 0 && (
-                  <>
-                    <div style={css('border:1px solid var(--invoicecloud-surface-default-border);border-radius:10px;padding:var(--invoicecloud-spacing-s);margin-bottom:var(--invoicecloud-spacing-s)')}>
-                      <div style={css('font-size:13px;font-weight:500;margin-bottom:var(--invoicecloud-spacing-xs)')}>Recognized values</div>
-                      {s.importedFields.map((im, i) => (
-                        <div key={i} style={css('display:flex;justify-content:space-between;font-size:13px;padding:4px 0')}>
-                          <span style={css('color:var(--invoicecloud-utility-neutral-70)')}>{im.label}</span><span style={css('font-weight:500')}>{im.value}</span>
-                        </div>
-                      ))}
-                    </div>
-                    <div style={css('font-size:12px;color:var(--invoicecloud-utility-neutral-60);margin-bottom:var(--invoicecloud-spacing-m)')}>These will pre-fill the Customer Payment Experience step - you can still edit each one.</div>
-                  </>
-                )}
-                <div style={css('font-size:13px;color:var(--invoicecloud-utility-neutral-60)')}>No file? Skip this step and we'll recommend settings for you.</div>
-              </>
-            )}
-
-            {s.wizardStep === 4 && (
-              <>
-                <h2 style={css('margin-bottom:var(--invoicecloud-spacing-xs)')}>Customer Payment Experience</h2>
-                <p style={css('font-size:14px;color:var(--invoicecloud-utility-neutral-70);margin-bottom:var(--invoicecloud-spacing-m)')}>Our AI agent picked settings for each category below based on your vertical and states. Click Edit to change any of them.</p>
-
-                <div style={cardStyle}>
-                  <div style={css('display:flex;justify-content:space-between;align-items:flex-start')}>
-                    <div style={css('font-size:14px;font-weight:500')}>Guest checkout</div>
-                    {editLink(() => patch({ editingSection: 'guest' }))}
-                  </div>
-                  <div style={css('font-size:14px;margin-top:4px')}>{guestCheckoutAllowedLabel}</div>
-                  {rationaleRow(s.aiRationale.guestCheckoutAllowed)}
-                  {s.editingSection === 'guest' && yesNo(() => patch({ guestCheckoutAllowed: true, editingSection: null }), () => patch({ guestCheckoutAllowed: false, editingSection: null }), s.guestCheckoutAllowed)}
-                </div>
-
-                <div style={cardStyle}>
-                  <div style={css('display:flex;justify-content:space-between;align-items:flex-start')}>
-                    <div style={css('font-size:14px;font-weight:500')}>AutoPay</div>
-                    {editLink(() => patch({ editingSection: 'autopay' }))}
-                  </div>
-                  <div style={css('font-size:14px;margin-top:4px')}>Offered: {offerAutopayLabel} - Enroll during payment: {enrollDuringPaymentLabel}</div>
-                  {rationaleRow(s.aiRationale.offerAutopay)}
-                  {s.editingSection === 'autopay' && (
-                    <>
-                      <div style={css('font-size:13px;font-weight:500;margin-top:var(--invoicecloud-spacing-s);margin-bottom:var(--invoicecloud-spacing-xs)')}>Offer AutoPay?</div>
-                      {yesNo(() => patch({ offerAutopay: true }), () => patch({ offerAutopay: false, editingSection: null }), s.offerAutopay, false)}
-                      {s.offerAutopay === true && (
-                        <>
-                          <div style={css('font-size:13px;font-weight:500;margin-top:var(--invoicecloud-spacing-s);margin-bottom:var(--invoicecloud-spacing-xs)')}>Enroll during payment?</div>
-                          {yesNo(() => patch({ enrollDuringPayment: true, editingSection: null }), () => patch({ enrollDuringPayment: false, editingSection: null }), s.enrollDuringPayment, false)}
-                          {isFlorida && <div style={css('background:var(--invoicecloud-intent-warning-background);border:1px solid var(--invoicecloud-intent-warning-border);border-radius:10px;padding:var(--invoicecloud-spacing-s);font-size:13px;color:var(--invoicecloud-intent-warning);margin-top:var(--invoicecloud-spacing-s)')}>Florida requires AutoPay enrollees to pay via bank account only - card enrollment will be restricted.</div>}
-                        </>
-                      )}
-                    </>
-                  )}
-                </div>
-
-                <div style={cardStyle}>
-                  <div style={css('display:flex;justify-content:space-between;align-items:flex-start')}>
-                    <div style={css('font-size:14px;font-weight:500')}>Paperless billing</div>
-                    {editLink(() => patch({ editingSection: 'paperless' }))}
-                  </div>
-                  <div style={css('font-size:14px;margin-top:4px')}>{offerPaperlessLabel}</div>
-                  {rationaleRow(s.aiRationale.offerPaperless)}
-                  {s.editingSection === 'paperless' && yesNo(() => patch({ offerPaperless: true, editingSection: null }), () => patch({ offerPaperless: false, editingSection: null }), s.offerPaperless)}
-                </div>
-
-                <div style={cardStyle}>
-                  <div style={css('display:flex;justify-content:space-between;align-items:flex-start')}>
-                    <div style={css('font-size:14px;font-weight:500')}>Payment reminders</div>
-                    {editLink(() => patch({ editingSection: 'reminders' }))}
-                  </div>
-                  <div style={css('font-size:14px;margin-top:4px')}>{reminderChannelLabel}</div>
-                  {rationaleRow(s.aiRationale.reminderChannel)}
-                  {s.editingSection === 'reminders' && (
-                    <div style={css('display:flex;flex-wrap:wrap;gap:var(--invoicecloud-spacing-xs);margin-top:var(--invoicecloud-spacing-s)')}>
-                      {reminderOptions.map((r) => <button key={r.id} type="button" onClick={r.onSelect} style={css(`padding:10px 18px;border-radius:8px;font-size:13px;cursor:pointer;background:${selBg(r.selected)};border:1.5px solid ${selBorder(r.selected)}`)}>{r.label}</button>)}
-                    </div>
-                  )}
-                </div>
-
-                <div style={cardStyle}>
-                  <div style={css('display:flex;justify-content:space-between;align-items:flex-start')}>
-                    <div style={css('font-size:14px;font-weight:500')}>Accepted payment methods</div>
-                    {editLink(() => patch({ editingSection: 'methods' }))}
-                  </div>
-                  <div style={css('font-size:14px;margin-top:4px')}>{acceptedMethodsLabel}</div>
-                  {rationaleRow(s.aiRationale.acceptedMethods)}
-                  {s.editingSection === 'methods' && (
-                    <>
-                      <div style={css('display:flex;flex-wrap:wrap;gap:var(--invoicecloud-spacing-xs);margin-top:var(--invoicecloud-spacing-s);margin-bottom:var(--invoicecloud-spacing-s)')}>
-                        {methodOptions.map((m) => <button key={m.id} type="button" onClick={m.onToggle} style={css(`padding:10px 18px;border-radius:8px;font-size:13px;cursor:pointer;background:${selBg(m.selected)};border:1.5px solid ${selBorder(m.selected)}`)}>{m.label}</button>)}
-                      </div>
-                      <button type="button" onClick={() => patch({ editingSection: null })} style={css('background:var(--invoicecloud-primary);color:#fff;border:none;border-radius:8px;padding:8px 16px;font-size:13px;font-weight:700;cursor:pointer')}>Done</button>
-                    </>
-                  )}
-                </div>
-
-                <div style={cardStyle}>
-                  <div style={css('display:flex;justify-content:space-between;align-items:flex-start')}>
-                    <div style={css('font-size:14px;font-weight:500')}>Self-service: billing history</div>
-                    {editLink(() => patch({ editingSection: 'history' }))}
-                  </div>
-                  <div style={css('font-size:14px;margin-top:4px')}>{selfServiceHistoryLabel}</div>
-                  {rationaleRow(s.aiRationale.selfServiceHistory)}
-                  {s.editingSection === 'history' && yesNo(() => patch({ selfServiceHistory: true, editingSection: null }), () => patch({ selfServiceHistory: false, editingSection: null }), s.selfServiceHistory)}
-                </div>
-
-                <div style={cardStyle}>
-                  <div style={css('display:flex;justify-content:space-between;align-items:flex-start')}>
-                    <div style={css('font-size:14px;font-weight:500')}>Self-service: account updates</div>
-                    {editLink(() => patch({ editingSection: 'update' }))}
-                  </div>
-                  <div style={css('font-size:14px;margin-top:4px')}>{selfServiceUpdateLabel}</div>
-                  {rationaleRow(s.aiRationale.selfServiceUpdate)}
-                  {s.editingSection === 'update' && yesNo(() => patch({ selfServiceUpdate: true, editingSection: null }), () => patch({ selfServiceUpdate: false, editingSection: null }), s.selfServiceUpdate)}
-                </div>
-
-                <div style={css('border:1px solid var(--invoicecloud-surface-default-border);border-radius:10px;padding:var(--invoicecloud-spacing-s)')}>
-                  <div style={css('display:flex;justify-content:space-between;align-items:flex-start')}>
-                    <div style={css('font-size:14px;font-weight:500')}>Payment processing fees</div>
-                    {editLink(() => patch({ editingSection: 'fees' }))}
-                  </div>
-                  <div style={css('font-size:14px;margin-top:4px')}>{feeHandlingLabel}</div>
-                  {rationaleRow(s.aiRationale.feeHandling)}
-                  {s.editingSection === 'fees' && (
-                    <div style={css('display:flex;flex-direction:column;gap:var(--invoicecloud-spacing-xs);margin-top:var(--invoicecloud-spacing-s)')}>
-                      {feeOptions.map((f) => <button key={f.id} type="button" onClick={f.onSelect} style={css(`text-align:left;padding:var(--invoicecloud-spacing-s);border-radius:10px;font-size:14px;cursor:pointer;background:${selBg(f.selected)};border:1.5px solid ${selBorder(f.selected)}`)}>{f.label}</button>)}
-                    </div>
-                  )}
-                </div>
               </>
             )}
 
@@ -1357,6 +1310,7 @@ export function App() {
                 {editLink(() => openReviewSection('vertical'))}
               </div>
               <div style={css('font-size:14px;margin-top:4px')}>{verticalSummaryLabel}</div>
+              {rationaleRow(verticalAiRationale)}
               {s.reviewEditingSection === 'vertical' && (
                 <div style={css('display:flex;flex-direction:column;gap:var(--invoicecloud-spacing-s);margin-top:var(--invoicecloud-spacing-m)')}>
                   {verticals.map((v) => (
@@ -1372,27 +1326,113 @@ export function App() {
             </div>
 
             <div style={css('background:var(--invoicecloud-surface-default-background);border:1px solid var(--invoicecloud-surface-default-border);border-radius:14px;padding:var(--invoicecloud-spacing-m)')}>
-              <div style={css('display:flex;justify-content:space-between;align-items:center')}>
-                <h3 style={css('font-size:16px')}>Business &amp; Location</h3>
-                {editLink(() => openReviewSection('location'))}
-              </div>
-              <div style={css('font-size:14px;margin-top:4px')}>{locationSummaryLabel}</div>
-              {s.reviewEditingSection === 'location' && (
-                <div style={css('margin-top:var(--invoicecloud-spacing-m)')}>
-                  <label style={css('display:block;font-size:13px;font-weight:500;margin-bottom:4px')}>Business name</label>
-                  <input type="text" value={s.bizName} onChange={setBizName} style={css('width:100%;padding:12px 14px;border-radius:4px;border:1px solid var(--invoicecloud-surface-default-border);font-size:16px;margin-bottom:var(--invoicecloud-spacing-m)')} />
-                  <label style={css('display:block;font-size:13px;font-weight:500;margin-bottom:4px')}>States</label>
-                  <input type="text" value={s.stateSearch} onChange={setStateSearch} placeholder="Search states..." style={css('width:100%;padding:10px 12px;border-radius:4px;border:1px solid var(--invoicecloud-surface-default-border);font-size:14px;margin-bottom:var(--invoicecloud-spacing-xs)')} />
-                  <div style={css('display:flex;flex-direction:column;gap:var(--invoicecloud-spacing-xs);max-height:220px;overflow-y:auto;border:1px solid var(--invoicecloud-surface-default-border);border-radius:10px;padding:var(--invoicecloud-spacing-xs);margin-bottom:var(--invoicecloud-spacing-m)')}>
-                    {stateOptions.map((st) => (
-                      <button key={st.name} type="button" onClick={st.onToggle} style={css(`display:flex;align-items:center;justify-content:space-between;text-align:left;padding:10px 14px;border-radius:8px;cursor:pointer;background:${selBg(st.selected)};border:1.5px solid ${selBorder(st.selected)}`)}>
-                        <span style={css('font-size:14px;font-weight:500')}>{st.name}</span>
-                        {st.selected && <img src={asset('assets/icons/Checkmark.svg')} alt="" style={css('width:16px;height:16px')} />}
-                      </button>
-                    ))}
-                  </div>
-                  <button type="button" ref={saveBtnRef} onClick={saveLocationSection} style={css('background:var(--invoicecloud-primary);color:#fff;border:none;border-radius:8px;padding:10px 20px;font-size:14px;font-weight:700;cursor:pointer')}>Save</button>
+              <h3 style={css('font-size:16px;margin-bottom:var(--invoicecloud-spacing-s)')}>Business Details</h3>
+
+              <div style={cardStyle}>
+                <div style={css('display:flex;justify-content:space-between;align-items:flex-start')}>
+                  <div style={css('font-size:14px;font-weight:500')}>Business name &amp; states</div>
+                  {editLink(() => openReviewSection('location'))}
                 </div>
+                <div style={css('font-size:14px;margin-top:4px')}>{locationSummaryLabel}</div>
+                {rationaleRow(locationAiRationale)}
+                {s.reviewEditingSection === 'location' && (
+                  <div style={css('margin-top:var(--invoicecloud-spacing-m)')}>
+                    <label style={css('display:block;font-size:13px;font-weight:500;margin-bottom:4px')}>Business name</label>
+                    <input type="text" value={s.bizName} onChange={setBizName} style={css('width:100%;padding:12px 14px;border-radius:4px;border:1px solid var(--invoicecloud-surface-default-border);font-size:16px;margin-bottom:var(--invoicecloud-spacing-m)')} />
+                    <label style={css('display:block;font-size:13px;font-weight:500;margin-bottom:4px')}>States</label>
+                    <input type="text" value={s.stateSearch} onChange={setStateSearch} placeholder="Search states..." style={css('width:100%;padding:10px 12px;border-radius:4px;border:1px solid var(--invoicecloud-surface-default-border);font-size:14px;margin-bottom:var(--invoicecloud-spacing-xs)')} />
+                    <div style={css('display:flex;flex-direction:column;gap:var(--invoicecloud-spacing-xs);max-height:220px;overflow-y:auto;border:1px solid var(--invoicecloud-surface-default-border);border-radius:10px;padding:var(--invoicecloud-spacing-xs);margin-bottom:var(--invoicecloud-spacing-m)')}>
+                      {stateOptions.map((st) => (
+                        <button key={st.name} type="button" onClick={st.onToggle} style={css(`display:flex;align-items:center;justify-content:space-between;text-align:left;padding:10px 14px;border-radius:8px;cursor:pointer;background:${selBg(st.selected)};border:1.5px solid ${selBorder(st.selected)}`)}>
+                          <span style={css('font-size:14px;font-weight:500')}>{st.name}</span>
+                          {st.selected && <img src={asset('assets/icons/Checkmark.svg')} alt="" style={css('width:16px;height:16px')} />}
+                        </button>
+                      ))}
+                    </div>
+                    <button type="button" ref={saveBtnRef} onClick={saveLocationSection} style={css('background:var(--invoicecloud-primary);color:#fff;border:none;border-radius:8px;padding:10px 20px;font-size:14px;font-weight:700;cursor:pointer')}>Save</button>
+                  </div>
+                )}
+              </div>
+
+              <div style={cardStyle}>
+                <div style={css('display:flex;justify-content:space-between;align-items:flex-start')}>
+                  <div style={css('font-size:14px;font-weight:500')}>Setup path</div>
+                  {editLink(() => patch({ editingSection: s.editingSection === 'setuppath' ? null : 'setuppath' }))}
+                </div>
+                <div style={css('font-size:14px;margin-top:4px')}>{setupPathSummaryLabel}</div>
+                {rationaleRow(setupPathAiRationale)}
+                {s.editingSection === 'setuppath' && (
+                  <div style={css('display:grid;grid-template-columns:1fr 1fr;gap:var(--invoicecloud-spacing-s);margin-top:var(--invoicecloud-spacing-s)')}>
+                    <button type="button" onClick={setSetupPathUpload} style={css(`text-align:left;padding:var(--invoicecloud-spacing-s);border-radius:10px;cursor:pointer;background:${setupPathBg(setupPathIsUpload)};border:1.5px solid ${setupPathBorder(setupPathIsUpload)}`)}><div style={css('font-weight:500;font-size:14px')}>Upload biller data</div></button>
+                    <button type="button" onClick={setSetupPathManual} style={css(`text-align:left;padding:var(--invoicecloud-spacing-s);border-radius:10px;cursor:pointer;background:${setupPathBg(setupPathIsManual)};border:1.5px solid ${setupPathBorder(setupPathIsManual)}`)}><div style={css('font-weight:500;font-size:14px')}>Manually answer questions</div></button>
+                  </div>
+                )}
+              </div>
+
+              {setupPathIsUpload && (
+                <div style={cardStyle}>
+                  <div style={css('display:flex;justify-content:space-between;align-items:flex-start')}>
+                    <div style={css('font-size:14px;font-weight:500')}>Uploaded data</div>
+                    {editLink(() => patch({ editingSection: s.editingSection === 'upload' ? null : 'upload' }))}
+                  </div>
+                  <div style={css('font-size:14px;margin-top:4px')}>{csvSummaryLabel}</div>
+                  {s.importedFields.length > 0 && (
+                    <div style={css('margin-top:var(--invoicecloud-spacing-s)')}>
+                      {s.importedFields.map((im, i) => (
+                        <div key={i} style={css('display:flex;justify-content:space-between;font-size:13px;padding:2px 0')}>
+                          <span style={css('color:var(--invoicecloud-utility-neutral-70)')}>{im.label}</span><span style={css('font-weight:500')}>{im.value}</span>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                  {s.editingSection === 'upload' && (
+                    <div style={css('margin-top:var(--invoicecloud-spacing-s)')}>
+                      <input type="file" accept=".csv,.xlsx,.xls,.json,.yaml,.yml,.pdf" onChange={onCsvFile} style={css('font-size:13px')} />
+                    </div>
+                  )}
+                </div>
+              )}
+
+              {setupPathIsManual && (
+                <>
+                  <div style={cardStyle}>
+                    <div style={css('display:flex;justify-content:space-between;align-items:flex-start')}>
+                      <div style={css('font-size:14px;font-weight:500')}>Invoice types</div>
+                      {editLink(() => patch({ editingSection: s.editingSection === 'invoicetypes' ? null : 'invoicetypes' }))}
+                    </div>
+                    <div style={css('font-size:14px;margin-top:4px')}>{invoiceTypesSummaryLabel}</div>
+                    {s.editingSection === 'invoicetypes' && (
+                      <div style={css('display:flex;flex-wrap:wrap;gap:var(--invoicecloud-spacing-xs);margin-top:var(--invoicecloud-spacing-s)')}>
+                        {manualInvoiceTypeOptions.map((it) => <button key={it.id} type="button" onClick={it.onToggle} style={css(`padding:8px 16px;border-radius:8px;font-size:13px;cursor:pointer;background:${selBg(it.selected)};border:1.5px solid ${selBorder(it.selected)}`)}>{it.label}</button>)}
+                      </div>
+                    )}
+                  </div>
+                  <div style={cardStyle}>
+                    <div style={css('display:flex;justify-content:space-between;align-items:flex-start')}>
+                      <div style={css('font-size:14px;font-weight:500')}>Monthly invoice volume</div>
+                      {editLink(() => patch({ editingSection: s.editingSection === 'invoicevolume' ? null : 'invoicevolume' }))}
+                    </div>
+                    <div style={css('font-size:14px;margin-top:4px')}>{invoiceVolumeSummaryLabel}</div>
+                    {s.editingSection === 'invoicevolume' && (
+                      <select value={s.manualInvoiceVolume} onChange={setManualInvoiceVolume} style={css('margin-top:var(--invoicecloud-spacing-s);padding:10px 12px;border-radius:4px;border:1px solid var(--invoicecloud-surface-default-border);font-size:14px')}>
+                        <option value="">Select a range</option>
+                        <option value="under100">Fewer than 100</option>
+                        <option value="100to1000">100 &ndash; 1,000</option>
+                        <option value="over1000">Over 1,000</option>
+                      </select>
+                    )}
+                  </div>
+                  <div style={cardStyle}>
+                    <div style={css('display:flex;justify-content:space-between;align-items:flex-start')}>
+                      <div style={css('font-size:14px;font-weight:500')}>Additional notes</div>
+                      {editLink(() => patch({ editingSection: s.editingSection === 'notes' ? null : 'notes' }))}
+                    </div>
+                    <div style={css('font-size:14px;margin-top:4px')}>{hasManualNotes ? s.manualInvoiceNotes : 'None'}</div>
+                    {s.editingSection === 'notes' && (
+                      <textarea value={s.manualInvoiceNotes} onChange={setManualInvoiceNotes} placeholder="Optional" style={css('width:100%;min-height:60px;margin-top:var(--invoicecloud-spacing-s);padding:12px 14px;border-radius:4px;border:1px solid var(--invoicecloud-surface-default-border);font-size:14px;font-family:var(--invoicecloud-font-family-primary)')}></textarea>
+                    )}
+                  </div>
+                </>
               )}
             </div>
 
@@ -1508,78 +1548,114 @@ export function App() {
           </div>
 
           <div style={css('width:100%;max-width:900px;background:var(--invoicecloud-surface-default-background);border:1px solid var(--invoicecloud-surface-default-border);border-radius:14px;padding:var(--invoicecloud-spacing-m);margin-top:var(--invoicecloud-spacing-m)')}>
-            <div style={css('display:flex;justify-content:space-between;align-items:center;margin-bottom:var(--invoicecloud-spacing-s)')}>
-              <h3 style={css('font-size:16px')}>Customer Payment Experience &amp; Fees</h3>
-              {editLink(() => openReviewSection('experience'))}
-            </div>
-            <div style={css('display:grid;grid-template-columns:1fr 1fr;gap:var(--invoicecloud-spacing-s);font-size:13px')}>
-              <div><span style={css('color:var(--invoicecloud-utility-neutral-60)')}>Guest checkout:</span> {guestCheckoutAllowedLabel}</div>
-              <div><span style={css('color:var(--invoicecloud-utility-neutral-60)')}>AutoPay offered:</span> {offerAutopayLabel}</div>
-              <div><span style={css('color:var(--invoicecloud-utility-neutral-60)')}>Enroll during payment:</span> {enrollDuringPaymentLabel}</div>
-              <div><span style={css('color:var(--invoicecloud-utility-neutral-60)')}>Paperless offered:</span> {offerPaperlessLabel}</div>
-              <div><span style={css('color:var(--invoicecloud-utility-neutral-60)')}>Reminders:</span> {reminderChannelLabel}</div>
-              <div><span style={css('color:var(--invoicecloud-utility-neutral-60)')}>Accepted methods:</span> {acceptedMethodsLabel}</div>
-              <div><span style={css('color:var(--invoicecloud-utility-neutral-60)')}>Self-service history:</span> {selfServiceHistoryLabel}</div>
-              <div><span style={css('color:var(--invoicecloud-utility-neutral-60)')}>Self-service updates:</span> {selfServiceUpdateLabel}</div>
-              <div><span style={css('color:var(--invoicecloud-utility-neutral-60)')}>Fee handling:</span> {feeHandlingLabel}</div>
-            </div>
-            {s.reviewEditingSection === 'experience' && (
-              <div style={css('margin-top:var(--invoicecloud-spacing-m);border-top:1px solid var(--invoicecloud-surface-default-border);padding-top:var(--invoicecloud-spacing-m);display:flex;flex-direction:column;gap:var(--invoicecloud-spacing-s)')}>
-                <div style={css('border:1px solid var(--invoicecloud-surface-default-border);border-radius:10px;padding:var(--invoicecloud-spacing-s)')}>
-                  <div style={css('display:flex;justify-content:space-between')}><span style={css('font-size:13px;font-weight:500')}>Guest checkout</span>{editLink(() => patch({ editingSection: 'guest' }), 'Change', true)}</div>
-                  {s.editingSection === 'guest' && yesNo(() => patch({ guestCheckoutAllowed: true, editingSection: null }), () => patch({ guestCheckoutAllowed: false, editingSection: null }), s.guestCheckoutAllowed, false)}
-                </div>
-                <div style={css('border:1px solid var(--invoicecloud-surface-default-border);border-radius:10px;padding:var(--invoicecloud-spacing-s)')}>
-                  <div style={css('display:flex;justify-content:space-between')}><span style={css('font-size:13px;font-weight:500')}>AutoPay</span>{editLink(() => patch({ editingSection: 'autopay' }), 'Change', true)}</div>
-                  {s.editingSection === 'autopay' && (
-                    <>
-                      {yesNo(() => patch({ offerAutopay: true }), () => patch({ offerAutopay: false, editingSection: null }), s.offerAutopay, false, 'Offer: Yes', 'Offer: No')}
-                      {s.offerAutopay === true && <div style={css('margin-top:var(--invoicecloud-spacing-xs)')}>{yesNo(() => patch({ enrollDuringPayment: true, editingSection: null }), () => patch({ enrollDuringPayment: false, editingSection: null }), s.enrollDuringPayment, false, 'Enroll: Yes', 'Enroll: No')}</div>}
-                    </>
-                  )}
-                </div>
-                <div style={css('border:1px solid var(--invoicecloud-surface-default-border);border-radius:10px;padding:var(--invoicecloud-spacing-s)')}>
-                  <div style={css('display:flex;justify-content:space-between')}><span style={css('font-size:13px;font-weight:500')}>Paperless billing</span>{editLink(() => patch({ editingSection: 'paperless' }), 'Change', true)}</div>
-                  {s.editingSection === 'paperless' && yesNo(() => patch({ offerPaperless: true, editingSection: null }), () => patch({ offerPaperless: false, editingSection: null }), s.offerPaperless, false)}
-                </div>
-                <div style={css('border:1px solid var(--invoicecloud-surface-default-border);border-radius:10px;padding:var(--invoicecloud-spacing-s)')}>
-                  <div style={css('display:flex;justify-content:space-between')}><span style={css('font-size:13px;font-weight:500')}>Payment reminders</span>{editLink(() => patch({ editingSection: 'reminders' }), 'Change', true)}</div>
-                  {s.editingSection === 'reminders' && (
-                    <div style={css('display:flex;flex-wrap:wrap;gap:var(--invoicecloud-spacing-xs);margin-top:var(--invoicecloud-spacing-xs)')}>
-                      {reminderOptions.map((r) => <button key={r.id} type="button" onClick={r.onSelect} style={css(`padding:8px 16px;border-radius:8px;font-size:13px;cursor:pointer;background:${selBg(r.selected)};border:1.5px solid ${selBorder(r.selected)}`)}>{r.label}</button>)}
-                    </div>
-                  )}
-                </div>
-                <div style={css('border:1px solid var(--invoicecloud-surface-default-border);border-radius:10px;padding:var(--invoicecloud-spacing-s)')}>
-                  <div style={css('display:flex;justify-content:space-between')}><span style={css('font-size:13px;font-weight:500')}>Accepted methods</span>{editLink(() => patch({ editingSection: 'methods' }), 'Change', true)}</div>
-                  {s.editingSection === 'methods' && (
-                    <>
-                      <div style={css('display:flex;flex-wrap:wrap;gap:var(--invoicecloud-spacing-xs);margin-top:var(--invoicecloud-spacing-xs);margin-bottom:var(--invoicecloud-spacing-xs)')}>
-                        {methodOptions.map((m) => <button key={m.id} type="button" onClick={m.onToggle} style={css(`padding:8px 16px;border-radius:8px;font-size:13px;cursor:pointer;background:${selBg(m.selected)};border:1.5px solid ${selBorder(m.selected)}`)}>{m.label}</button>)}
-                      </div>
-                      <button type="button" onClick={() => patch({ editingSection: null })} style={css('background:var(--invoicecloud-primary);color:#fff;border:none;border-radius:8px;padding:6px 14px;font-size:12px;font-weight:700;cursor:pointer')}>Done</button>
-                    </>
-                  )}
-                </div>
-                <div style={css('border:1px solid var(--invoicecloud-surface-default-border);border-radius:10px;padding:var(--invoicecloud-spacing-s)')}>
-                  <div style={css('display:flex;justify-content:space-between')}><span style={css('font-size:13px;font-weight:500')}>Self-service history</span>{editLink(() => patch({ editingSection: 'history' }), 'Change', true)}</div>
-                  {s.editingSection === 'history' && yesNo(() => patch({ selfServiceHistory: true, editingSection: null }), () => patch({ selfServiceHistory: false, editingSection: null }), s.selfServiceHistory, false)}
-                </div>
-                <div style={css('border:1px solid var(--invoicecloud-surface-default-border);border-radius:10px;padding:var(--invoicecloud-spacing-s)')}>
-                  <div style={css('display:flex;justify-content:space-between')}><span style={css('font-size:13px;font-weight:500')}>Self-service updates</span>{editLink(() => patch({ editingSection: 'update' }), 'Change', true)}</div>
-                  {s.editingSection === 'update' && yesNo(() => patch({ selfServiceUpdate: true, editingSection: null }), () => patch({ selfServiceUpdate: false, editingSection: null }), s.selfServiceUpdate, false)}
-                </div>
-                <div style={css('border:1px solid var(--invoicecloud-surface-default-border);border-radius:10px;padding:var(--invoicecloud-spacing-s)')}>
-                  <div style={css('display:flex;justify-content:space-between')}><span style={css('font-size:13px;font-weight:500')}>Payment processing fees</span>{editLink(() => patch({ editingSection: 'fees' }), 'Change', true)}</div>
-                  {s.editingSection === 'fees' && (
-                    <div style={css('display:flex;flex-direction:column;gap:var(--invoicecloud-spacing-xs);margin-top:var(--invoicecloud-spacing-xs)')}>
-                      {feeOptions.map((f) => <button key={f.id} type="button" onClick={f.onSelect} style={css(`text-align:left;padding:8px;border-radius:8px;font-size:13px;cursor:pointer;background:${selBg(f.selected)};border:1.5px solid ${selBorder(f.selected)}`)}>{f.label}</button>)}
-                    </div>
-                  )}
-                </div>
-                <button type="button" ref={saveBtnRef} onClick={saveReviewSection} style={css('align-self:flex-start;background:var(--invoicecloud-primary);color:#fff;border:none;border-radius:8px;padding:10px 20px;font-size:14px;font-weight:700;cursor:pointer')}>Save</button>
+            <h3 style={css('font-size:16px;margin-bottom:var(--invoicecloud-spacing-s)')}>Customer Payment Experience &amp; Fees</h3>
+
+            <div style={cardStyle}>
+              <div style={css('display:flex;justify-content:space-between;align-items:flex-start')}>
+                <div style={css('font-size:14px;font-weight:500')}>Guest checkout</div>
+                {editLink(() => patch({ editingSection: s.editingSection === 'guest' ? null : 'guest' }))}
               </div>
-            )}
+              <div style={css('font-size:14px;margin-top:4px')}>{guestCheckoutAllowedLabel}</div>
+              {rationaleRow(s.aiRationale.guestCheckoutAllowed)}
+              {s.editingSection === 'guest' && yesNo(() => patch({ guestCheckoutAllowed: true, editingSection: null }), () => patch({ guestCheckoutAllowed: false, editingSection: null }), s.guestCheckoutAllowed)}
+            </div>
+
+            <div style={cardStyle}>
+              <div style={css('display:flex;justify-content:space-between;align-items:flex-start')}>
+                <div style={css('font-size:14px;font-weight:500')}>AutoPay</div>
+                {editLink(() => patch({ editingSection: s.editingSection === 'autopay' ? null : 'autopay' }))}
+              </div>
+              <div style={css('font-size:14px;margin-top:4px')}>Offered: {offerAutopayLabel} - Enroll during payment: {enrollDuringPaymentLabel}</div>
+              {rationaleRow(s.aiRationale.offerAutopay)}
+              {s.editingSection === 'autopay' && (
+                <>
+                  <div style={css('font-size:13px;font-weight:500;margin-top:var(--invoicecloud-spacing-s);margin-bottom:var(--invoicecloud-spacing-xs)')}>Offer AutoPay?</div>
+                  {yesNo(() => patch({ offerAutopay: true }), () => patch({ offerAutopay: false, editingSection: null }), s.offerAutopay, false)}
+                  {s.offerAutopay === true && (
+                    <>
+                      <div style={css('font-size:13px;font-weight:500;margin-top:var(--invoicecloud-spacing-s);margin-bottom:var(--invoicecloud-spacing-xs)')}>Enroll during payment?</div>
+                      {yesNo(() => patch({ enrollDuringPayment: true, editingSection: null }), () => patch({ enrollDuringPayment: false, editingSection: null }), s.enrollDuringPayment, false)}
+                      {isFlorida && <div style={css('background:var(--invoicecloud-intent-warning-background);border:1px solid var(--invoicecloud-intent-warning-border);border-radius:10px;padding:var(--invoicecloud-spacing-s);font-size:13px;color:var(--invoicecloud-intent-warning);margin-top:var(--invoicecloud-spacing-s)')}>Florida requires AutoPay enrollees to pay via bank account only - card enrollment will be restricted.</div>}
+                    </>
+                  )}
+                </>
+              )}
+            </div>
+
+            <div style={cardStyle}>
+              <div style={css('display:flex;justify-content:space-between;align-items:flex-start')}>
+                <div style={css('font-size:14px;font-weight:500')}>Paperless billing</div>
+                {editLink(() => patch({ editingSection: s.editingSection === 'paperless' ? null : 'paperless' }))}
+              </div>
+              <div style={css('font-size:14px;margin-top:4px')}>{offerPaperlessLabel}</div>
+              {rationaleRow(s.aiRationale.offerPaperless)}
+              {s.editingSection === 'paperless' && yesNo(() => patch({ offerPaperless: true, editingSection: null }), () => patch({ offerPaperless: false, editingSection: null }), s.offerPaperless)}
+            </div>
+
+            <div style={cardStyle}>
+              <div style={css('display:flex;justify-content:space-between;align-items:flex-start')}>
+                <div style={css('font-size:14px;font-weight:500')}>Payment reminders</div>
+                {editLink(() => patch({ editingSection: s.editingSection === 'reminders' ? null : 'reminders' }))}
+              </div>
+              <div style={css('font-size:14px;margin-top:4px')}>{reminderChannelLabel}</div>
+              {rationaleRow(s.aiRationale.reminderChannel)}
+              {s.editingSection === 'reminders' && (
+                <div style={css('display:flex;flex-wrap:wrap;gap:var(--invoicecloud-spacing-xs);margin-top:var(--invoicecloud-spacing-s)')}>
+                  {reminderOptions.map((r) => <button key={r.id} type="button" onClick={r.onSelect} style={css(`padding:10px 18px;border-radius:8px;font-size:13px;cursor:pointer;background:${selBg(r.selected)};border:1.5px solid ${selBorder(r.selected)}`)}>{r.label}</button>)}
+                </div>
+              )}
+            </div>
+
+            <div style={cardStyle}>
+              <div style={css('display:flex;justify-content:space-between;align-items:flex-start')}>
+                <div style={css('font-size:14px;font-weight:500')}>Accepted payment methods</div>
+                {editLink(() => patch({ editingSection: s.editingSection === 'methods' ? null : 'methods' }))}
+              </div>
+              <div style={css('font-size:14px;margin-top:4px')}>{acceptedMethodsLabel}</div>
+              {rationaleRow(s.aiRationale.acceptedMethods)}
+              {s.editingSection === 'methods' && (
+                <>
+                  <div style={css('display:flex;flex-wrap:wrap;gap:var(--invoicecloud-spacing-xs);margin-top:var(--invoicecloud-spacing-s);margin-bottom:var(--invoicecloud-spacing-s)')}>
+                    {methodOptions.map((m) => <button key={m.id} type="button" onClick={m.onToggle} style={css(`padding:10px 18px;border-radius:8px;font-size:13px;cursor:pointer;background:${selBg(m.selected)};border:1.5px solid ${selBorder(m.selected)}`)}>{m.label}</button>)}
+                  </div>
+                  <button type="button" onClick={() => patch({ editingSection: null })} style={css('background:var(--invoicecloud-primary);color:#fff;border:none;border-radius:8px;padding:8px 16px;font-size:13px;font-weight:700;cursor:pointer')}>Done</button>
+                </>
+              )}
+            </div>
+
+            <div style={cardStyle}>
+              <div style={css('display:flex;justify-content:space-between;align-items:flex-start')}>
+                <div style={css('font-size:14px;font-weight:500')}>Self-service: billing history</div>
+                {editLink(() => patch({ editingSection: s.editingSection === 'history' ? null : 'history' }))}
+              </div>
+              <div style={css('font-size:14px;margin-top:4px')}>{selfServiceHistoryLabel}</div>
+              {rationaleRow(s.aiRationale.selfServiceHistory)}
+              {s.editingSection === 'history' && yesNo(() => patch({ selfServiceHistory: true, editingSection: null }), () => patch({ selfServiceHistory: false, editingSection: null }), s.selfServiceHistory)}
+            </div>
+
+            <div style={cardStyle}>
+              <div style={css('display:flex;justify-content:space-between;align-items:flex-start')}>
+                <div style={css('font-size:14px;font-weight:500')}>Self-service: account updates</div>
+                {editLink(() => patch({ editingSection: s.editingSection === 'update' ? null : 'update' }))}
+              </div>
+              <div style={css('font-size:14px;margin-top:4px')}>{selfServiceUpdateLabel}</div>
+              {rationaleRow(s.aiRationale.selfServiceUpdate)}
+              {s.editingSection === 'update' && yesNo(() => patch({ selfServiceUpdate: true, editingSection: null }), () => patch({ selfServiceUpdate: false, editingSection: null }), s.selfServiceUpdate)}
+            </div>
+
+            <div style={css('border:1px solid var(--invoicecloud-surface-default-border);border-radius:10px;padding:var(--invoicecloud-spacing-s)')}>
+              <div style={css('display:flex;justify-content:space-between;align-items:flex-start')}>
+                <div style={css('font-size:14px;font-weight:500')}>Payment processing fees</div>
+                {editLink(() => patch({ editingSection: s.editingSection === 'fees' ? null : 'fees' }))}
+              </div>
+              <div style={css('font-size:14px;margin-top:4px')}>{feeHandlingLabel}</div>
+              {rationaleRow(s.aiRationale.feeHandling)}
+              {s.editingSection === 'fees' && (
+                <div style={css('display:flex;flex-direction:column;gap:var(--invoicecloud-spacing-xs);margin-top:var(--invoicecloud-spacing-s)')}>
+                  {feeOptions.map((f) => <button key={f.id} type="button" onClick={f.onSelect} style={css(`text-align:left;padding:var(--invoicecloud-spacing-s);border-radius:10px;font-size:14px;cursor:pointer;background:${selBg(f.selected)};border:1.5px solid ${selBorder(f.selected)}`)}>{f.label}</button>)}
+                </div>
+              )}
+            </div>
           </div>
 
           <div style={css('display:flex;gap:var(--invoicecloud-spacing-s);margin-top:var(--invoicecloud-spacing-l)')}>
@@ -1954,35 +2030,9 @@ export function App() {
             </div>
             <div style={css('display:flex;gap:var(--invoicecloud-spacing-s);flex-wrap:wrap')}>
               <button type="button" onClick={openSignup} style={css('background:none;border:1px solid rgba(255,255,255,.3);color:#fff;border-radius:10px;padding:12px 20px;font-size:14px;cursor:pointer')}>Save without publishing</button>
-              <button type="button" onClick={goPricing} style={css('background:var(--invoicecloud-secondary);color:var(--invoicecloud-utility-neutral-100);border:none;border-radius:10px;padding:12px 24px;font-size:14px;font-weight:700;cursor:pointer')}>Review &amp; publish &rarr;</button>
+              <button type="button" onClick={publishFromPreview} style={css('background:var(--invoicecloud-secondary);color:var(--invoicecloud-utility-neutral-100);border:none;border-radius:10px;padding:12px 24px;font-size:14px;font-weight:700;cursor:pointer')}>Publish &rarr;</button>
             </div>
           </div>
-        </div>
-      )}
-      {/* ================= PRICING ================= */}
-      {s.screen === 'pricing' && (
-        <div style={css('min-height:100vh;padding:var(--invoicecloud-spacing-xl) var(--invoicecloud-spacing-l);display:flex;flex-direction:column;align-items:center')}>
-          <h2 style={css('margin-bottom:var(--invoicecloud-spacing-xxs)')}>Ready to launch {s.bizName}'s payment experience?</h2>
-          <p style={css('font-size:14px;color:var(--invoicecloud-utility-neutral-70);margin-bottom:var(--invoicecloud-spacing-l)')}>Save your work for later, or publish it live today.</p>
-          <div style={css('display:grid;grid-template-columns:1fr 1fr;gap:var(--invoicecloud-spacing-m);max-width:760px;width:100%')}>
-            <div style={css('background:var(--invoicecloud-surface-default-background);border:1px solid var(--invoicecloud-surface-default-border);border-radius:14px;padding:var(--invoicecloud-spacing-l)')}>
-              <h3 style={css('font-size:18px;margin-bottom:var(--invoicecloud-spacing-xxs)')}>Save as Draft</h3>
-              <div style={css('font-size:28px;font-weight:700;margin-bottom:var(--invoicecloud-spacing-s)')}>Free</div>
-              <ul style={css('list-style:none;padding:0;margin:0 0 var(--invoicecloud-spacing-l);display:flex;flex-direction:column;gap:var(--invoicecloud-spacing-xs)')}>
-                {pricingFeaturesDraft.map((feat) => <li key={feat} style={css('display:flex;gap:var(--invoicecloud-spacing-xs);font-size:14px')}><img src={asset('assets/icons/Checkmark.svg')} alt="" style={css('width:16px;height:16px')} />{feat}</li>)}
-              </ul>
-              <button type="button" onClick={openSignup} style={css('width:100%;background:none;border:1px solid var(--invoicecloud-primary);color:var(--invoicecloud-primary);border-radius:10px;padding:14px;font-size:15px;font-weight:700;cursor:pointer')}>Create Account &amp; Save</button>
-            </div>
-            <div style={css('background:var(--invoicecloud-primary);color:#fff;border-radius:14px;padding:var(--invoicecloud-spacing-l);box-shadow:var(--invoicecloud-elevation-2)')}>
-              <h3 style={css('font-size:18px;margin-bottom:var(--invoicecloud-spacing-xxs);color:#fff')}>Publish</h3>
-              <div style={css('font-size:28px;font-weight:700;margin-bottom:var(--invoicecloud-spacing-s)')}>$199<span style={css('font-size:14px;font-weight:400')}>/mo</span></div>
-              <ul style={css('list-style:none;padding:0;margin:0 0 var(--invoicecloud-spacing-l);display:flex;flex-direction:column;gap:var(--invoicecloud-spacing-xs)')}>
-                {pricingFeaturesPro.map((feat) => <li key={feat} style={css('display:flex;gap:var(--invoicecloud-spacing-xs);font-size:14px')}><img src={asset('assets/icons/Checkmark.svg')} alt="" style={css('width:16px;height:16px;filter:brightness(0) invert(1)')} />{feat}</li>)}
-              </ul>
-              <button type="button" onClick={openCheckout} style={css('width:100%;background:#fff;color:var(--invoicecloud-primary);border:none;border-radius:10px;padding:14px;font-size:15px;font-weight:700;cursor:pointer')}>Buy Now</button>
-            </div>
-          </div>
-          <button type="button" onClick={backToPreviewOrDashboard} style={css('margin-top:var(--invoicecloud-spacing-l);background:none;border:none;color:var(--invoicecloud-utility-neutral-60);font-size:13px;cursor:pointer')}>&larr; Back</button>
         </div>
       )}
 
