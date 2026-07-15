@@ -63,14 +63,20 @@ jobs:
       - name: Inject nonprod workload identity client id
         run: |
           NONPROD_CLIENT_ID=$(az deployment sub show --name ic-hack \
-            --query 'properties.outputs.nonprodWorkloadIdentityClientId.value' -o tsv)
+            --query 'properties.outputs.nonprodWorkloadIdentityClientId.value' -o tsv 2>/dev/null || true)
           if [ -z "$NONPROD_CLIENT_ID" ]; then
-            echo "nonprodWorkloadIdentityClientId output is empty — is the infra deployed?" >&2
-            exit 1
+            # The dedicated nonprod identity isn't provisioned yet (its Bicep hasn't been applied).
+            # Drop the SA override so pods fall back to the shared base identity — the current,
+            # pre-isolation behavior — rather than deploying an invalid placeholder client id.
+            # Once the infra is applied and the output exists, this branch stops running and the
+            # dedicated nonprod identity is used automatically.
+            echo "::warning::nonprodWorkloadIdentityClientId output not found; using the shared base identity until infra/bicep is applied."
+            sed -i '/- path: service-account.yaml/d' "${OVERLAY}/kustomization.yaml"
+          else
+            sed -i "s/REPLACE_WITH_NONPROD_WORKLOAD_IDENTITY_CLIENT_ID/${NONPROD_CLIENT_ID}/" \
+              "${OVERLAY}/service-account.yaml"
+            grep 'client-id' "${OVERLAY}/service-account.yaml"
           fi
-          sed -i "s/REPLACE_WITH_NONPROD_WORKLOAD_IDENTITY_CLIENT_ID/${NONPROD_CLIENT_ID}/" \
-            "${OVERLAY}/service-account.yaml"
-          grep 'client-id' "${OVERLAY}/service-account.yaml"
 
       - name: Deploy
         run: kubectl apply -k "${OVERLAY}"
