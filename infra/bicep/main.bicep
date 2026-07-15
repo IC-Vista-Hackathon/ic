@@ -10,7 +10,7 @@ param workloadNamespace string = 'ic'
 param nonprodWorkloadNamespace string = 'ic-nonprod'
 param workloadServiceAccountName string = 'ic-workload'
 param publisherServiceAccountName string = 'biller-publisher'
-@description('Service-principal object IDs allowed to deploy Kubernetes workloads through Azure RBAC. These receive AKS Cluster User + AKS RBAC Writer, never cluster-admin.')
+@description('Service-principal object IDs allowed to deploy Kubernetes workloads through Azure RBAC. These receive AKS Cluster User + AKS RBAC Cluster Admin (needed to apply the overlays\' own Role/RoleBinding and Gateway API CRs), authenticated via Entra/Azure RBAC — never the system:masters administrator certificate.')
 param aksDeploymentPrincipalIds array = []
 param aksNodeCountMin int = 2
 param aksNodeCountMax int = 4
@@ -27,6 +27,8 @@ param mcpApiKey string = ''
 // and API workload reader identities below.
 param payerExperienceBlobContributorPrincipalIds array = []
 param payerExperienceBlobReaderPrincipalIds array = []
+// CI identities that publish prompt-agent versions and upload the compliance file-search corpus.
+param foundryOwnerPrincipalIds array = []
 
 // Observability alerting (action group + log-search alert rules over Application Insights).
 param deployObservabilityAlerts bool = true
@@ -142,6 +144,7 @@ module aiFoundry 'modules/aiFoundry.bicep' = {
     name: 'aif-${prefix}-${suffix}'
     location: location
     workloadIdentityPrincipalId: workloadIdentity.outputs.principalId
+    foundryOwnerPrincipalIds: foundryOwnerPrincipalIds
     appInsightsId: appInsights.outputs.id
     appInsightsConnectionString: appInsights.outputs.connectionString
     mcpConnectionEnabled: mcpConnectionEnabled

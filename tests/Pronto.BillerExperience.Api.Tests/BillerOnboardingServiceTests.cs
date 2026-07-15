@@ -4,6 +4,7 @@ using System.Text;
 using Pronto.Agentic.Orchestration.Abstractions;
 using Pronto.Agentic.Orchestration.Execution;
 using Pronto.BillerExperience.Api.Application;
+using Pronto.BillerExperience.Api.Application.Compliance;
 using Pronto.BillerExperience.Api.Infrastructure;
 using Pronto.BillerExperience.Api.Infrastructure.AI;
 using Pronto.BillerExperience.Api.Infrastructure.Persistence;
@@ -146,14 +147,67 @@ public sealed class BillerOnboardingServiceTests
     }
 
     [Fact]
+    public async Task PublishRevalidatesTheExactApprovedRevision()
+    {
+        var compliance = new RecordingComplianceReviewService();
+        var service = CreateService(complianceReviewService: compliance);
+        var created = await service.CreateAsync(CreateRequest(), CancellationToken.None);
+        var chat = await service.SendMessageAsync(
+            created.Biller.BillerId,
+            new("Use #174A5B and get ready to publish."),
+            CancellationToken.None);
+        var approved = await service.ApproveAsync(
+            created.Biller.BillerId,
+            new(chat.Draft!.Revision, "test-user"),
+            CancellationToken.None);
+
+        await service.PublishAsync(
+            created.Biller.BillerId,
+            new(created.Biller.BillerId, approved.Revision),
+            CancellationToken.None);
+
+        var publish = Assert.Single(compliance.Reviews, review => review.Stage == ComplianceReviewStage.Publish);
+        Assert.Equal(approved.Revision, chat.Draft.Revision);
+        Assert.Equal("#174A5B", publish.Definition.Brand.PrimaryColor);
+        Assert.Equal(created.Biller.BillerId, publish.Definition.BillerId);
+    }
+
+    [Fact]
+    public async Task PublishFailsWhenRevalidationFindsANewBlockingIssue()
+    {
+        var compliance = new RecordingComplianceReviewService(blockPublish: true);
+        var service = CreateService(complianceReviewService: compliance);
+        var created = await service.CreateAsync(CreateRequest(), CancellationToken.None);
+        var chat = await service.SendMessageAsync(
+            created.Biller.BillerId,
+            new("Ready for review"),
+            CancellationToken.None);
+        var approved = await service.ApproveAsync(
+            created.Biller.BillerId,
+            new(chat.Draft!.Revision, "test-user"),
+            CancellationToken.None);
+
+        var exception = await Assert.ThrowsAsync<ExperienceValidationException>(async () =>
+            await service.PublishAsync(
+                created.Biller.BillerId,
+                new(created.Biller.BillerId, approved.Revision),
+                CancellationToken.None));
+
+        Assert.Contains(exception.Findings, finding => finding.Code == "PUBLISH_REVALIDATION_FAILED");
+        Assert.Contains(compliance.Reviews, review => review.Stage == ComplianceReviewStage.Publish);
+    }
+
+    [Fact]
     public async Task FailedPublicationIsRequeuedWhenPublishIsRepeated()
     {
         var repository = new InMemoryBillerExperienceRepository();
+        var compliance = new RecordingComplianceReviewService();
         var service = new BillerOnboardingService(
             repository,
             new DeterministicExperienceDraftGenerator(NullLogger<DeterministicExperienceDraftGenerator>.Instance),
             new OrchestrationRunner(),
-            NullLogger<BillerOnboardingService>.Instance);
+            NullLogger<BillerOnboardingService>.Instance,
+            complianceReviewService: compliance);
         var created = await service.CreateAsync(CreateRequest(), CancellationToken.None);
         var chat = await service.SendMessageAsync(created.Biller.BillerId, new("Ready for review"), CancellationToken.None);
         var approved = await service.ApproveAsync(created.Biller.BillerId, new(chat.Draft!.Revision, "test-user"), CancellationToken.None);
@@ -196,6 +250,7 @@ public sealed class BillerOnboardingServiceTests
         Assert.Null(record.FailureMessage);
         Assert.Equal(ExperienceRevisionState.Publishing, retriedExperience?.State);
         Assert.Equal(OnboardingSessionState.Publishing, retriedRun?.State);
+        Assert.Equal(2, compliance.Reviews.Count(review => review.Stage == ComplianceReviewStage.Publish));
     }
 
     [Fact]
@@ -471,12 +526,14 @@ public sealed class BillerOnboardingServiceTests
         IOrchestrationRunner? runner = null,
         IExperienceDraftGenerator? generator = null,
         ILogger<BillerOnboardingService>? logger = null,
-        IBillerResearchCoordinator? researchCoordinator = null)
+        IBillerResearchCoordinator? researchCoordinator = null,
+        IComplianceReviewService? complianceReviewService = null)
     {
         var repository = new InMemoryBillerExperienceRepository();
         generator ??= new DeterministicExperienceDraftGenerator(NullLogger<DeterministicExperienceDraftGenerator>.Instance);
         return new(repository, generator, runner ?? new OrchestrationRunner(),
-            logger ?? NullLogger<BillerOnboardingService>.Instance, researchCoordinator, seeder);
+            logger ?? NullLogger<BillerOnboardingService>.Instance, researchCoordinator, seeder,
+            complianceReviewService: complianceReviewService);
     }
 
     private static CreateBillerRequest CreateRequest() =>
@@ -581,6 +638,25 @@ public sealed class BillerOnboardingServiceTests
         {
             Request = request;
             return Task.FromResult(response);
+        }
+    }
+
+    private sealed class RecordingComplianceReviewService(bool blockPublish = false) : IComplianceReviewService
+    {
+        public List<(ComplianceReviewStage Stage, BillerExperienceDefinition Definition)> Reviews { get; } = [];
+
+        public ValueTask<IReadOnlyList<ComplianceFinding>> ReviewAsync(
+            Pronto.BillerExperience.Api.Domain.BillerRecord biller,
+            BillerExperienceDefinition definition,
+            ComplianceReviewStage stage,
+            CancellationToken cancellationToken)
+        {
+            Reviews.Add((stage, definition));
+            IReadOnlyList<ComplianceFinding> findings =
+                blockPublish && stage == ComplianceReviewStage.Publish
+                    ? [new("PUBLISH_REVALIDATION_FAILED", "Publish-time review failed.", ComplianceFindingSeverity.Blocking)]
+                    : [];
+            return ValueTask.FromResult(findings);
         }
     }
 

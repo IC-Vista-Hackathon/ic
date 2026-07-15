@@ -4,6 +4,7 @@ param name string
 param location string
 param projectName string = 'ic'
 param workloadIdentityPrincipalId string
+param foundryOwnerPrincipalIds array = []
 param appInsightsId string
 @secure()
 param appInsightsConnectionString string
@@ -115,6 +116,26 @@ resource cognitiveServicesUserRoleAssignment 'Microsoft.Authorization/roleAssign
     roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', 'a97b65f3-24c7-4388-baec-2e87135dc908')
   }
 }
+
+resource foundryAgentConsumerRoleAssignment 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
+  name: guid(account.id, workloadIdentityPrincipalId, 'FoundryAgentConsumer')
+  scope: account
+  properties: {
+    principalId: workloadIdentityPrincipalId
+    principalType: 'ServicePrincipal'
+    roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', 'eed3b665-ab3a-47b6-8f48-c9382fb1dad6')
+  }
+}
+
+resource foundryOwnerRoleAssignments 'Microsoft.Authorization/roleAssignments@2022-04-01' = [for principalId in foundryOwnerPrincipalIds: {
+  name: guid(account.id, principalId, 'FoundryOwner')
+  scope: account
+  properties: {
+    principalId: principalId
+    principalType: 'ServicePrincipal'
+    roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', 'c883944f-8b7b-4483-af10-35834be79c4a')
+  }
+}]
 
 output id string = account.id
 output endpoint string = account.properties.endpoint

@@ -4,6 +4,8 @@ using System.Text.Json;
 using Pronto.Agentic.Orchestration.Abstractions;
 using Pronto.BillerExperience.Api.Application.Orchestration;
 using Pronto.BillerExperience.Api.Application.Agents;
+using Pronto.BillerExperience.Api.Application.Compliance;
+using Pronto.BillerExperience.Api.Configuration;
 using Pronto.BillerExperience.Api.Domain;
 using Pronto.BillerExperience.Api.Infrastructure;
 using Pronto.BillerExperience.Api.Infrastructure.AI;
@@ -27,9 +29,11 @@ public sealed partial class BillerOnboardingService(
     IBillerResearchCoordinator? researchCoordinator = null,
     IInvoiceSeeder? invoiceSeeder = null,
     AgentContextService? agentContextService = null,
+    IComplianceReviewService? complianceReviewService = null,
     BillingDiscoveryEngine? billingDiscovery = null)
 {
     private const string RunId = "onboarding";
+    private readonly IComplianceReviewService _compliance = complianceReviewService ?? CreateDefaultComplianceService();
 
     public async ValueTask<(BillerResponse Biller, OnboardingSessionResponse Session, ExperienceRevisionResponse Draft)> CreateAsync(
         CreateBillerRequest request,
@@ -199,7 +203,7 @@ public sealed partial class BillerOnboardingService(
         var workflow = new BillerExperienceChatWorkflow(
             new ExperienceDesignAgent(draftGenerator),
             new AccessibilityReviewAgent(),
-            new ComplianceReviewAgent(ValidateDefinition),
+            new ComplianceReviewAgent(_compliance),
             researchCoordinator,
             logger,
             researchRequired: false);
@@ -321,9 +325,19 @@ public sealed partial class BillerOnboardingService(
             throw new ArgumentException("Only draft experiences can be updated.");
         }
 
-        var findings = ValidateDefinition(billerId, request.Definition);
+        var biller = await GetRequiredBillerAsync(billerId, cancellationToken);
+        var definition = request.Definition with
+        {
+            BillerId = billerId,
+            Brief = request.Definition.Brief ?? current.Definition.Brief
+        };
+        var findings = await _compliance.ReviewAsync(
+            biller,
+            definition,
+            ComplianceReviewStage.Draft,
+            cancellationToken);
         var saved = await repository.SaveExperienceAsync(
-            current with { Definition = request.Definition with { BillerId = billerId, Brief = request.Definition.Brief ?? current.Definition.Brief }, Findings = findings },
+            current with { Definition = definition, Findings = findings },
             request.ExpectedETag ?? current.ETag,
             cancellationToken);
         LogDraftUpdated(logger, billerId, saved.Version, findings.Count);
@@ -338,6 +352,7 @@ public sealed partial class BillerOnboardingService(
         using var activity = StartActivity("experience.approve");
         activity?.SetTag("ic.biller_id", billerId);
         var experience = await GetRequiredExperienceAsync(billerId, cancellationToken);
+        var biller = await GetRequiredBillerAsync(billerId, cancellationToken);
         var run = await GetRequiredRunAsync(billerId, cancellationToken);
         if (experience.Id != request.Revision)
         {
@@ -358,7 +373,11 @@ public sealed partial class BillerOnboardingService(
                 [finding]);
         }
 
-        var findings = ValidateDefinition(billerId, experience.Definition);
+        var findings = await _compliance.ReviewAsync(
+            biller,
+            experience.Definition,
+            ComplianceReviewStage.Approval,
+            cancellationToken);
         var blockingFindings = findings
             .Where(finding => finding.Severity == ComplianceFindingSeverity.Blocking)
             .ToArray();
@@ -406,6 +425,7 @@ public sealed partial class BillerOnboardingService(
         using var activity = StartActivity("experience.publish.request");
         activity?.SetTag("ic.biller_id", billerId);
         var experience = await GetRequiredExperienceAsync(billerId, cancellationToken);
+        var biller = await GetRequiredBillerAsync(billerId, cancellationToken);
         var run = await GetRequiredRunAsync(billerId, cancellationToken);
         if (experience.Id != request.Revision)
         {
@@ -416,6 +436,32 @@ public sealed partial class BillerOnboardingService(
         var deploymentId = $"deployment-{experience.Version}";
         var now = DateTimeOffset.UtcNow;
         var existing = await repository.GetDeploymentAsync(billerId, deploymentId, cancellationToken);
+        IReadOnlyList<ComplianceFinding>? publishFindings = null;
+        var requeuingFailedPublication =
+            experience.State == ExperienceRevisionState.Failed &&
+            existing?.Status == "failed";
+        if (experience.State == ExperienceRevisionState.Approved || requeuingFailedPublication)
+        {
+            publishFindings = await _compliance.ReviewAsync(
+                biller,
+                experience.Definition,
+                ComplianceReviewStage.Publish,
+                cancellationToken);
+            var blockingFindings = publishFindings
+                .Where(finding => finding.Severity == ComplianceFindingSeverity.Blocking)
+                .ToArray();
+            if (blockingFindings.Length > 0)
+            {
+                foreach (var finding in blockingFindings)
+                {
+                    LogBlockingFinding(logger, billerId, experience.Id, finding.Code, finding.Message);
+                }
+                throw new ExperienceValidationException(
+                    "This experience is not ready to publish. Resolve the listed validation items and try again.",
+                    blockingFindings);
+            }
+        }
+
         DeploymentRecord deployment;
         if (existing is not null)
         {
@@ -476,7 +522,14 @@ public sealed partial class BillerOnboardingService(
         if (publicationInProgress &&
             experience.State is ExperienceRevisionState.Approved or ExperienceRevisionState.Failed)
         {
-            await repository.SaveExperienceAsync(experience with { State = ExperienceRevisionState.Publishing }, experience.ETag, cancellationToken);
+            await repository.SaveExperienceAsync(
+                experience with
+                {
+                    State = ExperienceRevisionState.Publishing,
+                    Findings = publishFindings ?? experience.Findings
+                },
+                experience.ETag,
+                cancellationToken);
         }
         if (publicationInProgress &&
             run.State is OnboardingSessionState.Approved or OnboardingSessionState.Failed)
@@ -672,59 +725,6 @@ public sealed partial class BillerOnboardingService(
         }
     }
 
-    private List<ComplianceFinding> ValidateDefinition(string billerId, BillerExperienceDefinition definition)
-    {
-        var findings = new List<ComplianceFinding>();
-        if (!HexColorRegex().IsMatch(definition.Brand.PrimaryColor) || !HexColorRegex().IsMatch(definition.Brand.SecondaryColor))
-        {
-            findings.Add(new("BRAND_COLOR_INVALID", "Brand colors must use six-digit hexadecimal values.", ComplianceFindingSeverity.Blocking));
-        }
-        if (definition.EnabledPaymentCapabilities.Count == 0)
-        {
-            findings.Add(new("PAYMENT_METHOD_REQUIRED", "At least one existing payment capability is required.", ComplianceFindingSeverity.Blocking));
-        }
-        if (definition.Preferences is { } preferences)
-        {
-            var unsupportedMethods = preferences.AcceptedMethods
-                .Except(definition.EnabledPaymentCapabilities, StringComparer.OrdinalIgnoreCase)
-                .ToArray();
-            if (unsupportedMethods.Length > 0)
-            {
-                findings.Add(new("PAYMENT_METHOD_UNSUPPORTED", $"Selected methods are not supported by the existing rails: {string.Join(", ", unsupportedMethods)}.", ComplianceFindingSeverity.Blocking));
-            }
-            if (preferences.AcceptedMethods.Count == 0)
-            {
-                findings.Add(new("PAYMENT_METHOD_SELECTION_REQUIRED", "At least one supported payment method must be selected for the payer experience.", ComplianceFindingSeverity.Blocking));
-            }
-        }
-        foreach (var action in definition.Ui?.Actions ?? [])
-        {
-            if (string.IsNullOrWhiteSpace(action.Label) || action.Label.Length > 48)
-            {
-                findings.Add(new("ACTION_LABEL_INVALID", "Action labels must contain 1 to 48 characters.", ComplianceFindingSeverity.Blocking));
-            }
-            if (!Enum.IsDefined(action.Action))
-            {
-                findings.Add(new("ACTION_TYPE_INVALID", "Actions must use a supported action type.", ComplianceFindingSeverity.Blocking));
-                continue;
-            }
-            if (action.Action == ExperienceActionType.SchedulePayment &&
-                !definition.EnabledPaymentCapabilities.Any(capability =>
-                    string.Equals(capability, "card", StringComparison.OrdinalIgnoreCase) ||
-                    string.Equals(capability, "ach", StringComparison.OrdinalIgnoreCase)))
-            {
-                findings.Add(new("SCHEDULE_METHOD_REQUIRED", "Pay later requires an enabled card or ACH payment method.", ComplianceFindingSeverity.Blocking));
-            }
-        }
-        findings.Add(new("COMPLIANCE_REVIEW_REQUIRED", "Compliance guidance must be reviewed by the biller before publication.", ComplianceFindingSeverity.Warning));
-        if (findings.Any(finding => finding.Severity == ComplianceFindingSeverity.Blocking))
-        {
-            BillerExperienceTelemetry.ValidationFailures.Add(1, new KeyValuePair<string, object?>("scope", "experience"));
-            LogDefinitionValidationFailed(logger, billerId, findings.Count);
-        }
-        return findings;
-    }
-
     private static BillerExperienceDefinition CreateInitialDefinition(BillerRecord biller)
     {
         var primary = biller.Brand?.PrimaryColor ?? "#085368";
@@ -830,6 +830,15 @@ public sealed partial class BillerOnboardingService(
         _ => DeploymentState.Failed
     };
 
+    private static ComplianceReviewService CreateDefaultComplianceService()
+    {
+        var options = Microsoft.Extensions.Options.Options.Create(new BillerExperienceOptions());
+        return new ComplianceReviewService(
+            new CompliancePolicyEngine(options),
+            options,
+            Microsoft.Extensions.Logging.Abstractions.NullLogger<ComplianceReviewService>.Instance);
+    }
+
     private static Activity? StartActivity(string name) => BillerExperienceTelemetry.Source.StartActivity(name);
 
     // W3C traceparent (00-{trace_id}-{span_id}-{flags}) captured at publish-enqueue so the Worker
@@ -860,9 +869,6 @@ public sealed partial class BillerOnboardingService(
     [GeneratedRegex("^[0-9]{5}$")]
     private static partial Regex PostalCodeRegex();
 
-    [GeneratedRegex("^#[0-9a-fA-F]{6}$")]
-    private static partial Regex HexColorRegex();
-
     [LoggerMessage(1000, LogLevel.Information, "Created biller {BillerId}, session {SessionId}, model provider {Provider}")]
     private static partial void LogBillerCreated(ILogger logger, string billerId, string sessionId, string provider);
 
@@ -883,9 +889,6 @@ public sealed partial class BillerOnboardingService(
 
     [LoggerMessage(1900, LogLevel.Error, "Validation failed for biller {BillerId}, field {Field}: {Reason}")]
     private static partial void LogValidationError(ILogger logger, string? billerId, string field, string reason);
-
-    [LoggerMessage(1901, LogLevel.Error, "Experience validation failed for biller {BillerId} with {FindingCount} findings")]
-    private static partial void LogDefinitionValidationFailed(ILogger logger, string billerId, int findingCount);
 
     [LoggerMessage(1902, LogLevel.Error, "Invoice seeding failed for biller {BillerId}; continuing with biller creation")]
     private static partial void LogInvoiceSeedingFailed(ILogger logger, string billerId, Exception exception);
