@@ -8,7 +8,7 @@ const session = (overrides: Partial<Session> = {}): Session => ({
 });
 
 describe('billing publish readiness', () => {
-  it('blocks publication and surfaces the exact pending confirmation question', () => {
+  it('does not block publication on optional confirmation', () => {
     const pending = session({
       billing_profile: { schema_version: '1', confirmed: false, categories: [] },
       current_question: {
@@ -16,14 +16,24 @@ describe('billing publish readiness', () => {
         prompt: 'Please confirm this billing policy: Tax: monthly, $10 late fee, pay in full', sequence: 5,
       },
     });
-    expect(billingInterviewPending(pending)).toBe(true);
+    expect(billingInterviewPending(pending)).toBe(false);
     expect(billingInterviewPrompt(pending)).toBe(pending.current_question?.prompt);
   });
 
-  it('allows publication only after the billing profile is confirmed', () => {
+  it('does not block when an operational value will be assumed by the agents', () => {
+    expect(billingInterviewPending(session({
+      billing_profile: { schema_version: '1', confirmed: false, categories: [] },
+      current_question: {
+        question_id: 'billing.categories', dimension: 'categories',
+        prompt: 'What are you billing people for?', sequence: 1,
+      },
+    }))).toBe(false);
+  });
+
+  it('allows publication when policy values exist without confirmation', () => {
     expect(billingInterviewPending(session({
       state: 'draft_ready',
-      billing_profile: { schema_version: '1', confirmed: true, categories: [] },
+      billing_profile: { schema_version: '1', confirmed: false, categories: [] },
       current_question: null,
     }))).toBe(false);
   });

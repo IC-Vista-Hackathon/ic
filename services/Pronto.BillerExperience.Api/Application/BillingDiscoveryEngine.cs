@@ -8,7 +8,8 @@ namespace Pronto.BillerExperience.Api.Application;
 
 /// <summary>
 /// Server-owned questionnaire state machine. The conversational model may explain or restate
-/// these questions, but it cannot skip them, invent policy, or declare the profile complete.
+/// these questions. When the biller omits an answer, the engine may apply bounded conservative
+/// defaults, but every assumed value is retained as explicit provenance and remains editable.
 /// </summary>
 public sealed partial class BillingDiscoveryEngine(ILogger<BillingDiscoveryEngine> logger)
 {
@@ -20,14 +21,87 @@ public sealed partial class BillingDiscoveryEngine(ILogger<BillingDiscoveryEngin
     {
         var profile = Normalize(source);
         var questions = BuildQuestions(profile);
-        var current = questions.FirstOrDefault(question => IsMissing(profile, question));
-        var completed = questions.Count(question => !IsMissing(profile, question));
-        var missing = questions.Where(question => IsMissing(profile, question)).Select(question => question.QuestionId).ToArray();
+        var required = questions.Where(question => question.Dimension != BillingDiscoveryDimension.Confirmation).ToArray();
+        var missingQuestions = required.Where(question => IsMissing(profile, question)).ToArray();
+        var current = missingQuestions.FirstOrDefault()
+            ?? questions.FirstOrDefault(question => question.Dimension == BillingDiscoveryDimension.Confirmation && IsMissing(profile, question));
+        var completed = required.Length - missingQuestions.Length;
+        var missing = missingQuestions.Select(question => question.QuestionId).ToArray();
         return new BillingDiscoveryState(
             profile,
             current,
-            new BillingDiscoveryProgress(completed, questions.Count, current is null),
+            new BillingDiscoveryProgress(completed, required.Length, missing.Length == 0),
             missing);
+    }
+
+    public BillingDiscoveryAssumptionTurn ApplyAssumptions(string billerId, BillingProfile? source, string? billType)
+    {
+        var profile = Normalize(source);
+        var assumptions = profile.Assumptions?.ToList() ?? [];
+        var added = new List<BillingPolicyAssumption>();
+
+        if (profile.Categories.Count == 0)
+        {
+            var categoryName = InferCategoryName(billType);
+            var category = new BillingCategory(Slug(categoryName), categoryName);
+            profile = profile with { Categories = [category] };
+            AddAssumption("billing.categories", $"Billing category: {categoryName}.");
+        }
+
+        var categories = profile.Categories.Select(category =>
+        {
+            var updated = category;
+            if (updated.Cadence is null)
+            {
+                updated = updated with { Cadence = new BillingCadence(BillingCadenceKind.Monthly) };
+                AddAssumption($"billing.category.{category.Id}.cadence", $"{category.DisplayName} is billed monthly.");
+            }
+            if (updated.StateRules is not { Count: > 0 })
+            {
+                updated = updated with
+                {
+                    StateRules = [new AccountStateRule("Payment is marked past due after the due date; no automatic suspension, lapse, or cancellation is assumed.", ResultingState: "past_due")]
+                };
+                AddAssumption($"billing.category.{category.Id}.state_rules", $"{category.DisplayName} is marked past due after its due date, with no automatic suspension, lapse, or cancellation.");
+            }
+            else if (NeedsResultingState(updated))
+            {
+                var rule = updated.StateRules[0];
+                updated = updated with { StateRules = [rule with { ResultingState = "past_due", Description = $"{rule.Description} Resulting state: past due." }] };
+                AddAssumption($"billing.category.{category.Id}.resulting_state", $"{category.DisplayName} enters the past-due state when its stated late-payment rule applies.");
+            }
+            if (updated.PaymentTerms is null)
+            {
+                updated = updated with { PaymentTerms = new PaymentTerms(SettlementMode.PayInFull, Details: "Assumed pay in full.", LimitsConfirmed: true) };
+                AddAssumption($"billing.category.{category.Id}.payment_terms", $"{category.DisplayName} must be paid in full.");
+            }
+            else if (updated.PaymentTerms is { Mode: SettlementMode.InstallmentsAllowed, LimitsConfirmed: false } terms)
+            {
+                var maximum = terms.MaximumInstallments ?? 4;
+                updated = updated with { PaymentTerms = terms with { MaximumInstallments = maximum, LimitsConfirmed = true } };
+                AddAssumption($"billing.category.{category.Id}.installment_limits", $"{category.DisplayName} allows up to {maximum} installments.");
+            }
+            return updated;
+        }).ToArray();
+
+        profile = profile with { Categories = categories, Assumptions = assumptions };
+        var state = Inspect(profile);
+        if (added.Count > 0)
+        {
+            LogAssumptionsApplied(logger, billerId, added.Count);
+            BillerExperienceTelemetry.DiscoveryAnswers.Add(added.Count, new("dimension", "assumption"), new("outcome", "applied"));
+        }
+        var reply = added.Count == 0 ? string.Empty :
+            $"I used these assumptions so your experience can proceed:\n{string.Join("\n", added.Select(item => $"- {item.Description}"))}\nYou can publish now, confirm them, or revise any assumption in the preview.";
+        return new BillingDiscoveryAssumptionTurn(state, added, reply);
+
+        void AddAssumption(string questionId, string description)
+        {
+            if (assumptions.Any(item => item.QuestionId == questionId)) return;
+            var assumption = new BillingPolicyAssumption(questionId, description);
+            assumptions.Add(assumption);
+            added.Add(assumption);
+        }
     }
 
     public BillingDiscoveryTurn ApplyAnswer(string billerId, BillingProfile? source, string message)
@@ -71,7 +145,11 @@ public sealed partial class BillingDiscoveryEngine(ILogger<BillingDiscoveryEngin
 
     public BillingDiscoveryState Reopen(string billerId, BillingProfile? source, string questionId)
     {
-        var profile = Normalize(source) with { Confirmed = false };
+        var profile = Normalize(source) with
+        {
+            Confirmed = false,
+            Assumptions = Normalize(source).Assumptions?.Where(item => item.QuestionId != questionId).ToArray()
+        };
         var question = BuildQuestions(profile).FirstOrDefault(item => item.QuestionId == questionId)
             ?? throw new ArgumentException($"Billing discovery question '{questionId}' was not found.", nameof(questionId));
         profile = question.Dimension switch
@@ -91,7 +169,7 @@ public sealed partial class BillingDiscoveryEngine(ILogger<BillingDiscoveryEngin
     {
         var text = message.Trim();
         if (text.StartsWith("build ", StringComparison.OrdinalIgnoreCase) ||
-            !Regex.IsMatch(text, @"\b(premium|dues?|assessment|fines?|fees?|charge|bill|invoice|rent|tax|subscription|service)\b", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant))
+            !Regex.IsMatch(text, @"\b(premiums?|polic(?:y|ies)|dues?|assessments?|fines?|fees?|charges?|bills?|invoices?|rent|tax(?:es)?|subscriptions?|services?|water|sewer|electric(?:ity)?|gas|permits?|court)\b", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant))
             return profile;
 
         var parenthetical = Regex.Match(text, @"(?<prefix>[^()]*(?:premium|policy)[^()]*)\((?<items>[^)]+)\)", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
@@ -247,7 +325,8 @@ public sealed partial class BillingDiscoveryEngine(ILogger<BillingDiscoveryEngin
         return profile with
         {
             Confirmed = true,
-            Categories = profile.Categories.Select(category => category with { Confirmed = true }).ToArray()
+            Categories = profile.Categories.Select(category => category with { Confirmed = true }).ToArray(),
+            Assumptions = []
         };
     }
 
@@ -296,7 +375,19 @@ public sealed partial class BillingDiscoveryEngine(ILogger<BillingDiscoveryEngin
 
     private static BillingProfile Normalize(BillingProfile? source) => source is null
         ? BillingProfile.Empty
-        : source with { Categories = source.Categories ?? [] };
+        : source with { Categories = source.Categories ?? [], Assumptions = source.Assumptions ?? [] };
+
+    private static string InferCategoryName(string? billType)
+    {
+        var value = billType?.Trim() ?? string.Empty;
+        if (Regex.IsMatch(value, @"insurance|policy|premium", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant)) return "Policy Premium";
+        if (Regex.IsMatch(value, @"association|hoa|dues", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant)) return "Dues";
+        if (Regex.IsMatch(value, @"tax|government", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant)) return "Tax";
+        if (Regex.IsMatch(value, @"utility|water|sewer|electric|gas", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant)) return "Utility Bill";
+        return string.IsNullOrWhiteSpace(value) || value.Equals("other", StringComparison.OrdinalIgnoreCase)
+            ? "Account Balance"
+            : $"{ToTitle(value)} Bill";
+    }
 
     private static BillingCategory? Find(BillingProfile profile, string id) => profile.Categories.FirstOrDefault(category => category.Id == id);
 
@@ -423,6 +514,9 @@ public sealed partial class BillingDiscoveryEngine(ILogger<BillingDiscoveryEngin
 
     [LoggerMessage(2252, LogLevel.Information, "Billing discovery reopened question {QuestionId} for biller {BillerId}")]
     private static partial void LogQuestionReopened(ILogger logger, string billerId, string questionId);
+
+    [LoggerMessage(2253, LogLevel.Information, "Billing discovery applied {AssumptionCount} explicit assumptions for biller {BillerId}")]
+    private static partial void LogAssumptionsApplied(ILogger logger, string billerId, int assumptionCount);
 }
 
 public sealed record BillingDiscoveryState(
@@ -432,3 +526,8 @@ public sealed record BillingDiscoveryState(
     IReadOnlyList<string> MissingFields);
 
 public sealed record BillingDiscoveryTurn(BillingDiscoveryState State, bool AnswerAccepted, string Reply);
+
+public sealed record BillingDiscoveryAssumptionTurn(
+    BillingDiscoveryState State,
+    IReadOnlyList<BillingPolicyAssumption> AddedAssumptions,
+    string Reply);
