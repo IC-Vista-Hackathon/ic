@@ -142,6 +142,122 @@ public sealed class OrchestrationRunnerTests
         Assert.Equal(2, attempts);
     }
 
+    [Fact]
+    public async Task ObservableStepSucceedsWhenCompletedEventPublishFails()
+    {
+        var step = new ObservableOrchestrationStep<string, string>(
+            "experience-designer", "Experience Designer", "Designing",
+            static (input, _, _) => ValueTask.FromResult(input.ToUpperInvariant()),
+            new CompletedEventThrowingSink());
+
+        var result = await step.ExecuteAsync("pay later", OrchestrationContext.Create(billerId: "biller-1"));
+
+        Assert.Equal("PAY LATER", result);
+    }
+
+    [Fact]
+    public async Task CheckpointedExecutionResumesEachStepIndependently()
+    {
+        var store = new KeyedMemoryStateStore();
+        var firstStepCalls = 0;
+
+        var first = await CheckpointedExecution.ExecuteAsync(store, "biller-1", "run-A", "wf", 1,
+            _ => { firstStepCalls++; return ValueTask.FromResult(111); });
+        _ = await CheckpointedExecution.ExecuteAsync(store, "biller-1", "run-A", "wf", 2,
+            _ => ValueTask.FromResult("step-two"));
+
+        // Re-drive step 1 as if the process restarted; it must return step 1's own output.
+        var resumedFirst = await CheckpointedExecution.ExecuteAsync(store, "biller-1", "run-A", "wf", 1,
+            _ => { firstStepCalls++; return ValueTask.FromResult(111); });
+
+        Assert.Equal(111, first);
+        Assert.Equal(111, resumedFirst);
+        Assert.Equal(1, firstStepCalls);
+    }
+
+    [Fact]
+    public async Task CheckpointedExecutionReturnsNullConsistentlyAcrossResume()
+    {
+        var store = new KeyedMemoryStateStore();
+
+        var first = await CheckpointedExecution.ExecuteAsync<string?>(store, "biller-1", "run-N", "wf", 1,
+            _ => ValueTask.FromResult<string?>(null));
+        var resumed = await CheckpointedExecution.ExecuteAsync<string?>(store, "biller-1", "run-N", "wf", 1,
+            _ => ValueTask.FromResult<string?>("should-not-run"));
+
+        Assert.Null(first);
+        Assert.Null(resumed);
+    }
+
+    [Fact]
+    public async Task FanOutInvokesOnRetryAndRecovers()
+    {
+        var retries = 0;
+        var results = await BoundedFanOut.ExecuteAsync<int, int>([1], 1,
+            (input, attempt, _) => attempt < 2
+                ? ValueTask.FromException<int>(new HttpRequestException("transient"))
+                : ValueTask.FromResult(input * 10),
+            new OrchestrationExecutionPolicy(MaxAttempts: 2, InitialBackoff: TimeSpan.Zero),
+            onRetry: (_, _, _, _, _) => { retries++; return ValueTask.CompletedTask; });
+
+        var result = Assert.Single(results);
+        Assert.True(result.Succeeded);
+        Assert.Equal(10, result.Output);
+        Assert.Equal(2, result.Attempts);
+        Assert.Equal(1, retries);
+    }
+
+    [Fact]
+    public async Task FanOutDoesNotHoldConcurrencyGateDuringBackoff()
+    {
+        var order = new List<string>();
+        var gate = new object();
+        void Record(string entry) { lock (gate) order.Add(entry); }
+
+        var results = await BoundedFanOut.ExecuteAsync<string, string>(["A", "B"], 1,
+            (input, attempt, _) =>
+            {
+                if (input == "A" && attempt == 1)
+                {
+                    Record("A1");
+                    return ValueTask.FromException<string>(new HttpRequestException("transient"));
+                }
+
+                Record(input == "A" ? "A2" : "B");
+                return ValueTask.FromResult(input);
+            },
+            new OrchestrationExecutionPolicy(MaxAttempts: 2, InitialBackoff: TimeSpan.FromMilliseconds(300)));
+
+        Assert.All(results, result => Assert.True(result.Succeeded));
+        // With the gate released during A's backoff, B runs before A's second attempt.
+        Assert.True(order.IndexOf("B") < order.IndexOf("A2"),
+            $"expected B before A2 but observed: {string.Join(",", order)}");
+    }
+
+    private sealed class CompletedEventThrowingSink : IOrchestrationEventSink
+    {
+        public ValueTask PublishAsync(OrchestrationEvent activity, CancellationToken cancellationToken = default) =>
+            activity.Status == OrchestrationEventStatus.Completed
+                ? ValueTask.FromException(new IOException("sink failure persisting completed event"))
+                : ValueTask.CompletedTask;
+    }
+
+    private sealed class KeyedMemoryStateStore : IOrchestrationStateStore
+    {
+        private readonly Dictionary<string, OrchestrationCheckpoint> checkpoints = new(StringComparer.Ordinal);
+        public ValueTask<OrchestrationCheckpoint?> ReadAsync(string partitionKey, string runId, CancellationToken cancellationToken = default) =>
+            ValueTask.FromResult(checkpoints.GetValueOrDefault($"{partitionKey}|{runId}"));
+        public ValueTask<OrchestrationCheckpoint> SaveAsync(OrchestrationCheckpoint value, string? expectedETag = null, CancellationToken cancellationToken = default)
+        {
+            var key = $"{value.PartitionKey}|{value.RunId}";
+            if (checkpoints.TryGetValue(key, out var existing) && existing.ETag != expectedETag)
+                throw new InvalidOperationException("ETag mismatch.");
+            var saved = value with { ETag = Guid.NewGuid().ToString("N") };
+            checkpoints[key] = saved;
+            return ValueTask.FromResult(saved);
+        }
+    }
+
     private sealed class CollectingSink : IOrchestrationEventSink
     {
         public List<OrchestrationEvent> Events { get; } = [];

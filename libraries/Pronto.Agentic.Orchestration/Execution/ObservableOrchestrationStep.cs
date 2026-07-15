@@ -18,11 +18,11 @@ public sealed class ObservableOrchestrationStep<TInput, TOutput>(
             LogLevel.Error,
             new EventId(9101, nameof(LogStepFailure)),
             "Agent step {AgentId} failed for run {RunId}, biller {BillerId}; error {ErrorCode}, trace {TraceId}");
-    private static readonly Action<ILogger, string, string, string?, Exception> LogFailureEventError =
-        LoggerMessage.Define<string, string, string?>(
+    private static readonly Action<ILogger, string, string, string, string?, Exception> LogEventPublishError =
+        LoggerMessage.Define<string, string, string, string?>(
             LogLevel.Error,
-            new EventId(9102, nameof(LogFailureEventError)),
-            "Publishing failure activity for agent {AgentId}, run {RunId}, biller {BillerId} failed; preserving the original error");
+            new EventId(9102, nameof(LogEventPublishError)),
+            "Publishing {Status} activity for agent {AgentId}, run {RunId}, biller {BillerId} failed; continuing without failing the step");
 
     public string Name => name;
 
@@ -35,7 +35,7 @@ public sealed class ObservableOrchestrationStep<TInput, TOutput>(
         var sequence = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
         var tags = new TagList { { "agent", name } };
         OrchestrationTelemetry.StepStarted.Add(1, tags);
-        await eventSink.PublishAsync(Event(OrchestrationEventStatus.Running, summary, sequence, activity), cancellationToken);
+        await PublishSafeAsync(Event(OrchestrationEventStatus.Running, summary, sequence, activity), cancellationToken);
         try
         {
             var result = await execute(input, context, cancellationToken);
@@ -43,7 +43,7 @@ public sealed class ObservableOrchestrationStep<TInput, TOutput>(
             activity?.SetStatus(ActivityStatusCode.Ok);
             OrchestrationTelemetry.StepCompleted.Add(1, tags);
             OrchestrationTelemetry.StepDuration.Record(durationMs, tags);
-            await eventSink.PublishAsync(Event(OrchestrationEventStatus.Completed, "Completed", sequence + 1, activity, durationMs: durationMs), cancellationToken);
+            await PublishSafeAsync(Event(OrchestrationEventStatus.Completed, "Completed", sequence + 1, activity, durationMs: durationMs), cancellationToken);
             return result;
         }
         catch (Exception exception)
@@ -58,19 +58,26 @@ public sealed class ObservableOrchestrationStep<TInput, TOutput>(
             {
                 LogStepFailure(logger, name, context.RunId, context.BillerId, errorCode, activity?.TraceId.ToString(), exception);
             }
+            await PublishSafeAsync(Event(OrchestrationEventStatus.Failed, "The agent step failed.", sequence + 1,
+                activity, errorCode, retryable: exception is TimeoutException, durationMs: durationMs), CancellationToken.None);
+            throw;
+        }
+
+        // Event publication is best-effort observability: a failing sink must never turn a
+        // successful step into a failure, discard its result, or mask the original error.
+        async ValueTask PublishSafeAsync(OrchestrationEvent activityEvent, CancellationToken token)
+        {
             try
             {
-                await eventSink.PublishAsync(Event(OrchestrationEventStatus.Failed, "The agent step failed.", sequence + 1,
-                    activity, errorCode, retryable: exception is TimeoutException, durationMs: durationMs), CancellationToken.None);
+                await eventSink.PublishAsync(activityEvent, token);
             }
             catch (Exception sinkException)
             {
                 if (logger is not null)
                 {
-                    LogFailureEventError(logger, name, context.RunId, context.BillerId, sinkException);
+                    LogEventPublishError(logger, activityEvent.Status.ToString(), name, context.RunId, context.BillerId, sinkException);
                 }
             }
-            throw;
         }
 
         OrchestrationEvent Event(
