@@ -541,6 +541,7 @@ export function App() {
   };
 
   const runAnalysis = async () => {
+    trackEvent('studio.checklist_step_completed', { step: 'customer_experience', biller_id: s.backendBillerId ?? undefined });
     patch({ screen: 'analyzing', analyzeStage: 0, orchestrationError: null, agentActivity: [] });
     later(() => patch({ analyzeStage: 1 }), 700);
     later(() => patch({ analyzeStage: 2 }), 1400);
