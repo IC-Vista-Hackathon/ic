@@ -110,7 +110,11 @@ public sealed class McpServiceRouterTests
             ActivityStopped = activity => activities.Add(activity),
         };
         ActivitySource.AddActivityListener(listener);
-        var token = capabilities.Issue("biller-1", "run-1", "agent-1", canWrite: false);
+        // Unique run id isolates this test's activities from any concurrently-running
+        // tests: the listener is process-global, so activities from parallel tests using
+        // the same tool names would otherwise leak into the collected bag.
+        var runId = $"run-{Guid.NewGuid():N}";
+        var token = capabilities.Issue("biller-1", runId, "agent-1", canWrite: false);
 
         var verification = await tools.VerifyPayerAccountAsync(token, "private-account", default);
         var profile = await tools.GetPayerProfileAsync(verification.PayerCapabilityToken, default);
@@ -122,7 +126,8 @@ public sealed class McpServiceRouterTests
             ServiceToolRegistry.ToolNames.GetPayerProfile,
         ];
         var toolActivities = activities
-            .Where(activity => expectedTools.Contains(activity.GetTagItem("tool_name")))
+            .Where(activity => (activity.GetTagItem("run_id") as string) == runId
+                && expectedTools.Contains(activity.GetTagItem("tool_name")))
             .ToList();
         Assert.Equal(2, toolActivities.Count);
         Assert.All(toolActivities, activity =>
