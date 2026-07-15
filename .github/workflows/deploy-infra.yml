@@ -47,12 +47,23 @@ jobs:
           az account set --subscription "$SUBSCRIPTION_ID"
           az bicep build --file main.bicep --stdout > /dev/null
 
+      # The deploy workflows authenticate to AKS through Azure RBAC (no cluster-admin
+      # certificates), so this SP must be in aksDeploymentPrincipalIds to receive
+      # Cluster User + RBAC Writer. Resolve our own object id rather than hardcoding it.
+      - name: Resolve deployer object id
+        run: |
+          APP_ID=$(az account show --query user.name -o tsv)
+          DEPLOYER_OID=$(az ad sp show --id "$APP_ID" --query id -o tsv)
+          echo "DEPLOYER_OID=$DEPLOYER_OID" >> "$GITHUB_ENV"
+          echo "deployer object id: $DEPLOYER_OID"
+
       - name: What-if
         working-directory: infra/bicep
         run: |
           az deployment sub what-if --name ic-hack --location eastus2 \
             --template-file main.bicep \
-            --parameters observabilityAlertEmailAddress="$ALERT_EMAIL"
+            --parameters observabilityAlertEmailAddress="$ALERT_EMAIL" \
+            --parameters aksDeploymentPrincipalIds="[\"$DEPLOYER_OID\"]"
 
       - name: Apply
         if: inputs.mode == 'apply'
@@ -60,7 +71,8 @@ jobs:
         run: |
           az deployment sub create --name ic-hack --location eastus2 \
             --template-file main.bicep \
-            --parameters observabilityAlertEmailAddress="$ALERT_EMAIL"
+            --parameters observabilityAlertEmailAddress="$ALERT_EMAIL" \
+            --parameters aksDeploymentPrincipalIds="[\"$DEPLOYER_OID\"]"
 
       - name: Show outputs
         if: inputs.mode == 'apply'
