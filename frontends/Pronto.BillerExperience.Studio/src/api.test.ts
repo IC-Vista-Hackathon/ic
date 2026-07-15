@@ -21,7 +21,7 @@ describe('Studio API request budgets', () => {
 
     await api.chat('biller-1', 'Research this biller');
 
-    expect(CHAT_REQUEST_TIMEOUT_MS).toBe(120_000);
+    expect(CHAT_REQUEST_TIMEOUT_MS).toBe(300_000);
     expect(delays).toEqual([CHAT_REQUEST_TIMEOUT_MS]);
   });
 });
