@@ -8,6 +8,22 @@ namespace Pronto.Payment.Contracts.Tests;
 
 public sealed class PurchaseContractsTests
 {
+    [Fact]
+    public void PurchaseRequestIncludesStableIdempotencyKey()
+    {
+        var request = new CreatePurchaseRequest(
+            "biller-1",
+            PurchasePlan.Shared,
+            "purchase-attempt-1");
+
+        var json = JsonSerializer.Serialize(request, CaseInsensitive);
+
+        Assert.Contains(
+            "\"idempotency_key\":\"purchase-attempt-1\"",
+            json,
+            StringComparison.Ordinal);
+    }
+
     // Wire policy: snake_case + lowercase string enums (design/contracts.md).
     private static readonly JsonSerializerOptions CaseInsensitive = new(JsonSerializerDefaults.Web)
     {

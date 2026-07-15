@@ -4,7 +4,8 @@ namespace Pronto.Payment.Contracts.V1.Purchases;
 
 public sealed record CreatePurchaseRequest(
     string BillerId,
-    PurchasePlan Plan);
+    PurchasePlan Plan,
+    string IdempotencyKey);
 
 public sealed record PurchaseResponse(
     string PurchaseId,

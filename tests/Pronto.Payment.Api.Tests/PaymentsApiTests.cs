@@ -21,13 +21,17 @@ public sealed class PaymentsApiTests : IClassFixture<WebApplicationFactory<Progr
     };
 
     private readonly FakeInvoiceClient fakeInvoices = new();
+    private readonly FakeBillerAccountClient fakeBillers = new();
     private readonly HttpClient client;
 
     public PaymentsApiTests(WebApplicationFactory<Program> factory)
     {
         client = factory.WithWebHostBuilder(builder =>
             builder.ConfigureServices(services =>
-                services.Replace(ServiceDescriptor.Singleton<IInvoiceClient>(fakeInvoices))))
+            {
+                services.Replace(ServiceDescriptor.Singleton<IInvoiceClient>(fakeInvoices));
+                services.Replace(ServiceDescriptor.Singleton<IBillerAccountClient>(fakeBillers));
+            }))
             .CreateClient();
     }
 
@@ -121,15 +125,40 @@ public sealed class PaymentsApiTests : IClassFixture<WebApplicationFactory<Progr
         var billerId = Guid.NewGuid().ToString();
 
         var first = await client.PostAsJsonAsync(
-            "purchases", new CreatePurchaseRequest(billerId, PurchasePlan.Isolated), Wire);
+            "purchases",
+            new CreatePurchaseRequest(billerId, PurchasePlan.Isolated, "purchase-attempt-1"),
+            Wire);
         Assert.Equal(HttpStatusCode.Created, first.StatusCode);
         var purchase = await first.Content.ReadFromJsonAsync<PurchaseResponse>(Wire);
         Assert.Equal(199900, purchase!.AmountCents);
         Assert.Equal(PurchaseStatus.Paid, purchase.Status);
 
         var second = await client.PostAsJsonAsync(
-            "purchases", new CreatePurchaseRequest(billerId, PurchasePlan.Shared), Wire);
+            "purchases",
+            new CreatePurchaseRequest(billerId, PurchasePlan.Shared, "purchase-attempt-2"),
+            Wire);
         Assert.Equal(HttpStatusCode.Conflict, second.StatusCode);
+    }
+
+    [Fact]
+    public async Task PurchaseRetryResumesPendingWorkflowWithSamePurchaseId()
+    {
+        var billerId = Guid.NewGuid().ToString();
+        fakeBillers.FailNext = true;
+        var request = new CreatePurchaseRequest(
+            billerId,
+            PurchasePlan.Shared,
+            "retryable-purchase");
+
+        var failed = await client.PostAsJsonAsync("purchases", request, Wire);
+        Assert.Equal(HttpStatusCode.InternalServerError, failed.StatusCode);
+
+        var retried = await client.PostAsJsonAsync("purchases", request, Wire);
+        Assert.Equal(HttpStatusCode.OK, retried.StatusCode);
+        var purchase = await retried.Content.ReadFromJsonAsync<PurchaseResponse>(Wire);
+        Assert.Equal(PurchaseStatus.Paid, purchase!.Status);
+        Assert.Equal(2, fakeBillers.PurchaseIds.Count);
+        Assert.Single(fakeBillers.PurchaseIds.Distinct(StringComparer.Ordinal));
     }
 
     [Fact]
@@ -147,5 +176,27 @@ public sealed class PaymentsApiTests : IClassFixture<WebApplicationFactory<Progr
         var payment = Assert.Single(history!);
         Assert.Equal("payer-1", payment.PayerAccountId);
         Assert.Equal(firstInvoice.Id, payment.InvoiceId);
+    }
+
+    private sealed class FakeBillerAccountClient : IBillerAccountClient
+    {
+        public bool FailNext { get; set; }
+        public List<string> PurchaseIds { get; } = [];
+
+        public Task AdvanceToPurchasedAsync(
+            string billerId,
+            string purchaseId,
+            PurchasePlan plan,
+            CancellationToken cancellationToken)
+        {
+            PurchaseIds.Add(purchaseId);
+            if (FailNext)
+            {
+                FailNext = false;
+                throw new HttpRequestException("Biller API unavailable.");
+            }
+
+            return Task.CompletedTask;
+        }
     }
 }

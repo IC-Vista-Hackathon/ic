@@ -5,8 +5,15 @@ namespace Pronto.Payment.Api.Storage;
 
 public interface IPurchaseStore
 {
-    /// <summary>Adds the purchase; throws 409 already_purchased if the biller has one.</summary>
-    Task AddAsync(PurchaseResponse purchase, CancellationToken cancellationToken = default);
+    Task<PurchaseReservation> ReserveAsync(
+        PurchaseResponse purchase,
+        string idempotencyKey,
+        CancellationToken cancellationToken = default);
+
+    Task<PurchaseResponse> CompleteAsync(
+        string billerId,
+        string purchaseId,
+        CancellationToken cancellationToken = default);
 
     Task<PurchaseResponse?> FindAsync(string billerId, string purchaseId, CancellationToken cancellationToken = default);
 
@@ -14,25 +21,53 @@ public interface IPurchaseStore
     Task PurgeByBillerAsync(string billerId, CancellationToken cancellationToken = default);
 }
 
+public sealed record PurchaseReservation(PurchaseResponse Purchase, bool Created);
+
 public sealed class InMemoryPurchaseStore : IPurchaseStore
 {
     private readonly object gate = new();
-    private readonly Dictionary<(string BillerId, string PurchaseId), PurchaseResponse> purchases = [];
+    private readonly Dictionary<string, StoredPurchase> purchases = [];
 
-    public Task AddAsync(PurchaseResponse purchase, CancellationToken cancellationToken = default)
+    public Task<PurchaseReservation> ReserveAsync(
+        PurchaseResponse purchase,
+        string idempotencyKey,
+        CancellationToken cancellationToken = default)
     {
         lock (gate)
         {
-            if (purchases.Keys.Any(key => key.BillerId == purchase.BillerId))
+            if (purchases.TryGetValue(purchase.BillerId, out var existing))
             {
-                throw ServiceException.Conflict(
-                    "already_purchased", $"biller {purchase.BillerId} already purchased the platform");
+                if (existing.IdempotencyKey == idempotencyKey
+                    && existing.Purchase.Plan == purchase.Plan)
+                {
+                    return Task.FromResult(new PurchaseReservation(existing.Purchase, Created: false));
+                }
+
+                throw AlreadyPurchased(purchase.BillerId);
             }
 
-            purchases[(purchase.BillerId, purchase.PurchaseId)] = purchase;
+            purchases[purchase.BillerId] = new StoredPurchase(purchase, idempotencyKey);
+            return Task.FromResult(new PurchaseReservation(purchase, Created: true));
         }
+    }
 
-        return Task.CompletedTask;
+    public Task<PurchaseResponse> CompleteAsync(
+        string billerId,
+        string purchaseId,
+        CancellationToken cancellationToken = default)
+    {
+        lock (gate)
+        {
+            if (!purchases.TryGetValue(billerId, out var existing)
+                || existing.Purchase.PurchaseId != purchaseId)
+            {
+                throw ServiceException.NotFound("not_found", $"purchase {purchaseId} not found");
+            }
+
+            var completed = existing.Purchase with { Status = PurchaseStatus.Paid };
+            purchases[billerId] = existing with { Purchase = completed };
+            return Task.FromResult(completed);
+        }
     }
 
     public Task<PurchaseResponse?> FindAsync(
@@ -40,7 +75,8 @@ public sealed class InMemoryPurchaseStore : IPurchaseStore
     {
         lock (gate)
         {
-            return Task.FromResult(purchases.GetValueOrDefault((billerId, purchaseId)));
+            var purchase = purchases.GetValueOrDefault(billerId)?.Purchase;
+            return Task.FromResult(purchase?.PurchaseId == purchaseId ? purchase : null);
         }
     }
 
@@ -48,12 +84,16 @@ public sealed class InMemoryPurchaseStore : IPurchaseStore
     {
         lock (gate)
         {
-            foreach (var key in purchases.Keys.Where(k => k.BillerId == billerId).ToList())
-            {
-                purchases.Remove(key);
-            }
+            purchases.Remove(billerId);
         }
 
         return Task.CompletedTask;
     }
+
+    private static ServiceException AlreadyPurchased(string billerId) =>
+        ServiceException.Conflict(
+            "already_purchased",
+            $"biller {billerId} already purchased or started purchasing the platform");
+
+    private sealed record StoredPurchase(PurchaseResponse Purchase, string IdempotencyKey);
 }

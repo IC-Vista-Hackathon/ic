@@ -30,7 +30,10 @@ else
 }
 
 builder.Services.AddSingleton<IBillerConfigClient, DemoBillerConfigClient>();
-builder.Services.AddSingleton<IBillerAccountClient, NoOpBillerAccountClient>();
+builder.Services.AddHttpClient<IBillerAccountClient, HttpBillerAccountClient>(client =>
+    client.BaseAddress = new Uri(
+        builder.Configuration["Services:BillerExperienceApi"] ?? "http://localhost:5000"))
+    .AddHttpMessageHandler<CorrelationPropagationHandler>();
 builder.Services.AddHttpClient<IInvoiceClient, HttpInvoiceClient>(client =>
     client.BaseAddress = new Uri(
         builder.Configuration["Services:InvoiceApi"] ?? "http://localhost:5101"))

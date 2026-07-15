@@ -23,18 +23,47 @@ public sealed class PurchasesController : ControllerBase
     public async Task<ActionResult<PurchaseResponse>> Create(
         CreatePurchaseRequest request, CancellationToken cancellationToken)
     {
-        var purchase = new PurchaseResponse(
+        if (string.IsNullOrWhiteSpace(request.BillerId))
+        {
+            throw ServiceException.BadRequest("biller_id_required", "biller_id is required");
+        }
+
+        if (string.IsNullOrWhiteSpace(request.IdempotencyKey))
+        {
+            throw ServiceException.BadRequest(
+                "idempotency_key_required",
+                "idempotency_key is required");
+        }
+
+        var pending = new PurchaseResponse(
             PurchaseId: Guid.NewGuid().ToString(),
-            BillerId: request.BillerId,
+            BillerId: request.BillerId.Trim(),
             Plan: request.Plan,
             AmountCents: request.Plan == PurchasePlan.Isolated ? 199900 : 49900,
-            Status: PurchaseStatus.Paid);
-        await store.AddAsync(purchase, cancellationToken).ConfigureAwait(false);
+            Status: PurchaseStatus.Pending);
+        var reservation = await store.ReserveAsync(
+            pending,
+            request.IdempotencyKey.Trim(),
+            cancellationToken).ConfigureAwait(false);
+        if (reservation.Purchase.Status == PurchaseStatus.Paid)
+        {
+            return Ok(reservation.Purchase);
+        }
 
-        await billerAccounts.AdvanceToPurchasedAsync(request.BillerId, request.Plan, cancellationToken)
+        await billerAccounts.AdvanceToPurchasedAsync(
+                reservation.Purchase.BillerId,
+                reservation.Purchase.PurchaseId,
+                reservation.Purchase.Plan,
+                cancellationToken)
             .ConfigureAwait(false);
+        var completed = await store.CompleteAsync(
+            reservation.Purchase.BillerId,
+            reservation.Purchase.PurchaseId,
+            cancellationToken).ConfigureAwait(false);
 
-        return Created($"/purchases/{purchase.PurchaseId}?biller_id={purchase.BillerId}", purchase);
+        return reservation.Created
+            ? Created($"/purchases/{completed.PurchaseId}?biller_id={completed.BillerId}", completed)
+            : Ok(completed);
     }
 
     [HttpGet("{purchaseId}")]

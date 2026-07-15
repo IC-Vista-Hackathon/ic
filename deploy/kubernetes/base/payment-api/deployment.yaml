@@ -29,6 +29,8 @@ spec:
             # (ic-nonprod) and prod (ic) each resolve to their own invoice API.
             - name: Services__InvoiceApi
               value: http://ic-invoice-api:8080
+            - name: Services__BillerExperienceApi
+              value: http://ic-biller-experience-api:8080
           readinessProbe:
             httpGet:
               path: /health/ready
