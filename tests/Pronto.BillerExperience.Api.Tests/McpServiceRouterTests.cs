@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using System.Diagnostics;
 using System.Diagnostics.Metrics;
 using System.Text.Json;
@@ -101,7 +102,7 @@ public sealed class McpServiceRouterTests
             "555-0100",
             ["private-account"],
             new PayerPreferences(false, true, [NotificationChannel.Email], null));
-        var activities = new List<Activity>();
+        var activities = new ConcurrentBag<Activity>();
         using var listener = new ActivityListener
         {
             ShouldListenTo = source => source.Name == "Pronto.BillerExperience",
@@ -145,7 +146,7 @@ public sealed class McpServiceRouterTests
     public async Task DownstreamFailureEmitsFailedMetricAndEvent()
     {
         var (tools, capabilities, _) = CreateTools();
-        var measurements = new List<(long Value, KeyValuePair<string, object?>[] Tags)>();
+        var measurements = new ConcurrentBag<(long Value, KeyValuePair<string, object?>[] Tags)>();
         using var meterListener = new MeterListener();
         meterListener.InstrumentPublished = (instrument, listener) =>
         {
@@ -158,7 +159,7 @@ public sealed class McpServiceRouterTests
         meterListener.SetMeasurementEventCallback<long>((_, value, tags, _) =>
             measurements.Add((value, tags.ToArray())));
         meterListener.Start();
-        var activities = new List<Activity>();
+        var activities = new ConcurrentBag<Activity>();
         using var activityListener = new ActivityListener
         {
             ShouldListenTo = source => source.Name == "Pronto.BillerExperience",
