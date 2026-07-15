@@ -608,7 +608,7 @@ export function App() {
   };
 
   const runAnalysis = async () => {
-    trackEvent('studio.checklist_step_completed', { step: 'customer_experience', biller_id: s.backendBillerId ?? undefined });
+    trackEvent('studio.checklist_step_completed', { step: CHECKLIST_STEPS[2], biller_id: s.backendBillerId ?? undefined });
     let aiUpdates: Partial<State> = {};
     if (!s.aiApplied) {
       const rec = computeAiRecommendations(s.vertical, s.selectedStates, s.otherVerticalDescription);
