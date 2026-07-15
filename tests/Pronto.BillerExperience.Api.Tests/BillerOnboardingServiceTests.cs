@@ -305,6 +305,40 @@ public sealed class BillerOnboardingServiceTests
     }
 
     [Fact]
+    public async Task DeterministicDesignerHonorsHeadingRequestAlongsideColor()
+    {
+        var service = CreateService();
+        var created = await service.CreateAsync(CreateRequest(), CancellationToken.None);
+
+        var response = await service.SendMessageAsync(
+            created.Biller.BillerId,
+            new("Change the primary color to purple and make the heading say Welcome back"),
+            CancellationToken.None);
+
+        // Both clearly-expressed requests are honored: the color and the heading text.
+        Assert.Equal("#6d28d9", response.Draft?.Definition.Brand.PrimaryColor);
+        Assert.Equal("Welcome back", response.Draft?.Definition.Content.Heading);
+    }
+
+    [Fact]
+    public async Task DeterministicDesignerLeavesHeadingUnchangedWhenNotRequested()
+    {
+        var service = CreateService();
+        var created = await service.CreateAsync(CreateRequest(), CancellationToken.None);
+        var original = created.Draft.Definition.Content.Heading;
+
+        var response = await service.SendMessageAsync(
+            created.Biller.BillerId,
+            new("change the primary color to green"),
+            CancellationToken.None);
+
+        // A request that never mentions the heading must not fabricate a heading change — otherwise
+        // the Studio's proposed-revision summary would describe an edit the biller never asked for.
+        Assert.Equal("#197d00", response.Draft?.Definition.Brand.PrimaryColor);
+        Assert.Equal(original, response.Draft?.Definition.Content.Heading);
+    }
+
+    [Fact]
     public async Task MissingWebsitePassesExplicitSkippedResearchToDesigner()
     {
         var generator = new CapturingDraftGenerator();

@@ -1,3 +1,5 @@
+using System.Text.Json.Serialization;
+
 namespace Pronto.BillerExperience.Contracts.V1.Experiences;
 
 public sealed record BillerExperienceDefinition(
@@ -80,7 +82,9 @@ public enum ExperienceActionType
     ContactSupport
 }
 
-public sealed record UpdateExperienceRequest(BillerExperienceDefinition Definition, string? ExpectedETag);
+public sealed record UpdateExperienceRequest(
+    BillerExperienceDefinition Definition,
+    [property: JsonPropertyName("expected_etag")] string? ExpectedETag);
 
 public sealed record ExperienceBrand(
     string DisplayName,

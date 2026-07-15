@@ -43,19 +43,7 @@ public sealed partial class BillerOnboardingService(
         var id = Guid.NewGuid().ToString("N");
         activity?.SetTag("ic.biller_id", id);
         var now = DateTimeOffset.UtcNow;
-        var slug = await ReserveSlugAsync(normalizedSlug, cancellationToken);
-        var biller = new BillerRecord(
-            id,
-            request.DisplayName.Trim(),
-            slug,
-            request.BillType.Trim(),
-            request.PostalCode.Trim(),
-            request.Website,
-            request.Brand,
-            request.Support,
-            request.PaymentRails ?? Array.Empty<PaymentRailReference>(),
-            BillerStatus.Prospect,
-            now);
+        var biller = await ReserveSlugAndCreateBillerAsync(id, normalizedSlug, request, now, cancellationToken);
         var definition = CreateInitialDefinition(biller);
         var experience = new ExperienceRecord(
             "config-1",
@@ -75,9 +63,6 @@ public sealed partial class BillerOnboardingService(
             ["review_brand", "review_legal_links", "review_payment_methods"],
             now);
 
-        await repository.CreateBillerAsync(biller, cancellationToken);
-        // Note: check-then-create, not an atomic reservation — adequate while onboarding
-        // volume is demo-scale; a slug reservation document makes this race-free later.
         var savedExperience = await repository.SaveExperienceAsync(experience, null, cancellationToken);
         var savedRun = await repository.SaveRunAsync(run, null, cancellationToken);
         if (agentContextService is not null)
@@ -241,10 +226,21 @@ public sealed partial class BillerOnboardingService(
             experience with { State = ExperienceRevisionState.Approved, ApprovedAt = now, Findings = findings },
             experience.ETag,
             cancellationToken);
-        await repository.SaveRunAsync(
-            run with { State = OnboardingSessionState.Approved, MissingFields = Array.Empty<string>(), UpdatedAt = now },
-            run.ETag,
-            cancellationToken);
+        try
+        {
+            await repository.SaveRunAsync(
+                run with { State = OnboardingSessionState.Approved, MissingFields = Array.Empty<string>(), UpdatedAt = now },
+                run.ETag,
+                cancellationToken);
+        }
+        catch (Exception)
+        {
+            // The two writes span separate documents (and Cosmos containers), so they can't share a
+            // transaction. Compensate the already-approved experience back to its prior revision
+            // state so we never leave an experience Approved while its run is not.
+            await CompensateExperienceAsync(experience, saved.ETag);
+            throw;
+        }
         RecordTransition(run.State, OnboardingSessionState.Approved);
         LogExperienceApproved(logger, billerId, saved.Id, request.ApprovedBy);
         return Map(saved);
@@ -267,50 +263,74 @@ public sealed partial class BillerOnboardingService(
         }
 
         var deploymentId = $"deployment-{experience.Version}";
+        var now = DateTimeOffset.UtcNow;
         var existing = await repository.GetDeploymentAsync(billerId, deploymentId, cancellationToken);
+        IReadOnlyList<ComplianceFinding>? publishFindings = null;
+        if (experience.State == ExperienceRevisionState.Approved)
+        {
+            publishFindings = await _compliance.ReviewAsync(
+                biller,
+                experience.Definition,
+                ComplianceReviewStage.Publish,
+                cancellationToken);
+            var blockingFindings = publishFindings
+                .Where(finding => finding.Severity == ComplianceFindingSeverity.Blocking)
+                .ToArray();
+            if (blockingFindings.Length > 0)
+            {
+                foreach (var finding in blockingFindings)
+                {
+                    LogBlockingFinding(logger, billerId, experience.Id, finding.Code, finding.Message);
+                }
+                throw new ExperienceValidationException(
+                    "This experience is not ready to publish. Resolve the listed validation items and try again.",
+                    blockingFindings);
+            }
+        }
+
+        DeploymentRecord deployment;
         if (existing is not null)
         {
             LogDuplicatePublication(logger, billerId, request.Revision, deploymentId);
-            return Map(existing);
+            deployment = existing;
         }
-
-        if (experience.State != ExperienceRevisionState.Approved)
+        else
         {
-            LogValidationError(logger, billerId, "state", "The current revision must be approved before publication.");
-            throw new ArgumentException("The current revision must be approved before publication.");
-        }
-
-        var findings = await _compliance.ReviewAsync(
-            biller,
-            experience.Definition,
-            ComplianceReviewStage.Publish,
-            cancellationToken);
-        var blockingFindings = findings
-            .Where(finding => finding.Severity == ComplianceFindingSeverity.Blocking)
-            .ToArray();
-        if (blockingFindings.Length > 0)
-        {
-            foreach (var finding in blockingFindings)
+            if (experience.State != ExperienceRevisionState.Approved)
             {
-                LogBlockingFinding(logger, billerId, experience.Id, finding.Code, finding.Message);
+                LogValidationError(logger, billerId, "state", "The current revision must be approved before publication.");
+                throw new ArgumentException("The current revision must be approved before publication.");
             }
-            throw new ExperienceValidationException(
-                "This experience is not ready to publish. Resolve the listed validation items and try again.",
-                blockingFindings);
+
+            deployment = await repository.CreateDeploymentAsync(
+                new DeploymentRecord(deploymentId, billerId, experience.Version, "requested", now,
+                    Traceparent: FormatTraceparent(Activity.Current)),
+                cancellationToken);
+            LogPublicationRequested(logger, billerId, experience.Id, deployment.Id);
         }
 
-        var now = DateTimeOffset.UtcNow;
-        var deployment = await repository.CreateDeploymentAsync(
-            new DeploymentRecord(deploymentId, billerId, experience.Version, "requested", now,
-                Traceparent: FormatTraceparent(Activity.Current)),
-            cancellationToken);
-        await repository.SaveExperienceAsync(
-            experience with { State = ExperienceRevisionState.Publishing, Findings = findings },
-            experience.ETag,
-            cancellationToken);
-        await repository.SaveRunAsync(run with { State = OnboardingSessionState.Publishing, UpdatedAt = now }, run.ETag, cancellationToken);
-        RecordTransition(run.State, OnboardingSessionState.Publishing);
-        LogPublicationRequested(logger, billerId, experience.Id, deployment.Id);
+        // The deployment record is the durable source of truth for a publication request; advancing
+        // the experience/run to Publishing is a separate, idempotent step so a retry after a failure
+        // between the writes converges the states to match the deployment instead of leaving them
+        // stuck at Approved. Only Approved states are advanced, so a worker that has already moved
+        // the records past Publishing (published/failed) is never regressed.
+        if (experience.State == ExperienceRevisionState.Approved)
+        {
+            await repository.SaveExperienceAsync(
+                experience with
+                {
+                    State = ExperienceRevisionState.Publishing,
+                    Findings = publishFindings ?? experience.Findings
+                },
+                experience.ETag,
+                cancellationToken);
+        }
+        if (run.State == OnboardingSessionState.Approved)
+        {
+            await repository.SaveRunAsync(run with { State = OnboardingSessionState.Publishing, UpdatedAt = now }, run.ETag, cancellationToken);
+            RecordTransition(run.State, OnboardingSessionState.Publishing);
+        }
+
         return Map(deployment);
     }
 
@@ -340,6 +360,70 @@ public sealed partial class BillerOnboardingService(
         CancellationToken cancellationToken) =>
         Map(await repository.GetDeploymentAsync(billerId, deploymentId, cancellationToken)
             ?? throw new KeyNotFoundException($"Deployment '{deploymentId}' was not found for biller '{billerId}'."));
+
+    /// <summary>
+    /// Best-effort rollback of an experience write when a follow-on write in the same logical
+    /// transition fails. Restores <paramref name="original"/> using the ETag produced by the write
+    /// being rolled back. Runs with <see cref="CancellationToken.None"/> because the triggering
+    /// failure may be the caller's cancellation — a cancelled rollback would leave the exact
+    /// inconsistency it exists to prevent. A failed rollback is logged, not thrown, so the original
+    /// failure surfaces.
+    /// </summary>
+    private async ValueTask CompensateExperienceAsync(ExperienceRecord original, string? currentETag)
+    {
+        try
+        {
+            await repository.SaveExperienceAsync(original, currentETag, CancellationToken.None);
+        }
+        catch (Exception rollbackFailure)
+        {
+            LogCompensationFailed(logger, original.BillerId, original.Id, rollbackFailure);
+        }
+    }
+
+    /// <summary>
+    /// Picks a free slug and creates the biller under it atomically. The repository's
+    /// <see cref="IBillerExperienceRepository.CreateBillerAsync"/> is the race-free gate: if a
+    /// concurrent creation reserved the same slug between our availability check and the create,
+    /// it throws <see cref="SlugConflictException"/> and we re-derive the next free slug and retry.
+    /// </summary>
+    private async ValueTask<BillerRecord> ReserveSlugAndCreateBillerAsync(
+        string id,
+        string normalizedSlug,
+        CreateBillerRequest request,
+        DateTimeOffset now,
+        CancellationToken cancellationToken)
+    {
+        // Each losing racer re-derives the next free suffix, so under N-way contention a single
+        // request can lose at most N-1 times; the bound is generous relative to realistic
+        // same-slug concurrency and only guards against a pathological non-terminating loop.
+        const int maxAttempts = 64;
+        for (var attempt = 1; ; attempt++)
+        {
+            var slug = await ReserveSlugAsync(normalizedSlug, cancellationToken);
+            var biller = new BillerRecord(
+                id,
+                request.DisplayName.Trim(),
+                slug,
+                request.BillType.Trim(),
+                request.PostalCode.Trim(),
+                request.Website,
+                request.Brand,
+                request.Support,
+                request.PaymentRails ?? Array.Empty<PaymentRailReference>(),
+                BillerStatus.Prospect,
+                now);
+            try
+            {
+                await repository.CreateBillerAsync(biller, cancellationToken);
+                return biller;
+            }
+            catch (SlugConflictException) when (attempt < maxAttempts)
+            {
+                // Another creation claimed this slug first; loop to pick the next free one.
+            }
+        }
+    }
 
     /// <summary>
     /// Published artifacts and public reads are keyed by slug, so two billers must never
@@ -584,4 +668,11 @@ public sealed partial class BillerOnboardingService(
         string revision,
         string findingCode,
         string findingMessage);
+
+    [LoggerMessage(1904, LogLevel.Error, "Compensating approval rollback failed for biller {BillerId}, revision {Revision}; state may be inconsistent")]
+    private static partial void LogCompensationFailed(
+        ILogger logger,
+        string billerId,
+        string revision,
+        Exception exception);
 }

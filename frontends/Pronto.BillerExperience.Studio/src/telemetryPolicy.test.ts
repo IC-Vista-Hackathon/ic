@@ -54,6 +54,18 @@ describe('sanitizeEvent', () => {
     }
   });
 
+  it('exports only an allowlisted error bucket on studio.client_error — never raw crash text', () => {
+    for (const category of ['network', 'http_4xx', 'http_5xx', 'unknown']) {
+      expect(sanitizeEvent('studio.client_error', { error_category: category })?.properties).toEqual({ error_category: category });
+    }
+    const sanitized = sanitizeEvent('studio.client_error', {
+      error_category: 'unknown',
+      message: 'TypeError: cannot read properties of undefined',
+      component_stack: '    at App (App.tsx:42)',
+    });
+    expect(sanitized).toEqual({ name: 'studio.client_error', properties: { error_category: 'unknown' } });
+  });
+
   it('covers the full checklist step enum', () => {
     for (const step of ['vertical', 'business_location', 'brand_details', 'import_data', 'customer_experience']) {
       expect(sanitizeEvent('studio.checklist_step_completed', { step })?.properties).toEqual({ step });
@@ -87,6 +99,7 @@ describe('sanitizeEvent', () => {
     expect(ALLOWED_EVENT_NAMES.sort()).toEqual([
       'studio.checklist_step_completed',
       'studio.chat_message_sent',
+      'studio.client_error',
       'studio.draft_generated',
       'studio.onboarding_started',
       'studio.preview_opened',

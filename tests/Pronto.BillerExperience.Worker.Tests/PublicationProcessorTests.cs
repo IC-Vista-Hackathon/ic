@@ -111,6 +111,8 @@ public sealed class PublicationProcessorTests
         Assert.False(publisher.WasCalled);
         Assert.Equal(PublicationStates.Failed, repository.Saved?.Status);
         Assert.Equal("BUNDLE_BUILD_FAILED", repository.Saved?.FailureCode);
+        Assert.Equal("The payer site could not be built. Please try publishing again.", repository.Saved?.FailureMessage);
+        Assert.DoesNotContain("vite build failed", repository.Saved?.FailureMessage, StringComparison.Ordinal);
         Assert.False(repository.WorkflowPublished);
     }
 
@@ -128,6 +130,24 @@ public sealed class PublicationProcessorTests
     }
 
     [Fact]
+    public async Task InfrastructureFailureDoesNotPersistRawExceptionDetails()
+    {
+        const string rawMessage = "jobs.batch \"ic-payer-build-city\" is forbidden: service account cannot get jobs/status";
+        var repository = new FakeRepository();
+        var publisher = new FakePublisher();
+        var builder = new FakeBundleBuilder { Failure = new UnauthorizedAccessException(rawMessage) };
+        var processor = Processor(repository, publisher, builder);
+
+        await processor.ProcessAsync(repository.Deployment, CancellationToken.None);
+
+        Assert.False(publisher.WasCalled);
+        Assert.Equal(PublicationStates.Failed, repository.Saved?.Status);
+        Assert.Equal("PUBLICATION_FAILED", repository.Saved?.FailureCode);
+        Assert.Equal("The payer site could not be published. Please try again.", repository.Saved?.FailureMessage);
+        Assert.DoesNotContain(rawMessage, repository.Saved?.FailureMessage, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public async Task ArtifactFailureIsPersistedWithoutCrashingPollingLoop()
     {
         var repository = new FakeRepository();
@@ -138,6 +158,10 @@ public sealed class PublicationProcessorTests
 
         Assert.Equal(PublicationStates.Failed, repository.Saved?.Status);
         Assert.Equal("INVALID_PUBLICATION", repository.Saved?.FailureCode);
+        Assert.Equal(
+            "The payer site configuration could not be published. Please review it and try again.",
+            repository.Saved?.FailureMessage);
+        Assert.DoesNotContain("invalid artifact", repository.Saved?.FailureMessage, StringComparison.Ordinal);
         Assert.False(repository.WorkflowPublished);
     }
 
