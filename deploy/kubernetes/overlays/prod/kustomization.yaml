@@ -36,6 +36,8 @@ images:
     newTag: latest
   - name: acrichackjk4zmntatjem4.azurecr.io/ic-biller-payments-pwa
     newTag: latest
+  - name: acrichackjk4zmntatjem4.azurecr.io/ic-payer-experience-router
+    newTag: latest
   - name: acrichackjk4zmntatjem4.azurecr.io/ic-invoice-api
     newTag: latest
   - name: acrichackjk4zmntatjem4.azurecr.io/ic-payment-api

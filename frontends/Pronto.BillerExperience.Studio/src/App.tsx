@@ -1,6 +1,8 @@
 import { CSSProperties, FormEvent, useEffect, useRef, useState } from 'react';
 import { activityUrl, api } from './api';
 import { errorMessage, UiRequestError, type ValidationFinding } from './http';
+import { trackEvent } from './insights';
+import { categorizeError } from './telemetryPolicy';
 import { logError, logEvent } from './telemetry';
 import type { AgentActivity, Deployment, ExperienceDefinition, ExperienceRevision } from './types';
 
@@ -15,6 +17,19 @@ import type { AgentActivity, Deployment, ExperienceDefinition, ExperienceRevisio
  * ------------------------------------------------------------------ */
 
 const asset = (p: string) => `${import.meta.env.BASE_URL}${p}`;
+
+// Allowlisted step enum for studio.checklist_step_completed, indexed by wizard step.
+const CHECKLIST_STEPS = ['vertical', 'business_location', 'brand_details', 'import_data', 'customer_experience'] as const;
+
+// Maps a generated draft's validation findings to the allowlisted outcome enum. Only the outcome
+// bucket leaves the page — finding codes, messages, and severities never become telemetry.
+function validationOutcome(revision: ExperienceRevision | null): 'passed' | 'warnings' | 'failed' {
+  const findings = revision?.findings ?? [];
+  if (!findings.length) return 'passed';
+  const isBlocking = (severity: string | number) =>
+    typeof severity === 'number' ? severity >= 2 : ['high', 'error', 'critical', 'blocker'].includes(severity.toLowerCase());
+  return findings.some(f => f.requires_review || isBlocking(f.severity)) ? 'failed' : 'warnings';
+}
 
 /** Parse a CSS declaration string into a React style object so the
  *  design's inline styles can be transcribed verbatim. */
@@ -145,6 +160,7 @@ interface State {
   previewChatError: string | null;
   previewProposal: ExperienceRevision | null;
   previewChatReply: string | null;
+  previewGenerationMode: string | null;
 }
 
 const VERTICALS: Vertical[] = [
@@ -321,7 +337,7 @@ const INITIAL_STATE: State = {
   previewDevice: 'desktop',
   backendBillerId: null, backendDraft: null, deployment: null, publishing: false, publishError: null,
   agentActivity: [], activityConnection: 'idle', orchestrationError: null, analysisComplete: false,
-  previewChatInput: '', previewChatBusy: false, previewChatError: null, previewProposal: null, previewChatReply: null,
+  previewChatInput: '', previewChatBusy: false, previewChatError: null, previewProposal: null, previewChatReply: null, previewGenerationMode: null,
 };
 
 const TINT = 'var(--invoicecloud-primary-tint)';
@@ -465,7 +481,7 @@ export function App() {
   };
 
   // ---- handlers ----
-  const goTry = () => patch({ screen: 'wizard', ...WIZARD_RESET });
+  const goTry = () => { trackEvent('studio.onboarding_started'); patch({ screen: 'wizard', ...WIZARD_RESET }); };
   const setColorChoice = (v: 'auto' | 'custom') => patch({ colorChoice: v });
   const setCustomPrimary = (e: React.ChangeEvent<HTMLInputElement>) => patch({ customPrimary: e.target.value });
   const setCustomSecondary = (e: React.ChangeEvent<HTMLInputElement>) => patch({ customSecondary: e.target.value });
@@ -483,7 +499,10 @@ export function App() {
   const setLogoFile = (e: React.ChangeEvent<HTMLInputElement>) => { const file = e.target.files && e.target.files[0]; if (!file) return; const reader = new FileReader(); reader.onload = () => patch({ logoDataUrl: reader.result as string }); reader.readAsDataURL(file); };
   const clearLogo = () => patch({ logoDataUrl: null });
 
-  const nextStep = () => patch((st) => {
+  const nextStep = () => {
+    const completedStep = CHECKLIST_STEPS[s.wizardStep];
+    if (completedStep) trackEvent('studio.checklist_step_completed', { step: completedStep, biller_id: s.backendBillerId ?? undefined });
+    patch((st) => {
     const wizardStep = Math.min(4, st.wizardStep + 1);
     if (wizardStep === 4 && !st.aiApplied) {
       const rec = computeAiRecommendations(st.vertical, st.selectedStates, st.otherVerticalDescription);
@@ -493,7 +512,8 @@ export function App() {
       return { wizardStep, ...values, aiApplied: true, aiRationale: rationale };
     }
     return { wizardStep };
-  });
+    });
+  };
   const prevStep = () => patch((st) => ({ wizardStep: Math.max(0, st.wizardStep - 1) }));
 
   const onCsvFile = (e: React.ChangeEvent<HTMLInputElement>) => { const file = e.target.files && e.target.files[0]; if (!file) return; const reader = new FileReader(); reader.onload = () => applyCsv(reader.result as string, file.name); reader.readAsText(file); };
@@ -535,6 +555,7 @@ export function App() {
   };
 
   const runAnalysis = async () => {
+    trackEvent('studio.checklist_step_completed', { step: 'customer_experience', biller_id: s.backendBillerId ?? undefined });
     patch({ screen: 'analyzing', analyzeStage: 0, orchestrationError: null, agentActivity: [], analysisComplete: false });
     later(() => patch({ analyzeStage: 1 }), 700);
     later(() => patch({ analyzeStage: 2 }), 1400);
@@ -580,6 +601,7 @@ export function App() {
       });
       events.onerror = () => patch({ activityConnection: 'disconnected' });
 
+      trackEvent('studio.chat_message_sent', { biller_id: billerId }); // count only; message text never leaves the page
       const chat = await api.chat(
         billerId,
         `Build a ${s.vertical ?? 'custom'} payment experience for ${s.bizName}. ` +
@@ -597,6 +619,8 @@ export function App() {
         analysisComplete: true,
         activityConnection: 'idle',
       }));
+      trackEvent('studio.draft_generated', { biller_id: billerId });
+      trackEvent('studio.validation_result', { outcome: validationOutcome(chat.draft), biller_id: billerId });
     } catch (caught) {
       const message = errorMessage(caught);
       logError('studio.orchestration.failed', caught, { biller_id: s.backendBillerId });
@@ -613,7 +637,7 @@ export function App() {
   const saveLocationSection = () => patch((st) => ({ reviewEditingSection: null, compliance: recomputeCompliance(st) }));
   const closeSaveErrorModal = () => { patch({ reviewSaveError: false }); setTimeout(() => { saveBtnRef.current?.focus(); }, 0); };
 
-  const confirmPreview = () => { if (s.reviewEditingSection) { patch({ reviewSaveError: true }); return; } patch({ screen: 'preview', payerStep: 0, methodType: 'card', autopayOptIn: false, paperlessOptIn: false, processing: false }); };
+  const confirmPreview = () => { if (s.reviewEditingSection) { patch({ reviewSaveError: true }); return; } trackEvent('studio.preview_opened', { device: s.previewDevice, biller_id: s.backendBillerId ?? undefined }); patch({ screen: 'preview', payerStep: 0, methodType: 'card', autopayOptIn: false, paperlessOptIn: false, processing: false }); };
   const redoWizard = () => patch({ screen: 'wizard', wizardStep: 0 });
   const reviewCompletedResearch = () => patch({ screen: 'analyzing' });
   const backToResults = () => patch({ screen: 'results', payerStep: 0, processing: false });
@@ -634,7 +658,7 @@ export function App() {
     try {
       const response = await api.chat(s.backendBillerId,
         `Modify the existing payer experience preview only as requested. Preserve existing payment rails. Request: ${s.previewChatInput.trim()}`);
-      patch({ previewChatBusy: false, previewProposal: response.draft, previewChatReply: response.reply });
+      patch({ previewChatBusy: false, previewProposal: response.draft, previewChatReply: response.reply, previewGenerationMode: response.generation_mode ?? null });
     } catch (caught) {
       logError('studio.preview_chat.failed', caught, { biller_id: s.backendBillerId });
       patch({ previewChatBusy: false, previewChatError: errorMessage(caught) });
@@ -667,7 +691,7 @@ export function App() {
     patch({ previewChatBusy: true, previewChatError: null });
     try {
       const restored = await api.update(s.backendBillerId, s.backendDraft.definition, s.previewProposal.e_tag);
-      patch({ backendDraft: restored, previewProposal: null, previewChatBusy: false, previewChatReply: 'Proposed changes discarded.', previewChatInput: '' });
+      patch({ backendDraft: restored, previewProposal: null, previewChatBusy: false, previewChatReply: 'Proposed changes discarded.', previewChatInput: '', previewGenerationMode: null });
     } catch (caught) {
       logError('studio.preview_chat.reject_failed', caught, { biller_id: s.backendBillerId });
       patch({ previewChatBusy: false, previewChatError: errorMessage(caught) });
@@ -696,7 +720,7 @@ export function App() {
   const goPricing = () => patch({ screen: 'pricing', pendingLob: true });
   const backToPreviewOrDashboard = () => patch((st) => ({ screen: st.accountCreated ? 'dashboard' : 'preview' }));
   const openSignup = () => patch({ modal: 'signup' });
-  const openCheckout = () => patch({ modal: 'checkout' });
+  const openCheckout = () => { trackEvent('studio.purchase_started', { biller_id: s.backendBillerId ?? undefined }); patch({ modal: 'checkout' }); };
   const closeModal = () => patch({ modal: null });
 
   const saveLob = (published: boolean) => patch((st) => {
@@ -716,6 +740,7 @@ export function App() {
     e.preventDefault();
     if (s.publishing) return;
     patch({ publishing: true, publishError: null });
+    trackEvent('studio.publish_requested', { biller_id: s.backendBillerId ?? undefined });
     try {
       if (!s.backendBillerId) throw new Error('This experience is not connected to a biller. Run the agent analysis before publishing.');
 
@@ -762,9 +787,12 @@ export function App() {
         modal: null,
         lobs: st.lobs.map(lob => lob.id === st.editingLobId || (!st.editingLobId && lob.bizName === st.bizName) ? { ...lob, published: true } : lob),
       }));
+      trackEvent('studio.publish_completed', { biller_id: s.backendBillerId ?? undefined });
+      trackEvent('studio.purchase_completed', { biller_id: s.backendBillerId ?? undefined });
       patch({ deployment, publishing: false, publishError: null });
     } catch (caught) {
       const message = caught instanceof UiRequestError ? caught.message : errorMessage(caught);
+      trackEvent('studio.publish_failed', { error_category: categorizeError(caught), biller_id: s.backendBillerId ?? undefined });
       logError('studio.publish.failed', caught, {
         biller_id: s.backendBillerId,
         revision: s.backendDraft?.revision,
@@ -782,7 +810,7 @@ export function App() {
     }
   };
 
-  const addLob = () => patch({ screen: 'wizard', ...WIZARD_RESET });
+  const addLob = () => { trackEvent('studio.onboarding_started', { biller_id: s.backendBillerId ?? undefined }); patch({ screen: 'wizard', ...WIZARD_RESET }); };
   const editLob = (lob: Lob) => {
     patch({
       screen: 'wizard', wizardStep: 0, vertical: lob.vertical, bizName: lob.bizName, selectedStates: lob.selectedStates || [], website: lob.website, skipWebsite: !!lob.skipWebsite,
@@ -794,6 +822,7 @@ export function App() {
     checkLogoFetch(lob.website, !!lob.skipWebsite);
   };
   const previewLob = (lob: Lob) => {
+    trackEvent('studio.preview_opened', { device: s.previewDevice, biller_id: s.backendBillerId ?? undefined });
     patch({
       screen: 'preview', payerStep: 0, brand: lob.brand, compliance: lob.compliance, bizName: lob.bizName, vertical: lob.vertical, website: lob.website, skipWebsite: !!lob.skipWebsite, logoDataUrl: lob.logoDataUrl || null, logoFetchOk: false,
       guestCheckoutAllowed: lob.guestCheckoutAllowed, offerAutopay: lob.offerAutopay, enrollDuringPayment: lob.enrollDuringPayment, offerPaperless: lob.offerPaperless, acceptedMethods: lob.acceptedMethods || ['card', 'ach'], accountNumber: lob.accountNumber || null,
@@ -1530,6 +1559,11 @@ export function App() {
               <button type="submit" disabled={s.previewChatBusy || !!s.previewProposal || !s.previewChatInput.trim()} style={css('border:0;border-radius:8px;padding:10px 16px;background:var(--invoicecloud-primary);color:#fff;font-weight:700;cursor:pointer')}>{s.previewChatBusy ? 'Working...' : 'Propose change'}</button>
             </form>
             {s.previewChatError && <div role="alert" style={css('margin-top:10px;padding:10px;border-radius:8px;background:var(--invoicecloud-intent-error-background);color:var(--invoicecloud-intent-error)')}>{s.previewChatError}</div>}
+            {s.previewGenerationMode && s.previewGenerationMode !== 'azure_ai' && (
+              <div role="status" style={css('margin-top:10px;display:inline-flex;align-items:center;gap:6px;padding:4px 10px;border-radius:999px;background:#f6e6c8;color:#7a4b00;font-size:12px;font-weight:700')}>
+                Offline mode — generated by the deterministic designer (Foundry model unavailable)
+              </div>
+            )}
             {s.previewChatReply && <p aria-live="polite" style={css('margin:10px 0 0;font-size:13px')}>{s.previewChatReply}</p>}
             {s.previewChatBusy && <AgentActivityPanel activity={s.agentActivity} connection={s.activityConnection} />}
             {s.previewProposal && (
