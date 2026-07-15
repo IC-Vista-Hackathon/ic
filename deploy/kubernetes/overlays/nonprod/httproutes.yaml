@@ -97,6 +97,12 @@ spec:
         - path:
             type: PathPrefix
             value: /api
+      # Onboarding chat turns run multi-agent work (~30s per agent invocation);
+      # the gateway default (15s) was cancelling them mid-flight with 499s.
+      # 120s matches the Studio browser budget (CHAT_REQUEST_TIMEOUT_MS).
+      timeouts:
+        request: 120s
+        backendRequest: 120s
       filters:
         - type: URLRewrite
           urlRewrite:
