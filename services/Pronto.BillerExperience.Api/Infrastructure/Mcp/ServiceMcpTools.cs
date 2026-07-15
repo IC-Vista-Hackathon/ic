@@ -149,7 +149,11 @@ public sealed partial class ServiceMcpTools(
         [Description("Day of month (1-28) to run autopay. Omit to leave unchanged.")] int? paymentDay,
         CancellationToken cancellationToken)
     {
-        var capability = capabilities.Validate(capabilityToken, writeRequired: true, payerRequired: true);
+        var capability = ValidateCapability(
+            ServiceToolRegistry.ToolNames.UpdatePayerPreferences,
+            capabilityToken,
+            writeRequired: true,
+            payerRequired: true);
         return await InvokeAsync(ServiceToolRegistry.ToolNames.UpdatePayerPreferences, capability, () =>
             payers.UpdatePreferencesAsync(
                 capability.BillerId,
@@ -167,7 +171,11 @@ public sealed partial class ServiceMcpTools(
         [Description("Optional future date (yyyy-MM-dd) to schedule the payment; omit to pay now.")] DateOnly? scheduledFor,
         CancellationToken cancellationToken)
     {
-        var capability = capabilities.Validate(capabilityToken, writeRequired: true, payerRequired: true);
+        var capability = ValidateCapability(
+            ServiceToolRegistry.ToolNames.CreatePaymentIntent,
+            capabilityToken,
+            writeRequired: true,
+            payerRequired: true);
         return await InvokeAsync(ServiceToolRegistry.ToolNames.CreatePaymentIntent, capability, async () =>
         {
             var requiredInvoiceId = RequireArgument(invoiceId, nameof(invoiceId));
@@ -197,21 +205,24 @@ public sealed partial class ServiceMcpTools(
         [Description("Optional schedule date from the approved intent; omit to pay now.")] DateOnly? scheduledFor,
         CancellationToken cancellationToken)
     {
-        var capability = capabilities.Validate(capabilityToken, writeRequired: true, payerRequired: true);
-
-        // Money movement is Execution-Agent-only (design/services.md), enforced server-side here.
-        if (!string.Equals(capability.AgentId, executionAgentId, StringComparison.Ordinal))
+        var capability = ValidateCapability(
+            ServiceToolRegistry.ToolNames.SubmitPayment,
+            capabilityToken,
+            writeRequired: true,
+            payerRequired: true);
+        return await InvokeAsync(ServiceToolRegistry.ToolNames.SubmitPayment, capability, async () =>
         {
-            throw new UnauthorizedAccessException("Only the Execution Agent may submit a payment.");
-        }
+            if (!string.Equals(capability.AgentId, executionAgentId, StringComparison.Ordinal))
+            {
+                throw new UnauthorizedAccessException("Only the Execution Agent may submit a payment.");
+            }
 
-        if (!payerConfirmed)
-        {
-            throw new UnauthorizedAccessException("A payment can only be submitted after explicit payer confirmation.");
-        }
+            if (!payerConfirmed)
+            {
+                throw new UnauthorizedAccessException("A payment can only be submitted after explicit payer confirmation.");
+            }
 
-        return await InvokeAsync(ServiceToolRegistry.ToolNames.SubmitPayment, capability, () =>
-            payments.CreateAsync(
+            return await payments.CreateAsync(
                 new CreatePaymentRequest(
                     capability.BillerId,
                     RequireArgument(invoiceId, nameof(invoiceId)),
@@ -219,7 +230,8 @@ public sealed partial class ServiceMcpTools(
                     capability.PayerId,
                     scheduledFor),
                 RequireArgument(intentId, nameof(intentId)),
-                cancellationToken).AsTask());
+                cancellationToken);
+        });
     }
 
     [McpServerTool(Name = ServiceToolRegistry.ToolNames.SeedInvoices, ReadOnly = false, Idempotent = false, OpenWorld = false, UseStructuredContent = true)]
@@ -231,18 +243,22 @@ public sealed partial class ServiceMcpTools(
         [Description("Optional bill type label for the seeded set.")] string? billType,
         CancellationToken cancellationToken)
     {
-        var capability = capabilities.Validate(capabilityToken, writeRequired: true);
-        if (!maintenance.Value.SeedingEnabled)
+        var capability = ValidateCapability(
+            ServiceToolRegistry.ToolNames.SeedInvoices,
+            capabilityToken,
+            writeRequired: true);
+        return await InvokeAsync(ServiceToolRegistry.ToolNames.SeedInvoices, capability, async () =>
         {
-            // Uniform "unavailable" — seeding is invisible in prod, same discipline as the REST gate.
-            throw new InvalidOperationException("The seed_invoices tool is not available in this environment.");
-        }
+            if (!maintenance.Value.SeedingEnabled)
+            {
+                throw new InvalidOperationException("The seed_invoices tool is not available in this environment.");
+            }
 
-        return await InvokeAsync(ServiceToolRegistry.ToolNames.SeedInvoices, capability, () =>
-            invoices.SeedAsync(
+            return await invoices.SeedAsync(
                 capability.BillerId,
                 new SeedInvoicesRequest(count, accountNumber, billType),
-                cancellationToken).AsTask());
+                cancellationToken);
+        });
     }
 
     private async ValueTask<T> InvokeAsync<T>(string toolName, AgentContextCapability capability, Func<Task<T>> action)

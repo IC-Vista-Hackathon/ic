@@ -112,18 +112,21 @@ internal static class McpTelemetry
 
     internal static void RecordDenied(string toolName)
     {
-        Failed.Add(1,
-            new("tool", toolName),
-            new("failure_category", "unauthorized"),
-            new("write_capable", false),
-            new("payer_bound", false));
-        Activity.Current?.AddEvent(new ActivityEvent(ToolFailedEvent, tags: new ActivityTagsCollection
+        Invoked.Add(1, new KeyValuePair<string, object?>("tool", toolName));
+        Failed.Add(1, new("tool", toolName), new("failure_category", "unauthorized"));
+        var activity = Activity.Current;
+        activity?.AddEvent(new ActivityEvent(ToolInvokedEvent, tags: new ActivityTagsCollection
+        {
+            ["tool_name"] = toolName,
+            ["trace_id"] = activity.TraceId.ToString(),
+        }));
+        activity?.AddEvent(new ActivityEvent(ToolFailedEvent, tags: new ActivityTagsCollection
         {
             ["tool_name"] = toolName,
             ["outcome"] = "error",
             ["failure_category"] = "unauthorized",
             ["status_code"] = 403,
-            ["trace_id"] = Activity.Current?.TraceId.ToString(),
+            ["trace_id"] = activity.TraceId.ToString(),
         }));
     }
 
