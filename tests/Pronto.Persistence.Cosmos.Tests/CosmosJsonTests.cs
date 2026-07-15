@@ -55,6 +55,23 @@ public sealed class CosmosJsonTests
     }
 
     [Fact]
+    public void DictionaryKeysRoundTripVerbatim()
+    {
+        var options = CosmosJson.CreateOptions();
+        var source = new Dictionary<string, string>
+        {
+            ["cardFee"] = "absorbed",
+            ["ApplePay"] = "charged",
+            ["already_snake"] = "ok",
+        };
+
+        var roundTripped = JsonSerializer.Deserialize<Dictionary<string, string>>(
+            JsonSerializer.Serialize(source, options), options);
+
+        Assert.Equal(source, roundTripped);
+    }
+
+    [Fact]
     public void DocumentsRoundTrip()
     {
         var options = CosmosJson.CreateOptions();
