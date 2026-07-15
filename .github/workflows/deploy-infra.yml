@@ -49,7 +49,7 @@ jobs:
 
       # The deploy workflows authenticate to AKS through Azure RBAC (no cluster-admin
       # certificates), so this SP must be in aksDeploymentPrincipalIds to receive
-      # Cluster User + RBAC Writer. Resolve our own object id rather than hardcoding it.
+      # Cluster User + RBAC Cluster Admin. Resolve our own object id rather than hardcoding it.
       - name: Resolve deployer object id
         run: |
           APP_ID=$(az account show --query user.name -o tsv)

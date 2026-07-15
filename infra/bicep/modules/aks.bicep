@@ -94,8 +94,11 @@ resource acrPullRoleAssignment 'Microsoft.Authorization/roleAssignments@2022-04-
   }
 }
 
-// CI deploy identities authenticate as normal cluster users and can update workloads, but cannot
-// create RBAC bindings or use the system:masters administrator certificate.
+// CI deploy identities authenticate as normal cluster users through Entra + Azure RBAC —
+// auditable and revocable, never the exportable system:masters administrator certificate.
+// They need RBAC *Cluster Admin* (not Writer): the overlays themselves apply Role/RoleBinding
+// objects (e.g. ic-bundle-build-runner) and Gateway API CRs (HTTPRoute), which RBAC Writer's
+// data actions do not cover.
 resource deploymentClusterUserRoleAssignments 'Microsoft.Authorization/roleAssignments@2022-04-01' = [for principalId in deploymentPrincipalIds: {
   name: guid(aks.id, string(principalId), 'AksClusterUser')
   scope: aks
@@ -106,13 +109,13 @@ resource deploymentClusterUserRoleAssignments 'Microsoft.Authorization/roleAssig
   }
 }]
 
-resource deploymentWriterRoleAssignments 'Microsoft.Authorization/roleAssignments@2022-04-01' = [for principalId in deploymentPrincipalIds: {
-  name: guid(aks.id, string(principalId), 'AksRbacWriter')
+resource deploymentRbacClusterAdminRoleAssignments 'Microsoft.Authorization/roleAssignments@2022-04-01' = [for principalId in deploymentPrincipalIds: {
+  name: guid(aks.id, string(principalId), 'AksRbacClusterAdmin')
   scope: aks
   properties: {
     principalId: string(principalId)
     principalType: 'ServicePrincipal'
-    roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', 'a7ffa36f-339b-4b5c-8bdf-e2c188b2c0eb')
+    roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', 'b1ff04bb-8a4e-4dc4-8eb5-8693973ce19b')
   }
 }]
 
