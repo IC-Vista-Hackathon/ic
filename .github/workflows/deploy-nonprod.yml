@@ -88,9 +88,10 @@ jobs:
           npm ci
           npx playwright install --with-deps chromium
 
-      # Loads the deployed PWA through the nonprod gateway (port-forwarded, same as the
-      # functional smoke tests) and asserts the browser telemetry client boots and sends a
-      # beacon. Prints the session's flow id for the arrival check below.
+      # Loads each deployed frontend through the nonprod gateway (port-forwarded, same as the
+      # functional smoke tests) and asserts its browser telemetry client boots and sends a beacon.
+      # Both apps sit behind the same gateway and share GET /api/public/telemetry. Prints each
+      # session's flow id for the arrival checks below.
       - name: Browser telemetry smoke test
         id: browser_smoke
         run: |
@@ -106,29 +107,52 @@ jobs:
             curl -fsS -o /dev/null "http://127.0.0.1:18081/pay/" && break
             sleep 1
           done
-          RESULT=$(TARGET_ORIGIN=http://127.0.0.1:18081 node tests/browser-smoke/telemetry-smoke.mjs)
-          echo "result: ${RESULT}"
-          echo "flow_id=$(jq -r .flowId <<<"$RESULT")" >> "$GITHUB_OUTPUT"
+
+          PWA_RESULT=$(TARGET_ORIGIN=http://127.0.0.1:18081 \
+            TARGET_PATH=/pay/demo/ EXPECTED_EVENT=pwa.session_started \
+            node tests/browser-smoke/telemetry-smoke.mjs)
+          echo "payer PWA result: ${PWA_RESULT}"
+          echo "pwa_flow_id=$(jq -r .flowId <<<"$PWA_RESULT")" >> "$GITHUB_OUTPUT"
+
+          STUDIO_RESULT=$(TARGET_ORIGIN=http://127.0.0.1:18081 \
+            TARGET_PATH=/studio/ EXPECTED_EVENT=studio.session_started \
+            node tests/browser-smoke/telemetry-smoke.mjs)
+          echo "biller Studio result: ${STUDIO_RESULT}"
+          echo "studio_flow_id=$(jq -r .flowId <<<"$STUDIO_RESULT")" >> "$GITHUB_OUTPUT"
 
       # Ingestion is asynchronous (observed ~7 minutes on this resource), so poll Application
-      # Insights until the session_started event with this exact flow id shows up server-side.
+      # Insights until each session_started event with its exact flow id shows up server-side.
+      # Both frontends are polled in one loop so the ~7min latency is paid once, not twice.
       - name: Verify telemetry arrived in Application Insights
         env:
-          FLOW_ID: ${{ steps.browser_smoke.outputs.flow_id }}
+          PWA_FLOW_ID: ${{ steps.browser_smoke.outputs.pwa_flow_id }}
+          STUDIO_FLOW_ID: ${{ steps.browser_smoke.outputs.studio_flow_id }}
         run: |
           az extension add --name application-insights --only-show-errors
           APP_ID=$(az monitor app-insights component show -g "$AKS_RG" --query "[0].appId" -o tsv)
-          echo "querying Application Insights app ${APP_ID} for flow ${FLOW_ID}"
-          for attempt in $(seq 1 24); do
-            COUNT=$(az monitor app-insights query --app "$APP_ID" \
-              --analytics-query "customEvents | where timestamp > ago(30m) | where name == 'pwa.session_started' | where tostring(customDimensions.flow_id) == '${FLOW_ID}' | count" \
+          echo "querying Application Insights app ${APP_ID}"
+
+          arrived() {
+            local event="$1" flow="$2"
+            local count
+            count=$(az monitor app-insights query --app "$APP_ID" \
+              --analytics-query "customEvents | where timestamp > ago(30m) | where name == '${event}' | where tostring(customDimensions.flow_id) == '${flow}' | count" \
               --query 'tables[0].rows[0][0]' -o tsv)
-            echo "attempt ${attempt}: matching events = ${COUNT:-0}"
-            if [ "${COUNT:-0}" -ge 1 ]; then
-              echo "browser telemetry arrived in Application Insights"
+            [ "${count:-0}" -ge 1 ]
+          }
+
+          pwa_ok=false
+          studio_ok=false
+          for attempt in $(seq 1 24); do
+            $pwa_ok || { arrived pwa.session_started "$PWA_FLOW_ID" && pwa_ok=true; }
+            $studio_ok || { arrived studio.session_started "$STUDIO_FLOW_ID" && studio_ok=true; }
+            echo "attempt ${attempt}: pwa=${pwa_ok} studio=${studio_ok}"
+            if $pwa_ok && $studio_ok; then
+              echo "browser telemetry from both frontends arrived in Application Insights"
               exit 0
             fi
             sleep 30
           done
-          echo "ERROR: pwa.session_started with flow_id ${FLOW_ID} never arrived in Application Insights" >&2
+          $pwa_ok || echo "ERROR: pwa.session_started with flow_id ${PWA_FLOW_ID} never arrived in Application Insights" >&2
+          $studio_ok || echo "ERROR: studio.session_started with flow_id ${STUDIO_FLOW_ID} never arrived in Application Insights" >&2
           exit 1
