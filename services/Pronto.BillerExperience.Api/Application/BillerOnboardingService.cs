@@ -27,11 +27,14 @@ public sealed partial class BillerOnboardingService(
         CancellationToken cancellationToken)
     {
         using var activity = StartActivity("biller.create");
-        ValidateCreateRequest(request);
+        // Forgive-and-normalize: casing/whitespace are fixed for the caller; validation then
+        // rejects only what normalization can't repair (bad characters, bad length).
+        var normalizedSlug = request.Slug.Trim().ToLowerInvariant();
+        ValidateCreateRequest(request with { Slug = normalizedSlug });
         var id = Guid.NewGuid().ToString("N");
         activity?.SetTag("ic.biller_id", id);
         var now = DateTimeOffset.UtcNow;
-        var slug = await ReserveSlugAsync(request.Slug.Trim().ToLowerInvariant(), cancellationToken);
+        var slug = await ReserveSlugAsync(normalizedSlug, cancellationToken);
         var biller = new BillerRecord(
             id,
             request.DisplayName.Trim(),

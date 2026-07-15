@@ -28,12 +28,23 @@ public sealed class SlugUniquenessTests
     }
 
     [Fact]
-    public async Task MixedCaseSlugIsRejectedByValidation()
+    public async Task MixedCaseSlugIsNormalizedNotRejected()
+    {
+        var service = CreateService();
+
+        var created = await service.CreateAsync(
+            Request() with { Slug = " City-Of-Plano " }, CancellationToken.None);
+
+        Assert.Equal("city-of-plano", created.Biller.Slug);
+    }
+
+    [Fact]
+    public async Task UnrepairableSlugStillRejected()
     {
         var service = CreateService();
 
         await Assert.ThrowsAsync<ArgumentException>(() => service.CreateAsync(
-            Request() with { Slug = "City-Of-Plano" }, CancellationToken.None).AsTask());
+            Request() with { Slug = "no spaces allowed!" }, CancellationToken.None).AsTask());
     }
 
     private static BillerOnboardingService CreateService() => new(
