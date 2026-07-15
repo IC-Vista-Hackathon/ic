@@ -14,7 +14,7 @@ param aksNodeCountMin int = 2
 param aksNodeCountMax int = 4
 param aksVmSize string = 'Standard_D2s_v3'
 param mcpConnectionEnabled bool = false
-param mcpServerUrl string = 'http://ic-hack.eastus2.cloudapp.azure.com/api/mcp'
+param mcpServerUrl string = 'http://pronto.eastus2.cloudapp.azure.com/api/mcp'
 @secure()
 param mcpApiKey string = ''
 
