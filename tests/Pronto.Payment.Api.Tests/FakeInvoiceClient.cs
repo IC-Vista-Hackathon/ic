@@ -70,17 +70,17 @@ public sealed class FakeInvoiceClient : IInvoiceClient
         UpdateInvoiceStatusRequest request,
         CancellationToken cancellationToken)
     {
-        Interlocked.Increment(ref updateStatusCalls);
-        if (UpdateStatusFault is { } fault)
-        {
-            UpdateStatusFault = null;
-            throw fault;
-        }
-
         OnUpdateStatus?.Invoke(billerId, invoiceId, request);
 
         lock (gate)
         {
+            Interlocked.Increment(ref updateStatusCalls);
+            if (UpdateStatusFault is { } fault)
+            {
+                UpdateStatusFault = null;
+                throw fault;
+            }
+
             var key = (billerId, invoiceId);
             if (!invoices.TryGetValue(key, out var entry))
             {

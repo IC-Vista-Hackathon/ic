@@ -85,9 +85,8 @@ public sealed partial class PaymentsController : ControllerBase
         {
             throw ServiceException.BadRequest(
                 "idempotency_key_too_long",
-                $"Idempotency-Key header or idempotency_key body field must be at most {MaxIdempotencyKeyLength} characters.");
+                $"Idempotency keys must be at most {MaxIdempotencyKeyLength} characters.");
         }
-
         var paymentId = PaymentRecord.DeriveId(request.BillerId, idempotencyKey);
         var fingerprint = PaymentRecord.Fingerprint(
             request.InvoiceId, request.Method, request.PayerAccountId, request.ScheduledFor);
@@ -119,6 +118,8 @@ public sealed partial class PaymentsController : ControllerBase
         var (feeCents, totalCents) = FeeCalculator.Calculate(config, request.Method, invoice.AmountCents);
         var now = clock.GetUtcNow();
 
+        // Payment-first ordering: persist a durable pending record BEFORE the invoice transition,
+        // so a crash between the two never leaves a paid/scheduled invoice with no payment.
         var pending = new PaymentRecord
         {
             PaymentId = paymentId,
@@ -202,6 +203,10 @@ public sealed partial class PaymentsController : ControllerBase
     private static string? Normalize(string? value)
         => string.IsNullOrWhiteSpace(value) ? null : value.Trim();
 
+    /// <summary>
+    /// Pre-confirmation quote using the same config + FeeCalculator as payment creation,
+    /// so the displayed total always matches the charged total.
+    /// </summary>
     [HttpGet("quote")]
     public async Task<ActionResult<PaymentQuoteResponse>> Quote(
         [FromQuery(Name = "biller_id")] string? billerId,
