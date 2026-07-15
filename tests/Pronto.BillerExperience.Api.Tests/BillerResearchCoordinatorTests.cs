@@ -80,6 +80,33 @@ public sealed class BillerResearchCoordinatorTests
     }
 
     [Fact]
+    public async Task RequestCancellationPublishesTerminalFailureForRunningAgent()
+    {
+        var sink = new RecordingSink();
+        var dispatcher = new CancellingDispatcher();
+        var coordinator = Create(
+            new StubCatalog([Agent("worker", "biller_research")]),
+            dispatcher,
+            []);
+        using var cancellation = new CancellationTokenSource();
+
+        var research = coordinator.ResearchAsync(
+            Request(),
+            new ResearchExecutionContext("biller-1", "run-1", sink),
+            cancellation.Token);
+        await dispatcher.Started.Task.WaitAsync(TimeSpan.FromSeconds(2));
+        cancellation.Cancel();
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => research);
+
+        Assert.Contains(sink.Events, item =>
+            item.AgentId == "worker" &&
+            item.Status == OrchestrationEventStatus.Failed &&
+            item.ErrorCode == "research.request_cancelled" &&
+            item.Retryable);
+    }
+
+    [Fact]
     public async Task OrchestrationReadsAndWritesAgentScopedContextThroughMcp()
     {
         var dispatcher = new StubDispatcher((agent, _) => Completed(agent.Id));
@@ -258,6 +285,22 @@ public sealed class BillerResearchCoordinatorTests
             Dispatched.Add(agent.Id);
             InvocationContexts.Add(invocationContext);
             return Task.FromResult(dispatch(agent, request));
+        }
+    }
+
+    private sealed class CancellingDispatcher : IResearchAgentDispatcher
+    {
+        public TaskCompletionSource Started { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public async Task<BillerResearchResponse> DispatchAsync(
+            ResearchAgentDescriptor agent,
+            BillerResearchRequest request,
+            ResearchAgentInvocationContext? invocationContext,
+            CancellationToken cancellationToken)
+        {
+            Started.TrySetResult();
+            await Task.Delay(Timeout.InfiniteTimeSpan, cancellationToken);
+            throw new InvalidOperationException("The cancellation-aware delay unexpectedly completed.");
         }
     }
 

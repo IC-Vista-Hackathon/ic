@@ -37,7 +37,7 @@ internal sealed partial class BillerExperienceChatWorkflow(
         CancellationToken cancellationToken = default)
     {
         var researchStep = new ObservableOrchestrationStep<BillerRecord, BillerResearchResponse>(
-            "biller-research", "Biller Research", "Reviewing the supplied biller profile and brand context",
+            "research-orchestration", "Research Orchestration", "Reviewing the supplied biller profile and brand context",
             (biller, stepContext, token) => ResearchAsync(biller, input.EventSink, stepContext, token),
             input.EventSink,
             logger,

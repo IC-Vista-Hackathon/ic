@@ -253,8 +253,13 @@ public sealed partial class BillerResearchCoordinator(
                     Stopwatch.GetElapsedTime(startedAt).TotalMilliseconds, CancellationToken.None);
                 return new AgentResult(null, "research.agent_timeout", true);
             }
-            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+            catch (OperationCanceledException exception) when (cancellationToken.IsCancellationRequested)
             {
+                const string errorCode = "research.request_cancelled";
+                LogAgentFailure(logger, agent.Id, errorCode, exception, Activity.Current?.TraceId.ToString());
+                await PublishActivityAsync(executionContext, agent, OrchestrationEventStatus.Failed,
+                    "Agent research was cancelled because the onboarding request ended.", errorCode, true,
+                    Stopwatch.GetElapsedTime(startedAt).TotalMilliseconds, CancellationToken.None);
                 throw;
             }
             catch (Exception exception)

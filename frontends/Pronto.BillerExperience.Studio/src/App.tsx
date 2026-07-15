@@ -5,7 +5,7 @@ import { toBillerSlug } from './slug';
 import { trackEvent } from './insights';
 import { categorizeError } from './telemetryPolicy';
 import { logError, logEvent } from './telemetry';
-import { agentActivityMeta, partitionAgentActivity } from './agentActivityMeta';
+import { agentActivityMeta, partitionAgentActivity, shouldShowAgentId } from './agentActivityMeta';
 import { billingInterviewPending, billingInterviewPrompt } from './billingReadiness';
 import type { AgentActivity, Deployment, ExperienceDefinition, ExperienceRevision, Session } from './types';
 
@@ -698,7 +698,8 @@ function AgentActivityPanel({
           <div style={css('display:grid;gap:8px;margin-top:8px')}>
             {inventory.map(item => (
               <div key={item.agent_id} style={css('padding:8px 10px;border-radius:8px;background:var(--invoicecloud-utility-neutral-10);font-size:12px')}>
-                <strong>{item.display_name}</strong> <code style={css('font-size:11px')}>{item.agent_id}</code>
+                <strong>{item.display_name}</strong>
+                {shouldShowAgentId(item) && <> <code style={css('font-size:11px')}>{item.agent_id}</code></>}
                 <span style={css('display:block;margin-top:3px;color:var(--invoicecloud-utility-neutral-70)')}>{item.summary}</span>
               </div>
             ))}
@@ -1014,10 +1015,10 @@ export function App() {
       events.onerror = () => patch({ activityConnection: 'disconnected' });
 
       trackEvent('studio.chat_message_sent', { biller_id: billerId }); // count only; message text never leaves the page
-      const answerDimensions = ['categories', 'cadence', 'state_rules', 'payment_terms'] as const;
-      const billingAnswers = s.chatAnswers
-        .map((answer, index) => ({ dimension: answerDimensions[index], answer: answer.trim() }))
-        .filter(answer => !!answer.answer);
+      const selectedCategories = s.chatAnswers[0]?.trim();
+      const billingAnswers = selectedCategories
+        ? [{ dimension: 'categories' as const, answer: selectedCategories }]
+        : undefined;
       const chat = await api.chat(
         billerId,
         `Build a ${s.vertical ?? 'custom'} payment experience for ${s.bizName}. ` +
@@ -1025,7 +1026,12 @@ export function App() {
         `Use the supplied website and preserve the existing payment rails.`,
         billingAnswers,
       );
-      await new Promise(resolve => window.setTimeout(resolve, 500));
+      let finalActivity: AgentActivity[] | undefined;
+      try {
+        finalActivity = (await api.activity(billerId)).activity;
+      } catch (caught) {
+        logError('studio.activity.final_snapshot_failed', caught, { biller_id: billerId });
+      }
       logEvent('studio.orchestration.completed', { biller_id: billerId, revision: chat.draft.revision });
       patch(st => ({
         compliance: recomputeCompliance(st),
@@ -1035,6 +1041,7 @@ export function App() {
         backendSession: chat.session,
         previewChatReply: chat.reply,
         acceptedMethods: chat.draft.definition.preferences?.accepted_methods ?? st.acceptedMethods,
+        agentActivity: finalActivity ?? st.agentActivity,
         analysisComplete: true,
         activityConnection: 'idle',
       }));
@@ -1079,6 +1086,12 @@ export function App() {
         ? s.previewChatInput.trim()
         : `Modify the existing payer experience preview only as requested. Preserve existing payment rails. Request: ${s.previewChatInput.trim()}`;
       const response = await api.chat(s.backendBillerId, message);
+      let finalActivity: AgentActivity[] | undefined;
+      try {
+        finalActivity = (await api.activity(s.backendBillerId)).activity;
+      } catch (caught) {
+        logError('studio.preview_chat.activity_snapshot_failed', caught, { biller_id: s.backendBillerId });
+      }
       patch({
         previewChatBusy: false,
         backendSession: response.session,
@@ -1087,6 +1100,7 @@ export function App() {
         previewChatInput: discoveryActive ? '' : s.previewChatInput,
         previewChatReply: response.reply,
         previewGenerationMode: response.generation_mode ?? null,
+        ...(finalActivity ? { agentActivity: finalActivity } : {}),
       });
     } catch (caught) {
       logError('studio.preview_chat.failed', caught, { biller_id: s.backendBillerId });
@@ -1344,7 +1358,7 @@ export function App() {
   const lineLabels = LINEITEM_LABELS[s.vertical ?? 'insurance'];
 
   const verticals = VERTICALS.map((v) => ({ ...v, iconSrc: asset(`assets/icons/${v.icon}.svg`), selected: v.id === s.vertical, onSelect: () => selectVertical(v.id) }));
-  const manualQuestionsComplete = s.setupPath !== 'manual' || s.chatStep >= 4;
+  const manualQuestionsComplete = s.setupPath !== 'manual' || !!s.chatAnswers[0]?.trim();
   const stepValid = [
     !!s.vertical && (s.vertical !== 'other' || s.otherVerticalDescription.trim().length > 0),
     s.bizName.trim().length > 1 && s.selectedStates.length > 0 && !!s.setupPath && manualQuestionsComplete,
@@ -1362,7 +1376,7 @@ export function App() {
   const setupPathIsManual = s.setupPath === 'manual';
   const setupPathBg = (active: boolean) => (active ? 'var(--invoicecloud-primary-tint)' : '#fff');
   const setupPathBorder = (active: boolean) => (active ? 'var(--invoicecloud-primary)' : 'var(--invoicecloud-surface-default-border)');
-  const setupPathSummaryLabel = s.setupPath === 'upload' ? 'Upload biller data' : s.setupPath === 'manual' ? 'Manually answer questions' : 'Not set';
+  const setupPathSummaryLabel = s.setupPath === 'upload' ? 'Upload biller data' : s.setupPath === 'manual' ? 'Select billing categories' : 'Not set';
   const setupPathAiRationale = s.setupPath === 'upload' ? "We'll use your uploaded data to pre-fill your payment experience settings." : s.setupPath === 'manual' ? 'You answered manually \u2014 we still recommend AI defaults for anything left blank.' : 'Choose how you\u2019d like to configure your payment experience.';
   const csvSummaryLabel = s.csvFileName ? `Loaded ${s.csvFileName}` : 'No file uploaded yet';
   const showUploadPicker = !s.analyzingUpload && !s.chatActive;
@@ -1689,8 +1703,8 @@ export function App() {
                     <div style={css('font-size:12px;color:var(--invoicecloud-utility-neutral-70)')}>Add any format of 30 days of invoice data and we'll scan it to understand how your business works.</div>
                   </button>
                   <button type="button" onClick={setSetupPathManual} style={css(`text-align:left;padding:var(--invoicecloud-spacing-s);border-radius:10px;cursor:pointer;background:${setupPathBg(setupPathIsManual)};border:1.5px solid ${setupPathBorder(setupPathIsManual)}`)}>
-                    <div style={css('font-weight:500;font-size:14px;margin-bottom:2px')}>Manually answer questions</div>
-                    <div style={css('font-size:12px;color:var(--invoicecloud-utility-neutral-70)')}>Tell us about your invoice types, volume and fee handling yourself.</div>
+                    <div style={css('font-weight:500;font-size:14px;margin-bottom:2px')}>Select billing categories</div>
+                    <div style={css('font-size:12px;color:var(--invoicecloud-utility-neutral-70)')}>Name what you bill for; agents will infer the remaining policy settings.</div>
                   </button>
                 </div>
 
@@ -1720,7 +1734,15 @@ export function App() {
                   </div>
                 )}
 
-                {s.chatActive && (
+                {setupPathIsManual && (
+                  <div style={css('border:1px solid var(--invoicecloud-surface-default-border);border-radius:10px;padding:var(--invoicecloud-spacing-s);margin-top:var(--invoicecloud-spacing-s)')}>
+                    <label style={css('display:block;font-size:13px;font-weight:500;margin-bottom:6px')}>Billing categories</label>
+                    <input type="text" value={s.chatAnswers[0] ?? ''} onChange={(event) => patch(st => ({ chatAnswers: [event.target.value, ...st.chatAnswers.slice(1)] }))} placeholder={VERTICAL_SUGGESTIONS[chatVertical][0]} style={css('width:100%;padding:10px 12px;border-radius:8px;border:1px solid var(--invoicecloud-surface-default-border);font-size:13px')} />
+                    <div style={css('font-size:12px;color:var(--invoicecloud-utility-neutral-60);margin-top:6px')}>Separate categories with commas. Cadence, late-payment rules, and payment terms will be applied as explicit agent assumptions.</div>
+                  </div>
+                )}
+
+                {false && s.chatActive && (
                   <div style={css('border:1px solid var(--invoicecloud-surface-default-border);border-radius:10px;padding:var(--invoicecloud-spacing-s);display:flex;flex-direction:column;gap:var(--invoicecloud-spacing-s);margin-top:var(--invoicecloud-spacing-s)')}>
                     {chatLog.map((msg, i) => (
                       <div key={i}>
@@ -2057,7 +2079,7 @@ export function App() {
                 </div>
               )}
 
-              {setupPathIsManual && chatReviewRows.map((cr, i) => (
+              {setupPathIsManual && chatReviewRows.slice(0, 1).map((cr, i) => (
                 <div key={i} style={cardStyle}>
                   <div style={css('display:flex;justify-content:space-between;align-items:flex-start')}>
                     <div style={css('font-size:14px;font-weight:500')}>{cr.question}</div>

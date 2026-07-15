@@ -453,7 +453,7 @@ public sealed class BillerOnboardingServiceTests
         Assert.Equal(ResearchOutcome.Skipped, generator.Research?.Outcome);
         Assert.Equal("research.not_configured", generator.Research?.ErrorCode);
         var (_, activity) = await service.GetSessionActivityAsync(created.Biller.BillerId, CancellationToken.None);
-        Assert.Contains(activity, item => item.AgentId == "biller-research" && item.Status == AgentActivityStatus.Skipped);
+        Assert.Contains(activity, item => item.AgentId == "research-orchestration" && item.Status == AgentActivityStatus.Skipped);
     }
 
     [Fact]
@@ -490,7 +490,7 @@ public sealed class BillerOnboardingServiceTests
         Assert.NotNull(response.Draft);
         Assert.Equal(ResearchOutcome.Degraded, generator.Research?.Outcome);
         var (_, activity) = await service.GetSessionActivityAsync(created.Biller.BillerId, CancellationToken.None);
-        Assert.Contains(activity, item => item.AgentId == "biller-research" && item.Status == AgentActivityStatus.Degraded);
+        Assert.Contains(activity, item => item.AgentId == "research-orchestration" && item.Status == AgentActivityStatus.Degraded);
     }
 
     [Fact]

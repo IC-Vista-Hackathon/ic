@@ -13,7 +13,7 @@ using Pronto.BillerExperience.Api.Configuration;
 namespace Pronto.BillerExperience.Api.Infrastructure.Research;
 
 public sealed record DesiredFoundryAgent(string Name, string Model, string Instructions, string Fingerprint, string Capability);
-public sealed record ExistingFoundryAgent(string Name, string? Fingerprint, bool HasSharedContextMcp);
+public sealed record ExistingFoundryAgent(string Name, string? Fingerprint, bool HasSharedContextMcp, string? Capability);
 
 public interface IFoundryAgentAdministrationGateway
 {
@@ -43,15 +43,20 @@ public sealed partial class FoundryAgentReconciler(
             var existing = (await gateway.ListAsync(stoppingToken)).ToDictionary(item => item.Name, StringComparer.OrdinalIgnoreCase);
             foreach (var agent in desired)
             {
-                if (existing.TryGetValue(agent.Name, out var current) && current.Fingerprint == agent.Fingerprint && current.HasSharedContextMcp)
+                if (existing.TryGetValue(agent.Name, out var current) &&
+                    current.Fingerprint == agent.Fingerprint &&
+                    current.HasSharedContextMcp &&
+                    string.Equals(current.Capability, agent.Capability, StringComparison.OrdinalIgnoreCase))
                 {
                     LogVerified(logger, agent.Name, agent.Fingerprint);
                     continue;
                 }
                 await gateway.CreateVersionAsync(agent, stoppingToken);
                 var verified = (await gateway.ListAsync(stoppingToken)).SingleOrDefault(item => item.Name == agent.Name);
-                if (verified?.Fingerprint != agent.Fingerprint || !verified.HasSharedContextMcp)
-                    throw new InvalidOperationException($"Foundry agent '{agent.Name}' was created without the required shared-context MCP attachment.");
+                if (verified?.Fingerprint != agent.Fingerprint ||
+                    !verified.HasSharedContextMcp ||
+                    !string.Equals(verified.Capability, agent.Capability, StringComparison.OrdinalIgnoreCase))
+                    throw new InvalidOperationException($"Foundry agent '{agent.Name}' was created without its required capability metadata or shared-context MCP attachment.");
                 LogReconciled(logger, agent.Name, agent.Fingerprint);
             }
         }
@@ -82,7 +87,7 @@ public sealed partial class FoundryAgentReconciler(
                     : item.Name == "research-coordinator"
                         ? "research_consolidation"
                         : item.Name.Replace('-', '_');
-                var fingerprint = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes($"{model}\n{instructions}\n{options.McpConnectionId}"))).ToLowerInvariant();
+                var fingerprint = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes($"{model}\n{instructions}\n{options.McpConnectionId}\n{capability}"))).ToLowerInvariant();
                 return new DesiredFoundryAgent(item.Name, model, instructions, fingerprint, capability);
             }).ToArray();
     }
@@ -108,8 +113,9 @@ public sealed class FoundryAgentAdministrationGateway(AIProjectClient project, I
         {
             var latest = agent.GetLatestVersion();
             latest.Metadata.TryGetValue("ic.fingerprint", out var fingerprint);
+            latest.Metadata.TryGetValue("ic.capabilities", out var capability);
             var hasMcp = latest.Definition is DeclarativeAgentDefinition definition && definition.Tools.Any(IsRequiredMcpTool);
-            result.Add(new ExistingFoundryAgent(agent.Name, fingerprint, hasMcp));
+            result.Add(new ExistingFoundryAgent(agent.Name, fingerprint, hasMcp, capability));
         }
         return result;
     }
