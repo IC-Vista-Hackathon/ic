@@ -40,7 +40,9 @@ public sealed class PaymentQuoteTests : IClassFixture<TestingAppFactory>
         var quote = await client.GetFromJsonAsync<PaymentQuoteResponse>(
             $"payments/quote?biller_id={billerId}&invoice_id={invoice.Id}&method=card", Wire);
         var payment = await (await client.PostAsJsonAsync(
-            "payments", new CreatePaymentRequest(billerId, invoice.Id, "card"), Wire))
+            "payments",
+            new CreatePaymentRequest(billerId, invoice.Id, "card", IdempotencyKey: "quote-payment"),
+            Wire))
             .Content.ReadFromJsonAsync<PaymentResponse>(Wire);
 
         Assert.NotNull(quote);
@@ -69,7 +71,9 @@ public sealed class PaymentQuoteTests : IClassFixture<TestingAppFactory>
         var billerId = Guid.NewGuid().ToString();
         var invoice = fakeInvoices.AddDueInvoice(billerId, amountCents: 5000);
         await client.PostAsJsonAsync(
-            "payments", new CreatePaymentRequest(billerId, invoice.Id, "card"), Wire);
+            "payments",
+            new CreatePaymentRequest(billerId, invoice.Id, "card", IdempotencyKey: "paid-invoice"),
+            Wire);
 
         var response = await client.GetAsync(
             new Uri($"payments/quote?biller_id={billerId}&invoice_id={invoice.Id}&method=card", UriKind.Relative));

@@ -41,6 +41,14 @@ public static class ServiceAuthentication
                     "identity provider — fail closed.");
             }
 
+            if (string.IsNullOrWhiteSpace(options.Audience)
+                && options.ValidAudiences.Count == 0)
+            {
+                throw new InvalidOperationException(
+                    "Authentication:Audience or Authentication:ValidAudiences must be configured when bearer " +
+                    "authentication is active. Refusing to accept tokens without an explicit API audience.");
+            }
+
             builder.Services
                 .AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
                 .AddJwtBearer(jwt =>

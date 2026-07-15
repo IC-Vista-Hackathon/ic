@@ -8,7 +8,7 @@ using Microsoft.Extensions.DependencyInjection;
 var builder = WebApplication.CreateBuilder(args);
 
 builder.AddServiceDefaults("Pronto.PayerAccount.Api");
-builder.Services.AddPayerAccountServices(builder.Configuration);
+builder.Services.AddPayerAccountServices(builder.Configuration, builder.Environment);
 
 var persistence = builder.Configuration
     .GetSection(CosmosPersistenceOptions.SectionName)
@@ -17,7 +17,31 @@ var persistence = builder.Configuration
 if (persistence.UseCosmos)
 {
     builder.Services.AddHealthChecks().AddDependencyReadinessCheck(
-        "cosmos", (services, _) => services.GetRequiredService<CosmosClient>().ReadAccountAsync());
+        "cosmos",
+        async (services, cancellationToken) =>
+        {
+            var database = services.GetRequiredService<CosmosClient>()
+                .GetDatabase(persistence.DatabaseName);
+            await database.ReadAsync(cancellationToken: cancellationToken);
+            await database.GetContainer("payer_accounts")
+                .ReadContainerAsync(cancellationToken: cancellationToken);
+        });
+}
+
+if (builder.Environment.IsProduction())
+{
+    const string readinessClient = "readiness-invoice-api";
+    builder.Services.AddHttpClient(readinessClient, client =>
+        client.BaseAddress = new Uri(builder.Configuration["Services:InvoiceApi"]!));
+    builder.Services.AddHealthChecks().AddDependencyReadinessCheck(
+        "invoice-api",
+        async (services, cancellationToken) =>
+        {
+            var client = services.GetRequiredService<IHttpClientFactory>()
+                .CreateClient(readinessClient);
+            using var response = await client.GetAsync("health/ready", cancellationToken);
+            response.EnsureSuccessStatusCode();
+        });
 }
 
 var app = builder.Build();

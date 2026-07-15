@@ -50,7 +50,9 @@ public sealed class PurchaseWorkflowApiTests
         var billerId = Guid.NewGuid().ToString();
 
         var response = await client.PostAsJsonAsync(
-            "purchases", new CreatePurchaseRequest(billerId, PurchasePlan.Shared), Wire);
+            "purchases",
+            new CreatePurchaseRequest(billerId, PurchasePlan.Shared, "pending-transition"),
+            Wire);
 
         Assert.Equal(HttpStatusCode.Created, response.StatusCode);
         var purchase = await response.Content.ReadFromJsonAsync<PurchaseResponse>(Wire);

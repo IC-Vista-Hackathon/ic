@@ -24,3 +24,21 @@ Web applications live in `frontends/`, not `services/`:
 
 Agents call these deterministic service APIs through registered tools and never access service
 storage directly.
+
+## API authentication
+
+Invoice, Payment, and Payer Account APIs validate JWT bearer tokens in Production. Biller
+Experience applies the same validation to its internal purchase-transition endpoint. Production
+configuration must provide:
+
+- `Authentication__Authority`
+- `Authentication__Audience` (or `Authentication__ValidAudiences__0`)
+- `Authentication__ServiceScope` (the API application scope used by workload identity for
+  authenticated service-to-service calls)
+
+The API application defines the app roles in
+`Pronto.ServiceDefaults.Security.ServiceClaims`. Agent identities receive only their capability
+role plus a `biller_id` claim. Internal service identities receive their service role and
+`service.cross-biller` where their workflow legitimately spans tenants. Development and Testing
+use the explicit test authentication scheme; Production refuses to start with incomplete bearer
+configuration.

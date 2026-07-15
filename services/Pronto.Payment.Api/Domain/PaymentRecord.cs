@@ -1,6 +1,7 @@
 using System.Globalization;
 using System.Security.Cryptography;
 using System.Text;
+using System.Text.Json.Serialization;
 using Pronto.Payment.Contracts.V1.Payments;
 
 namespace Pronto.Payment.Api.Domain;
@@ -84,6 +85,9 @@ public sealed record PaymentRecord
     public required DateTimeOffset CreatedAt { get; init; }
 
     public required DateTimeOffset UpdatedAt { get; init; }
+
+    [JsonIgnore]
+    public string? ETag { get; init; }
 
     /// <summary>True once the payment has reached a terminal or scheduled (client-visible) state.</summary>
     public bool IsFinalized => Lifecycle is not PaymentLifecycle.Pending;

@@ -29,7 +29,9 @@ public sealed class CosmosPaymentStore : IPaymentStore
         {
             var created = await container.CreateItemAsync(
                 document, new PartitionKey(pending.BillerId), cancellationToken: cancellationToken);
-            return new PaymentBeginResult(Created: true, created.Resource.Payment);
+            return new PaymentBeginResult(
+                Created: true,
+                created.Resource.Payment with { ETag = created.ETag });
         }
         catch (CosmosException exception) when (exception.StatusCode == HttpStatusCode.Conflict)
         {
@@ -47,11 +49,50 @@ public sealed class CosmosPaymentStore : IPaymentStore
 
     public async Task<PaymentRecord> SaveAsync(PaymentRecord record, CancellationToken cancellationToken = default)
     {
-        var response = await container.UpsertItemAsync(
-            PaymentDocument.From(record),
-            new PartitionKey(record.BillerId),
-            cancellationToken: cancellationToken);
-        return response.Resource.Payment;
+        var desired = record;
+        for (var attempt = 0; attempt < MaxClaimRetries; attempt++)
+        {
+            var current = desired.ETag is null
+                ? await ReadDocumentAsync(desired.BillerId, desired.PaymentId, cancellationToken)
+                    .ConfigureAwait(false)
+                : null;
+            var etag = desired.ETag ?? current?.ETag;
+            if (etag is null)
+            {
+                throw new InvalidOperationException(
+                    $"payment {desired.PaymentId} must exist before its lifecycle can be updated");
+            }
+
+            try
+            {
+                var response = await container.ReplaceItemAsync(
+                    PaymentDocument.From(desired),
+                    desired.PaymentId,
+                    new PartitionKey(desired.BillerId),
+                    new ItemRequestOptions { IfMatchEtag = etag },
+                    cancellationToken);
+                return response.Resource.Payment with { ETag = response.ETag };
+            }
+            catch (CosmosException exception) when (exception.StatusCode == HttpStatusCode.PreconditionFailed)
+            {
+                var latest = await FindAsync(desired.BillerId, desired.PaymentId, cancellationToken)
+                    .ConfigureAwait(false);
+                if (latest is null)
+                {
+                    throw;
+                }
+
+                if (!ShouldAdvance(latest.Lifecycle, desired.Lifecycle))
+                {
+                    return latest;
+                }
+
+                desired = desired with { ETag = latest.ETag };
+            }
+        }
+
+        throw new InvalidOperationException(
+            $"payment {record.PaymentId} could not be updated after repeated concurrent modification");
     }
 
     public async Task<PaymentRecord?> FindAsync(
@@ -61,7 +102,7 @@ public sealed class CosmosPaymentStore : IPaymentStore
         {
             var response = await container.ReadItemAsync<PaymentDocument>(
                 paymentId, new PartitionKey(billerId), cancellationToken: cancellationToken);
-            return response.Resource.Payment;
+            return response.Resource.Payment with { ETag = response.ETag };
         }
         catch (CosmosException exception) when (exception.StatusCode == HttpStatusCode.NotFound)
         {
@@ -141,7 +182,7 @@ public sealed class CosmosPaymentStore : IPaymentStore
                     new PartitionKey(claimed.BillerId),
                     new ItemRequestOptions { IfMatchEtag = candidate.ETag },
                     cancellationToken);
-                return response.Resource.Payment;
+                return response.Resource.Payment with { ETag = response.ETag };
             }
             catch (CosmosException exception) when (exception.StatusCode == HttpStatusCode.PreconditionFailed)
             {
@@ -171,6 +212,29 @@ public sealed class CosmosPaymentStore : IPaymentStore
     }
 
     private sealed record IdOnly([property: JsonPropertyName("id")] string Id);
+
+    private static bool ShouldAdvance(PaymentLifecycle current, PaymentLifecycle target) =>
+        current == PaymentLifecycle.Pending && target != PaymentLifecycle.Pending
+        || current == PaymentLifecycle.Scheduled && target == PaymentLifecycle.Succeeded;
+
+    private async Task<PaymentDocument?> ReadDocumentAsync(
+        string billerId,
+        string paymentId,
+        CancellationToken cancellationToken)
+    {
+        try
+        {
+            var response = await container.ReadItemAsync<PaymentDocument>(
+                paymentId,
+                new PartitionKey(billerId),
+                cancellationToken: cancellationToken);
+            return response.Resource with { ETag = response.ETag };
+        }
+        catch (CosmosException exception) when (exception.StatusCode == HttpStatusCode.NotFound)
+        {
+            return null;
+        }
+    }
 
     private sealed record PaymentDocument
     {

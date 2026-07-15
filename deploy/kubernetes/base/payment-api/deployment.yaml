@@ -31,6 +31,10 @@ spec:
               value: http://ic-invoice-api:8080
             - name: Services__BillerExperienceApi
               value: http://ic-biller-experience-api:8080
+            - name: Services__PayerAccountApi
+              value: http://ic-payer-account-api:8080
+            - name: PurchaseWorkflow__BackgroundCompletionEnabled
+              value: "true"
           readinessProbe:
             httpGet:
               path: /health/ready

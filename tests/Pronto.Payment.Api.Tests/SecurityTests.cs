@@ -5,6 +5,7 @@ using System.Text.Json;
 using System.Text.Json.Serialization;
 using Pronto.Payment.Api.Clients;
 using Pronto.Payment.Contracts.V1.Payments;
+using Pronto.Payment.Contracts.V1.Purchases;
 using Pronto.ServiceDefaults.Health;
 using Pronto.ServiceDefaults.Security;
 using Microsoft.AspNetCore.Hosting;
@@ -39,6 +40,22 @@ public sealed class SecurityTests
     }
 
     [Fact]
+    public void ProductionWithoutAudienceFailsToStart()
+    {
+        using var factory = new WebApplicationFactory<Program>()
+            .WithWebHostBuilder(builder =>
+            {
+                builder.UseEnvironment("Production");
+                builder.UseSetting(
+                    "Authentication:Authority", "https://login.microsoftonline.com/common/v2.0");
+            });
+
+        var exception = Assert.ThrowsAny<Exception>(() => factory.CreateClient());
+
+        Assert.Contains("Authentication:Audience", exception.ToString(), StringComparison.Ordinal);
+    }
+
+    [Fact]
     public async Task ProductionRejectsUnauthenticatedRequests()
     {
         using var factory = new WebApplicationFactory<Program>()
@@ -47,6 +64,10 @@ public sealed class SecurityTests
                 builder.UseEnvironment("Production");
                 builder.UseSetting(
                     "Authentication:Authority", "https://login.microsoftonline.com/common/v2.0");
+                builder.UseSetting("Authentication:Audience", "api://pronto-tests");
+                builder.UseSetting(
+                    "Authentication:ServiceScope", "api://pronto-tests/.default");
+                builder.UseSetting("Services:PayerAccountApi", "http://localhost:5103");
             });
         var client = factory.CreateClient();
 
@@ -65,7 +86,9 @@ public sealed class SecurityTests
         var client = CreateTestingClient(fakeInvoices);
 
         var response = await client.PostAsJsonAsync(
-            "payments", new CreatePaymentRequest(biller, invoice.Id, "card"), Wire);
+            "payments",
+            new CreatePaymentRequest(biller, invoice.Id, "card", IdempotencyKey: "testing-access"),
+            Wire);
 
         Assert.Equal(HttpStatusCode.Created, response.StatusCode);
     }
@@ -81,7 +104,9 @@ public sealed class SecurityTests
         client.DefaultRequestHeaders.Add(TestAuthenticationHandler.RolesHeader, ServiceClaims.PolicyAgentRole);
 
         var response = await client.PostAsJsonAsync(
-            "payments", new CreatePaymentRequest(biller, invoice.Id, "card"), Wire);
+            "payments",
+            new CreatePaymentRequest(biller, invoice.Id, "card", IdempotencyKey: "matching-tenant"),
+            Wire);
 
         Assert.Equal(HttpStatusCode.Forbidden, response.StatusCode);
     }
@@ -97,7 +122,9 @@ public sealed class SecurityTests
         client.DefaultRequestHeaders.Add(TestAuthenticationHandler.BillerHeader, "some-other-biller");
 
         var response = await client.PostAsJsonAsync(
-            "payments", new CreatePaymentRequest(biller, invoice.Id, "card"), Wire);
+            "payments",
+            new CreatePaymentRequest(biller, invoice.Id, "card", IdempotencyKey: "matching-tenant"),
+            Wire);
 
         Assert.Equal(HttpStatusCode.Forbidden, response.StatusCode);
         Assert.Contains(
@@ -115,7 +142,9 @@ public sealed class SecurityTests
         client.DefaultRequestHeaders.Add(TestAuthenticationHandler.BillerHeader, biller);
 
         var response = await client.PostAsJsonAsync(
-            "payments", new CreatePaymentRequest(biller, invoice.Id, "card"), Wire);
+            "payments",
+            new CreatePaymentRequest(biller, invoice.Id, "card", IdempotencyKey: "matching-tenant"),
+            Wire);
 
         Assert.Equal(HttpStatusCode.Created, response.StatusCode);
     }
@@ -149,6 +178,22 @@ public sealed class SecurityTests
     }
 
     [Fact]
+    public async Task ExecutionAgentIsForbiddenFromCreatingPurchases()
+    {
+        var client = CreateTestingClient(new FakeInvoiceClient());
+        client.DefaultRequestHeaders.Add(
+            TestAuthenticationHandler.RolesHeader,
+            ServiceClaims.ExecutionAgentRole);
+
+        var response = await client.PostAsJsonAsync(
+            "purchases",
+            new CreatePurchaseRequest(Guid.NewGuid().ToString(), PurchasePlan.Shared, "purchase-op"),
+            Wire);
+
+        Assert.Equal(HttpStatusCode.Forbidden, response.StatusCode);
+    }
+
+    [Fact]
     public async Task LivenessIgnoresDependencyFailureWhileReadinessReflectsIt()
     {
         using var factory = new TestingAppFactory().WithWebHostBuilder(builder =>
@@ -173,6 +218,10 @@ public sealed class SecurityTests
                 builder.UseEnvironment("Production");
                 builder.UseSetting(
                     "Authentication:Authority", "https://login.microsoftonline.com/common/v2.0");
+                builder.UseSetting("Authentication:Audience", "api://pronto-tests");
+                builder.UseSetting(
+                    "Authentication:ServiceScope", "api://pronto-tests/.default");
+                builder.UseSetting("Services:PayerAccountApi", "http://localhost:5103");
             });
         var client = factory.CreateClient();
 

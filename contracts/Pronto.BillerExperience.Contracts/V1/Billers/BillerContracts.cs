@@ -1,3 +1,6 @@
+using System.Text.Json;
+using System.Text.Json.Serialization;
+
 namespace Pronto.BillerExperience.Contracts.V1.Billers;
 
 public sealed record CreateBillerRequest(
@@ -24,6 +27,7 @@ public sealed record BillerResponse(
     DateTimeOffset CreatedAt,
     BillerTier Tier = BillerTier.Shared);
 
+[JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Disallow)]
 public sealed record AdvanceBillerPurchaseRequest(
     string PurchaseId,
     BillerTier Tier);
@@ -36,10 +40,19 @@ public enum BillerStatus
     Live
 }
 
+[JsonConverter(typeof(BillerTierJsonConverter))]
 public enum BillerTier
 {
     Shared,
     Isolated
+}
+
+public sealed class BillerTierJsonConverter : JsonStringEnumConverter<BillerTier>
+{
+    public BillerTierJsonConverter()
+        : base(JsonNamingPolicy.SnakeCaseLower, allowIntegerValues: false)
+    {
+    }
 }
 
 public sealed record BillerBrand(

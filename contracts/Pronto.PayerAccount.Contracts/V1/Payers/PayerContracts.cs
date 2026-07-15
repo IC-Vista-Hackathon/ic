@@ -2,6 +2,7 @@ using System.Text.Json.Serialization;
 
 namespace Pronto.PayerAccount.Contracts.V1.Payers;
 
+[JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Disallow)]
 public sealed record RegisterPayerRequest(
     string BillerId,
     string Name,
@@ -25,6 +26,7 @@ public sealed record PayerPreferences(
     IReadOnlyList<NotificationChannel> Channels,
     int? PaymentDay);
 
+[JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Disallow)]
 public sealed record UpdatePayerPreferencesRequest(
     bool? Autopay = null,
     bool? Paperless = null,
@@ -36,6 +38,7 @@ public sealed record UpdatePayerPreferencesRequest(
 /// re-linking accounts the payer already holds is a no-op, and a link already owned by a
 /// different payer for the same biller is rejected with 409 <c>account_already_linked</c>.
 /// </summary>
+[JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Disallow)]
 public sealed record LinkAccountsRequest(
     IReadOnlyList<string> AccountNumbers);
 

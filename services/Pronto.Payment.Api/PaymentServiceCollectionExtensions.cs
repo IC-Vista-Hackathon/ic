@@ -3,10 +3,12 @@ using Pronto.Payment.Api.Storage;
 using Pronto.Payment.Api.Workflow;
 using Pronto.Persistence.Cosmos;
 using Pronto.ServiceDefaults;
+using Pronto.ServiceDefaults.Security;
 using Microsoft.Azure.Cosmos;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
+using Microsoft.Extensions.Hosting;
 
 namespace Pronto.Payment.Api;
 
@@ -23,7 +25,9 @@ public static class PaymentServiceCollectionExtensions
     /// validation, and (when enabled) the durable scheduled-payment processor.
     /// </summary>
     public static IServiceCollection AddPaymentServices(
-        this IServiceCollection services, IConfiguration configuration)
+        this IServiceCollection services,
+        IConfiguration configuration,
+        IHostEnvironment environment)
     {
         services.AddOptions<PaymentProcessingOptions>()
             .Bind(configuration.GetSection(PaymentProcessingOptions.SectionName));
@@ -36,9 +40,10 @@ public static class PaymentServiceCollectionExtensions
         services.AddHttpClient<IInvoiceClient, HttpInvoiceClient>(client =>
             client.BaseAddress = new Uri(
                 configuration["Services:InvoiceApi"] ?? "http://localhost:5101"))
-            .AddHttpMessageHandler<CorrelationPropagationHandler>();
+            .AddHttpMessageHandler<CorrelationPropagationHandler>()
+            .AddServiceBearerToken(configuration, environment);
 
-        AddPayerAccountValidation(services, configuration);
+        AddPayerAccountValidation(services, configuration, environment);
 
         services.TryAddScoped<PaymentWorkflow>();
         services.TryAddScoped<ScheduledPaymentProcessor>();
@@ -58,14 +63,22 @@ public static class PaymentServiceCollectionExtensions
     /// is configured, otherwise a permissive validator. Never owns PayerAccount storage.
     /// </summary>
     public static IServiceCollection AddPayerAccountValidation(
-        this IServiceCollection services, IConfiguration configuration)
+        this IServiceCollection services,
+        IConfiguration configuration,
+        IHostEnvironment environment)
     {
         var endpoint = configuration["Services:PayerAccountApi"];
         if (!string.IsNullOrWhiteSpace(endpoint))
         {
             services.AddHttpClient<IPayerAccountValidator, HttpPayerAccountValidator>(client =>
                 client.BaseAddress = new Uri(endpoint))
-                .AddHttpMessageHandler<CorrelationPropagationHandler>();
+                .AddHttpMessageHandler<CorrelationPropagationHandler>()
+                .AddServiceBearerToken(configuration, environment);
+        }
+        else if (environment.IsProduction())
+        {
+            throw new InvalidOperationException(
+                "Services:PayerAccountApi is required in Production so payer_account_id ownership validation cannot be bypassed.");
         }
         else
         {

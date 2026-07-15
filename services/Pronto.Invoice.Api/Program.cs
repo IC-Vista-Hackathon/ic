@@ -22,7 +22,15 @@ if (persistence.UseCosmos)
     builder.Services.AddSingleton<IInvoiceRepository>(services =>
         new CosmosInvoiceRepository(services.GetRequiredService<CosmosClient>(), persistence.DatabaseName));
     builder.Services.AddHealthChecks().AddDependencyReadinessCheck(
-        "cosmos", (services, _) => services.GetRequiredService<CosmosClient>().ReadAccountAsync());
+        "cosmos",
+        async (services, cancellationToken) =>
+        {
+            var database = services.GetRequiredService<CosmosClient>()
+                .GetDatabase(persistence.DatabaseName);
+            await database.ReadAsync(cancellationToken: cancellationToken);
+            await database.GetContainer("invoices")
+                .ReadContainerAsync(cancellationToken: cancellationToken);
+        });
 }
 else
 {

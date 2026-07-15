@@ -21,7 +21,7 @@ public sealed partial class CosmosBillerExperienceRepository(
         ObserveAsync("create", "billers", biller.Id, async () =>
         {
             var response = await Billers.CreateItemAsync(biller, new PartitionKey(biller.Id), cancellationToken: cancellationToken);
-            return response.Resource;
+            return response.Resource with { ETag = response.ETag };
         });
 
     public ValueTask<BillerRecord?> GetBillerAsync(string billerId, CancellationToken cancellationToken) =>
@@ -30,7 +30,7 @@ public sealed partial class CosmosBillerExperienceRepository(
             try
             {
                 var response = await Billers.ReadItemAsync<BillerRecord>(billerId, new PartitionKey(billerId), cancellationToken: cancellationToken);
-                return response.Resource;
+                return response.Resource with { ETag = response.ETag };
             }
             catch (CosmosException exception) when (exception.StatusCode == HttpStatusCode.NotFound)
             {
@@ -52,7 +52,7 @@ public sealed partial class CosmosBillerExperienceRepository(
                     new PartitionKey(biller.Id),
                     new ItemRequestOptions { IfMatchEtag = expectedETag },
                     cancellationToken);
-                return response.Resource;
+                return response.Resource with { ETag = response.ETag };
             }
             catch (CosmosException exception) when (exception.StatusCode == HttpStatusCode.PreconditionFailed)
             {

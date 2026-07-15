@@ -2,7 +2,9 @@ using Pronto.PayerAccount.Api.Accounts;
 using Pronto.PayerAccount.Api.Storage;
 using Pronto.Persistence.Cosmos;
 using Pronto.ServiceDefaults;
+using Pronto.ServiceDefaults.Security;
 using Microsoft.Azure.Cosmos;
+using Microsoft.Extensions.Hosting;
 
 namespace Pronto.PayerAccount.Api;
 
@@ -19,11 +21,13 @@ public static class PayerAccountServiceCollectionExtensions
 
     /// <summary>Wires the store, account-ownership verification, and maintenance options.</summary>
     public static IServiceCollection AddPayerAccountServices(
-        this IServiceCollection services, IConfiguration configuration)
+        this IServiceCollection services,
+        IConfiguration configuration,
+        IHostEnvironment environment)
     {
         services.Configure<MaintenanceOptions>(configuration.GetSection(MaintenanceOptions.SectionName));
         services.AddPayerAccountStore(configuration);
-        services.AddAccountOwnershipVerification(configuration);
+        services.AddAccountOwnershipVerification(configuration, environment);
         return services;
     }
 
@@ -55,12 +59,15 @@ public static class PayerAccountServiceCollectionExtensions
     /// and correlation headers propagate via the shared handler registered by the service defaults.
     /// </summary>
     public static IServiceCollection AddAccountOwnershipVerification(
-        this IServiceCollection services, IConfiguration configuration)
+        this IServiceCollection services,
+        IConfiguration configuration,
+        IHostEnvironment environment)
     {
         services.AddHttpClient<IAccountOwnershipVerifier, HttpAccountOwnershipVerifier>(client =>
-                client.BaseAddress = new Uri(
+            client.BaseAddress = new Uri(
                     configuration["Services:InvoiceApi"] ?? DefaultInvoiceApiBaseAddress))
-            .AddHttpMessageHandler<CorrelationPropagationHandler>();
+            .AddHttpMessageHandler<CorrelationPropagationHandler>()
+            .AddServiceBearerToken(configuration, environment);
         return services;
     }
 }

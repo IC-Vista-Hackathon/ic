@@ -53,6 +53,7 @@ public sealed class PaymentWorkflowApiTests : IClassFixture<WebApplicationFactor
     private static async Task<PaymentResponse> PostAsync(
         HttpClient client, CreatePaymentRequest request, string? idempotencyKey = null)
     {
+        idempotencyKey ??= Guid.NewGuid().ToString();
         using var message = new HttpRequestMessage(HttpMethod.Post, "payments")
         {
             Content = JsonContent.Create(request, options: Wire),
@@ -70,6 +71,7 @@ public sealed class PaymentWorkflowApiTests : IClassFixture<WebApplicationFactor
     private static async Task<HttpResponseMessage> PostRawAsync(
         HttpClient client, CreatePaymentRequest request, string? idempotencyKey = null)
     {
+        idempotencyKey ??= Guid.NewGuid().ToString();
         using var message = new HttpRequestMessage(HttpMethod.Post, "payments")
         {
             Content = JsonContent.Create(request, options: Wire),
@@ -80,6 +82,25 @@ public sealed class PaymentWorkflowApiTests : IClassFixture<WebApplicationFactor
         }
 
         return await client.SendAsync(message);
+    }
+
+    [Fact]
+    public async Task PaymentRequiresIdempotencyKey()
+    {
+        var client = CreateClient();
+        var biller = Guid.NewGuid().ToString();
+        var invoice = fakeInvoices.AddDueInvoice(biller, 5000);
+
+        var response = await client.PostAsJsonAsync(
+            "payments",
+            new CreatePaymentRequest(biller, invoice.Id, "card"),
+            Wire);
+
+        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+        Assert.Contains(
+            "idempotency_key_required",
+            await response.Content.ReadAsStringAsync(),
+            StringComparison.Ordinal);
     }
 
     [Fact]

@@ -31,6 +31,25 @@ public sealed class CosmosPayerStore : IPayerStore
         var accounts = NormalizeAccounts(payer.AccountNumbers);
         var stored = payer with { AccountNumbers = accounts };
         var partitionKey = new PartitionKey(stored.BillerId);
+        if (await FindByEmailAsync(stored.BillerId, stored.Email, cancellationToken).ConfigureAwait(false)
+            is not null)
+        {
+            throw ServiceException.Conflict(
+                "already_registered",
+                "email already registered for this biller");
+        }
+
+        foreach (var account in accounts)
+        {
+            var owner = await FindByAccountAsync(stored.BillerId, account, cancellationToken)
+                .ConfigureAwait(false);
+            if (owner is not null)
+            {
+                throw ServiceException.Conflict(
+                    "account_already_linked",
+                    $"account {account} is already linked to another payer for this biller");
+            }
+        }
 
         var batch = container.CreateTransactionalBatch(partitionKey);
         var kinds = new List<MarkerKind> { MarkerKind.Payer };
@@ -149,6 +168,19 @@ public sealed class CosmosPayerStore : IPayerStore
                 return current.Document.Payer;
             }
 
+            foreach (var account in toAdd)
+            {
+                var owner = await FindByAccountAsync(billerId, account, cancellationToken)
+                    .ConfigureAwait(false);
+                if (owner is not null
+                    && !string.Equals(owner.PayerId, payerId, StringComparison.Ordinal))
+                {
+                    throw ServiceException.Conflict(
+                        "account_already_linked",
+                        $"account {account} is already linked to another payer for this biller");
+                }
+            }
+
             var updated = current.Document.Payer with
             {
                 AccountNumbers = existing.Concat(toAdd).ToList(),
@@ -243,6 +275,31 @@ public sealed class CosmosPayerStore : IPayerStore
         {
             return null;
         }
+    }
+
+    private async Task<PayerResponse?> FindByEmailAsync(
+        string billerId,
+        string email,
+        CancellationToken cancellationToken)
+    {
+        var query = new QueryDefinition(
+                "SELECT TOP 1 VALUE c.payer FROM c "
+                + "WHERE IS_DEFINED(c.payer) AND UPPER(c.payer.email) = @email")
+            .WithParameter("@email", NormalizeEmail(email));
+        using var iterator = container.GetItemQueryIterator<PayerResponse>(
+            query,
+            requestOptions: new QueryRequestOptions
+            {
+                PartitionKey = new PartitionKey(billerId),
+                MaxItemCount = 1,
+            });
+        if (!iterator.HasMoreResults)
+        {
+            return null;
+        }
+
+        var page = await iterator.ReadNextAsync(cancellationToken).ConfigureAwait(false);
+        return page.FirstOrDefault();
     }
 
     private static void ThrowForFailedBatch(TransactionalBatchResponse response, IReadOnlyList<MarkerKind> kinds)

@@ -36,6 +36,21 @@ public sealed class CosmosPurchaseStore : IPurchaseStore, IPurchaseCompletionOut
                 Attempts: 0),
         };
         var partitionKey = new PartitionKey(request.BillerId);
+        var legacy = await FindLegacyDocumentAsync(
+                request.BillerId,
+                purchase.PurchaseId,
+                cancellationToken)
+            .ConfigureAwait(false);
+        if (legacy is not null)
+        {
+            PurchaseRetryPolicy.EnsureIdempotentReplay(
+                legacy.BillerId,
+                legacy.Purchase.Plan,
+                legacy.IdempotencyKey,
+                request.Plan,
+                document.IdempotencyKey);
+            return new PurchaseCreateResult(legacy.Purchase, AlreadyExisted: true);
+        }
 
         try
         {
@@ -180,17 +195,22 @@ public sealed class CosmosPurchaseStore : IPurchaseStore, IPurchaseCompletionOut
 
     public async Task PurgeByBillerAsync(string billerId, CancellationToken cancellationToken = default)
     {
-        var purchaseId = PurchaseIdentity.ForBiller(billerId);
-        try
+        var partition = new PartitionKey(billerId);
+        using var iterator = container.GetItemQueryIterator<IdOnly>(
+            new QueryDefinition("SELECT c.id FROM c"),
+            requestOptions: new QueryRequestOptions { PartitionKey = partition });
+
+        while (iterator.HasMoreResults)
         {
-            await container.DeleteItemAsync<PurchaseDocument>(
-                    purchaseId,
-                    new PartitionKey(billerId),
-                    cancellationToken: cancellationToken)
-                .ConfigureAwait(false);
-        }
-        catch (CosmosException exception) when (exception.StatusCode == HttpStatusCode.NotFound)
-        {
+            var page = await iterator.ReadNextAsync(cancellationToken).ConfigureAwait(false);
+            foreach (var item in page)
+            {
+                await container.DeleteItemAsync<PurchaseDocument>(
+                        item.Id,
+                        partition,
+                        cancellationToken: cancellationToken)
+                    .ConfigureAwait(false);
+            }
         }
     }
 
@@ -206,7 +226,7 @@ public sealed class CosmosPurchaseStore : IPurchaseStore, IPurchaseCompletionOut
                     new PartitionKey(billerId),
                     cancellationToken: cancellationToken)
                 .ConfigureAwait(false);
-            return response.Resource;
+            return response.Resource with { ETag = response.ETag };
         }
         catch (CosmosException exception) when (exception.StatusCode == HttpStatusCode.NotFound)
         {
@@ -216,6 +236,31 @@ public sealed class CosmosPurchaseStore : IPurchaseStore, IPurchaseCompletionOut
 
     private static string? NormalizeIdempotencyKey(string? idempotencyKey) =>
         string.IsNullOrWhiteSpace(idempotencyKey) ? null : idempotencyKey.Trim();
+
+    private async Task<PurchaseDocument?> FindLegacyDocumentAsync(
+        string billerId,
+        string deterministicId,
+        CancellationToken cancellationToken)
+    {
+        var query = new QueryDefinition("SELECT TOP 1 * FROM c WHERE c.id != @deterministicId")
+            .WithParameter("@deterministicId", deterministicId);
+        using var iterator = container.GetItemQueryIterator<PurchaseDocument>(
+            query,
+            requestOptions: new QueryRequestOptions
+            {
+                PartitionKey = new PartitionKey(billerId),
+                MaxItemCount = 1,
+            });
+        if (!iterator.HasMoreResults)
+        {
+            return null;
+        }
+
+        var page = await iterator.ReadNextAsync(cancellationToken).ConfigureAwait(false);
+        return page.FirstOrDefault();
+    }
+
+    private sealed record IdOnly([property: JsonPropertyName("id")] string Id);
 
     private sealed record PurchaseDocument
     {

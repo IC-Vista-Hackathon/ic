@@ -74,6 +74,13 @@ public sealed partial class PaymentsController : ControllerBase
 
         // The header wins over the body field; either provides durable client idempotency.
         var idempotencyKey = Normalize(idempotencyHeader) ?? Normalize(request.IdempotencyKey);
+        if (idempotencyKey is null)
+        {
+            throw ServiceException.BadRequest(
+                "idempotency_key_required",
+                "Idempotency-Key header or idempotency_key body field is required.");
+        }
+
         var paymentId = PaymentRecord.DeriveId(request.BillerId, idempotencyKey);
         var fingerprint = PaymentRecord.Fingerprint(
             request.InvoiceId, request.Method, request.PayerAccountId, request.ScheduledFor);

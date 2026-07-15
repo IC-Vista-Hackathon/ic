@@ -42,7 +42,9 @@ public sealed class PaymentsApiTests : IClassFixture<TestingAppFactory>
         var invoice = fakeInvoices.AddDueInvoice(billerId, amountCents: 8420);
 
         var response = await client.PostAsJsonAsync(
-            "payments", new CreatePaymentRequest(billerId, invoice.Id, "card"), Wire);
+            "payments",
+            new CreatePaymentRequest(billerId, invoice.Id, "card", IdempotencyKey: "card-payment"),
+            Wire);
 
         Assert.Equal(HttpStatusCode.Created, response.StatusCode);
         var payment = await response.Content.ReadFromJsonAsync<PaymentResponse>(Wire);
@@ -65,7 +67,9 @@ public sealed class PaymentsApiTests : IClassFixture<TestingAppFactory>
         var invoice = fakeInvoices.AddDueInvoice(billerId, amountCents: 10000);
 
         var response = await client.PostAsJsonAsync(
-            "payments", new CreatePaymentRequest(billerId, invoice.Id, "ach"), Wire);
+            "payments",
+            new CreatePaymentRequest(billerId, invoice.Id, "ach", IdempotencyKey: "ach-payment"),
+            Wire);
 
         var payment = await response.Content.ReadFromJsonAsync<PaymentResponse>(Wire);
         Assert.Equal(150, payment!.FeeCents);
@@ -81,7 +85,11 @@ public sealed class PaymentsApiTests : IClassFixture<TestingAppFactory>
         var response = await client.PostAsJsonAsync(
             "payments",
             new CreatePaymentRequest(
-                billerId, invoice.Id, "ach", ScheduledFor: new DateOnly(2026, 7, 24)),
+                billerId,
+                invoice.Id,
+                "ach",
+                ScheduledFor: new DateOnly(2026, 7, 24),
+                IdempotencyKey: "scheduled-payment"),
             Wire);
 
         var payment = await response.Content.ReadFromJsonAsync<PaymentResponse>(Wire);
@@ -95,10 +103,14 @@ public sealed class PaymentsApiTests : IClassFixture<TestingAppFactory>
         var billerId = Guid.NewGuid().ToString();
         var invoice = fakeInvoices.AddDueInvoice(billerId, amountCents: 5000);
         await client.PostAsJsonAsync(
-            "payments", new CreatePaymentRequest(billerId, invoice.Id, "card"), Wire);
+            "payments",
+            new CreatePaymentRequest(billerId, invoice.Id, "card", IdempotencyKey: "first-payment"),
+            Wire);
 
         var second = await client.PostAsJsonAsync(
-            "payments", new CreatePaymentRequest(billerId, invoice.Id, "card"), Wire);
+            "payments",
+            new CreatePaymentRequest(billerId, invoice.Id, "card", IdempotencyKey: "second-payment"),
+            Wire);
 
         Assert.Equal(HttpStatusCode.Conflict, second.StatusCode);
         Assert.Contains(
@@ -170,8 +182,16 @@ public sealed class PaymentsApiTests : IClassFixture<TestingAppFactory>
         var billerId = Guid.NewGuid().ToString();
         var firstInvoice = fakeInvoices.AddDueInvoice(billerId, amountCents: 4200);
         var secondInvoice = fakeInvoices.AddDueInvoice(billerId, amountCents: 5300);
-        await client.PostAsJsonAsync("payments", new CreatePaymentRequest(billerId, firstInvoice.Id, "card", "payer-1"), Wire);
-        await client.PostAsJsonAsync("payments", new CreatePaymentRequest(billerId, secondInvoice.Id, "ach", "payer-2"), Wire);
+        await client.PostAsJsonAsync(
+            "payments",
+            new CreatePaymentRequest(
+                billerId, firstInvoice.Id, "card", "payer-1", IdempotencyKey: "payer-1-payment"),
+            Wire);
+        await client.PostAsJsonAsync(
+            "payments",
+            new CreatePaymentRequest(
+                billerId, secondInvoice.Id, "ach", "payer-2", IdempotencyKey: "payer-2-payment"),
+            Wire);
 
         var history = await client.GetFromJsonAsync<PaymentResponse[]>(
             $"payments?biller_id={billerId}&payer_account_id=payer-1", Wire);
