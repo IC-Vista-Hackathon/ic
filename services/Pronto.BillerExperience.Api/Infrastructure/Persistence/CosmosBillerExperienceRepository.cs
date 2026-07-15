@@ -46,7 +46,18 @@ public sealed partial class CosmosBillerExperienceRepository(
             catch
             {
                 // Release the reservation so a retry (or a different biller) can claim the slug.
-                using var _ = await Billers.DeleteItemStreamAsync(reservationId, reservationPartition, cancellationToken: cancellationToken);
+                // Use CancellationToken.None: the caller's token may already be cancelled (which is
+                // what failed the create), and a skipped cleanup would orphan the reservation and
+                // block the slug forever. Best-effort — the original exception is always re-thrown.
+                try
+                {
+                    using var _ = await Billers.DeleteItemStreamAsync(reservationId, reservationPartition, cancellationToken: CancellationToken.None);
+                }
+                catch
+                {
+                    // ignored
+                }
+
                 throw;
             }
         });
