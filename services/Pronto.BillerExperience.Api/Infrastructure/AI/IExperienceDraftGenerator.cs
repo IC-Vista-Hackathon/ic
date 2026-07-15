@@ -1,4 +1,5 @@
 using Pronto.BillerExperience.Api.Domain;
+using Pronto.BillerExperience.Contracts.V1.Billing;
 using Pronto.BillerExperience.Contracts.V1.Experiences;
 using Pronto.BillerExperience.Contracts.V1.Onboarding;
 using Pronto.BillerExperience.Contracts.V1.Research;
@@ -13,6 +14,7 @@ public interface IExperienceDraftGenerator
         BillerRecord biller,
         ExperienceRecord current,
         IReadOnlyList<OnboardingChatMessage> messages,
+        BillingProfile billingProfile,
         BillerResearchResponse research,
         CancellationToken cancellationToken);
 }

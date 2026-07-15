@@ -6,6 +6,7 @@ using Pronto.BillerExperience.Api.Domain;
 using Pronto.BillerExperience.Api.Infrastructure.AI;
 using Pronto.BillerExperience.Api.Infrastructure.Research;
 using Pronto.BillerExperience.Contracts.V1.Experiences;
+using Pronto.BillerExperience.Contracts.V1.Billing;
 using Pronto.BillerExperience.Contracts.V1.Onboarding;
 using Pronto.BillerExperience.Contracts.V1.Research;
 
@@ -15,6 +16,7 @@ internal sealed record BillerExperienceChatWorkflowInput(
     BillerRecord Biller,
     ExperienceRecord Experience,
     IReadOnlyList<OnboardingChatMessage> Messages,
+    BillingProfile BillingProfile,
     IOrchestrationEventSink EventSink);
 
 internal sealed partial class BillerExperienceChatWorkflow(
@@ -72,7 +74,7 @@ internal sealed partial class BillerExperienceChatWorkflow(
 
         var designStep = new ObservableOrchestrationStep<ExperienceRecord, DraftGenerationResult>(
             "experience-designer", "Experience Designer", "Applying copy, layout, and action changes to the live preview",
-            (experience, _, token) => designAgent.DesignAsync(input.Biller, experience, input.Messages, research, token),
+            (experience, _, token) => designAgent.DesignAsync(input.Biller, experience, input.Messages, input.BillingProfile, research, token),
             input.EventSink, logger);
         var generated = await designStep.ExecuteAsync(input.Experience, context, cancellationToken);
 

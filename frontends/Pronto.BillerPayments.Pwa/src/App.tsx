@@ -135,6 +135,7 @@ export function App() {
     <nav className="account-nav" aria-label="Account services"><button className={page === 'payment' ? 'active' : ''} onClick={() => navigate('payment')}>Pay Bill</button>{preferences.self_service_history && <button className={page === 'history' ? 'active' : ''} onClick={() => navigate('history')}>Account History</button>}{preferences.self_service_updates && <button className={page === 'preferences' ? 'active' : ''} onClick={() => navigate('preferences')}>Preferences</button>}</nav>
     <main><Intro eyebrow="Account services" heading={page === 'payment' ? config.content.heading : page === 'history' ? 'Account history' : 'Communication preferences'} subheading={page === 'payment' ? config.content.introduction : `Manage services for ${config.brand.display_name}.`} />{error && <div className="alert" role="alert" data-testid="error">{error}</div>}
       {page === 'payment' && <>
+        {config.billing?.categories.length ? <section className="card" aria-label="Billing options"><h2>Billing options</h2>{config.billing.categories.map(category => <div className="history-row" key={category.id}><span><strong>{category.display_name}</strong><small>{category.cadence_label} · {category.state_summary}</small></span><strong>{paymentTermsLabel(category.payment_mode, category.maximum_installments)}</strong></div>)}</section> : null}
         {step === 'lookup' && <form className="card" onSubmit={lookup}><h2>{preferences.guest_checkout_allowed ? 'Find your bill' : 'Access your account'}</h2><p className="card-copy">{preferences.guest_checkout_allowed ? 'No sign-in required. Enter the account number shown on your bill.' : 'Enter your account number to continue to the secure payment experience.'}</p><label>Account number<input name="account" data-testid="account-input" required defaultValue="4421" autoComplete="off" /></label><button data-testid="lookup-submit" disabled={busy}>{busy ? 'Finding Bill…' : 'Continue'}</button></form>}
         {step === 'method' && invoice && <section className="card"><Bill invoice={invoice}/><h2>Choose how to pay</h2><div className="choices">{acceptedMethods.includes('card') && <button data-testid="method-card" className={method === 'card' ? 'selected' : 'option'} onClick={() => selectMethod('card')}>Card <small>{quoteFeeText(quotes.card, invoice.amountCents)}</small></button>}{acceptedMethods.includes('ach') && <button data-testid="method-ach" className={method === 'ach' ? 'selected' : 'option'} onClick={() => selectMethod('ach')}>Bank Account <small>{quoteFeeText(quotes.ach, invoice.amountCents)}</small></button>}</div>
           {quoteErrors[method] && <div className="alert" role="alert" data-testid="quote-error">We couldn’t prepare this payment method. {quoteErrors[method]} <button type="button" onClick={() => setQuoteAttempt(value => value + 1)}>Retry quote</button></div>}
@@ -158,6 +159,7 @@ function quoteFeeText(quote: PaymentQuote | undefined, amountCents: number) {
 }
 function reminderLabel(value: number | string) { return typeof value === 'number' ? ['Email', 'Text (SMS)', 'Both', 'None'][value] : humanize(value); }
 function humanize(value: string) { return value.replaceAll('_', ' ').replace(/\b\w/g, match => match.toUpperCase()); }
+function paymentTermsLabel(mode: string | number | null | undefined, maximum?: number | null) { const installments = mode === 'installments_allowed' || mode === 1; if (!installments) return 'Pay in full'; return maximum ? `Up to ${maximum} installments` : 'Installments available'; }
 function money(cents: number) { return new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' }).format(cents / 100); }
 function validateConfig(value: unknown): ExperienceDefinition {
   if (!isRecord(value)) throw new Error('The payment experience configuration is invalid.');
@@ -193,6 +195,9 @@ function validateConfig(value: unknown): ExperienceDefinition {
   }
   if (value.preferences !== undefined && !isValidPreferences(value.preferences)) {
     throw new Error('The payment experience preferences are invalid.');
+  }
+  if (value.billing !== undefined && !isValidBilling(value.billing)) {
+    throw new Error('The payment experience billing options are invalid.');
   }
   const accepted = isRecord(value.preferences) && isStringArray(value.preferences.accepted_methods)
     ? value.preferences.accepted_methods
@@ -257,4 +262,16 @@ function isValidPreferences(value: unknown): boolean {
     hasString(value.preview, 'default_device') &&
     isStringArray(value.preview.enabled_scenarios)
   );
+}
+
+function isValidBilling(value: unknown): boolean {
+  if (!isRecord(value) || !Array.isArray(value.categories)) return false;
+  return value.categories.every(category =>
+    isRecord(category) &&
+    hasString(category, 'id') &&
+    hasString(category, 'display_name') &&
+    hasString(category, 'cadence_label') &&
+    hasString(category, 'state_summary') &&
+    (category.payment_mode === null || category.payment_mode === undefined || typeof category.payment_mode === 'string' || typeof category.payment_mode === 'number') &&
+    (category.maximum_installments === null || category.maximum_installments === undefined || typeof category.maximum_installments === 'number'));
 }

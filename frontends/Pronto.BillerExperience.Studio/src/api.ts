@@ -1,4 +1,4 @@
-import type { Bootstrap, ChatResponse, Deployment, ExperienceDefinition, ExperienceRevision, PreviewInvoice } from './types';
+import type { Bootstrap, ChatResponse, Deployment, ExperienceDefinition, ExperienceRevision, PreviewInvoice, Session } from './types';
 import { logError, logEvent, newTrace } from './telemetry';
 import { fetchWithTimeout, requestError } from './http';
 
@@ -28,8 +28,10 @@ async function request<T>(path: string, init?: RequestInit, billerId?: string): 
 export const api = {
   create: (input: { display_name: string; slug: string; bill_type: string; postal_code: string; website?: string }) =>
     request<Bootstrap>('/billers', { method: 'POST', body: JSON.stringify(input) }),
-  chat: (billerId: string, message: string) =>
-    request<ChatResponse>(`/billers/${billerId}/chat`, { method: 'POST', body: JSON.stringify({ message }) }, billerId),
+  chat: (billerId: string, message: string, billingAnswers?: Array<{ dimension: 'categories'|'cadence'|'state_rules'|'payment_terms'; answer: string }>) =>
+    request<ChatResponse>(`/billers/${billerId}/chat`, { method: 'POST', body: JSON.stringify({ message, billing_answers: billingAnswers }) }, billerId),
+  reopenBillingQuestion: (billerId: string, questionId: string) =>
+    request<Session>(`/billers/${billerId}/billing-discovery/reopen`, { method: 'POST', body: JSON.stringify({ question_id: questionId }) }, billerId),
   update: (billerId: string, definition: ExperienceDefinition, expectedETag?: string) =>
     request<ExperienceRevision>(`/billers/${billerId}/config`, { method: 'PATCH', body: JSON.stringify({ definition, expected_etag: expectedETag }) }, billerId),
   invoices: (billerId: string, accountNumber = '4421') => supportingRequest<{ invoices: PreviewInvoice[] }>(

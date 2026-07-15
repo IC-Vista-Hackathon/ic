@@ -51,6 +51,7 @@ builder.Services.Configure<BillerExperienceOptions>(builder.Configuration.GetSec
 builder.Services.Configure<MaintenanceOptions>(builder.Configuration.GetSection(MaintenanceOptions.SectionName));
 builder.Services.AddSingleton<IOrchestrationRunner, OrchestrationRunner>();
 builder.Services.AddSingleton<BillerOnboardingService>();
+builder.Services.AddSingleton<BillingDiscoveryEngine>();
 builder.Services.AddSingleton<AgentContextService>();
 
 // Payer pipeline (Bill Intelligence → Financial Planning → validate). Deterministic, Foundry-free

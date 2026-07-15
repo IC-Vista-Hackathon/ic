@@ -61,9 +61,14 @@ flowchart TB
 
         subgraph ExperienceAPI["Pronto.BillerExperience.Api"]
             Controllers["Controller APIs + SSE activity"]
+            Discovery["Billing Discovery Engine<br/>server-owned question graph + validation"]
             Orchestration["Pronto.Agentic.Orchestration<br/>discover, bounded fan-out, checkpoint, validate"]
+            Context["Biller/run context service<br/>typed accepted artifacts"]
             MCP["MCP service router<br/>capability validation + typed tools"]
+            Controllers -->|"chat answer"| Discovery
             Controllers --> Orchestration
+            Discovery -->|"accepted profile artifact"| Context
+            Context --> MCP
         end
 
         Worker["Biller Experience Worker<br/>durable publication processor"]
@@ -99,12 +104,14 @@ flowchart TB
     Foundry -.->|"remote MCP after TLS"| MCP
 
     subgraph AzureData["Azure data plane"]
-        Cosmos[("Cosmos DB for NoSQL<br/>biller, workflow, invoice, payment, payer state")]
+        Cosmos[("Cosmos DB for NoSQL<br/>biller + billing profile, workflow, invoice, payment, payer state")]
         Blob[("Private Blob Storage<br/>immutable bundles + atomic active pointer")]
         Entra["Entra ID + AKS workload identity"]
     end
 
     Controllers --> Cosmos
+    Discovery -->|"category cadence, state rules, payment terms"| Cosmos
+    Context -->|"biller/run-scoped learning"| Cosmos
     Invoice --> Cosmos
     Payment --> Cosmos
     Account --> Cosmos
@@ -151,6 +158,15 @@ biller-scoped capabilities; payer tools require a server-bound payer verificatio
 Execution Agent can submit an idempotent payment intent, and only after explicit payer confirmation.
 Agents configure and recommend; deterministic services own state transitions and money movement.
 
+The onboarding chat is bounded by a server-owned billing-discovery graph. For every billing
+category, the API requires cadence, late/account-state policy, and pay-in-full versus installment
+terms, followed by explicit confirmation. The model can interpret an answer and phrase a focused
+clarification, but it cannot remove required questions, set readiness, or publish. Accepted answers
+are stored as a typed `BillingProfile` on the optimistic-concurrency-protected onboarding run and
+shared as biller/run-scoped MCP context. Scheduling one future payment remains distinct from an
+installment plan. Invoice, Payment, and Payer Account services remain the deterministic enforcement
+boundary; no agent-authored rule directly changes an invoice, account state, or payment.
+
 The generated artifact is a typed, versioned `BillerExperienceDefinition`. Agents may generate
 content and configuration, but they may not generate executable application code, container build
 instructions, shell commands, or raw Kubernetes manifests. Publication writes validated JSON and
@@ -165,8 +181,9 @@ fans independent reviews out in parallel, passes results, enforces timeouts, rec
 activity, and decides whether the goal can continue or must fail.
 
 Every agent instruction imports [`agents/RESPONSIBLE_AI.md`](agents/RESPONSIBLE_AI.md). Runtime
-guardrails repeat the policy at provider boundaries and validate cited output. Shared learning is
-biller- and run-scoped in Cosmos DB. Remote agents access it through the stateless `/mcp` endpoint
+guardrails repeat the policy at provider boundaries and validate cited output. Shared learning,
+including accepted billing-profile artifacts and corrections, is biller- and run-scoped in Cosmos
+DB. Remote agents access it through the stateless `/mcp` endpoint
 using `get_goal_context` and `append_context`; orchestration issues a short-lived HMAC capability
 bound to the biller, run, agent, and read/write permission. The public MCP API key is a demo-level
 connection credential, not the tenant boundary. Context rejects likely secrets, payment instrument

@@ -305,6 +305,7 @@ public sealed class McpServiceRouterTests
             Api.Domain.BillerRecord biller,
             Api.Domain.ExperienceRecord current,
             IReadOnlyList<Contracts.V1.Onboarding.OnboardingChatMessage> messages,
+            Contracts.V1.Billing.BillingProfile billingProfile,
             Contracts.V1.Research.BillerResearchResponse research,
             CancellationToken cancellationToken) =>
             throw new NotSupportedException();

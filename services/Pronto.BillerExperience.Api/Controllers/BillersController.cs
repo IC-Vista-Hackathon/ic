@@ -3,6 +3,7 @@ using System.Text.Json;
 using Pronto.BillerExperience.Api.Application;
 using Pronto.BillerExperience.Api.Infrastructure;
 using Pronto.BillerExperience.Contracts.V1.Billers;
+using Pronto.BillerExperience.Contracts.V1.Billing;
 using Pronto.BillerExperience.Contracts.V1.Deployments;
 using Pronto.BillerExperience.Contracts.V1.Experiences;
 using Pronto.BillerExperience.Contracts.V1.Onboarding;
@@ -64,6 +65,14 @@ public sealed partial class BillersController(
         [FromBody] SendOnboardingMessageRequest request,
         CancellationToken cancellationToken) =>
         Ok(await onboarding.SendMessageAsync(billerId, request, cancellationToken));
+
+    [HttpPost("{billerId}/billing-discovery/reopen")]
+    [ProducesResponseType<OnboardingSessionResponse>(StatusCodes.Status200OK)]
+    public async Task<ActionResult<OnboardingSessionResponse>> ReopenBillingQuestion(
+        string billerId,
+        [FromBody] ReopenBillingQuestionRequest request,
+        CancellationToken cancellationToken) =>
+        Ok(await onboarding.ReopenBillingQuestionAsync(billerId, request, cancellationToken));
 
     [HttpGet("{billerId}/config")]
     [ProducesResponseType<ExperienceRevisionResponse>(StatusCodes.Status200OK)]
