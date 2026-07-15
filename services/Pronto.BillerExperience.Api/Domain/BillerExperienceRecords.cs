@@ -52,6 +52,7 @@ public sealed record DeploymentRecord(
     [property: JsonProperty("published_url")] Uri? PublishedUrl = null,
     [property: JsonProperty("failure_code")] string? FailureCode = null,
     [property: JsonProperty("failure_message")] string? FailureMessage = null,
+    [property: JsonProperty("traceparent")] string? Traceparent = null,
     [property: JsonIgnore] string? ETag = null);
 
 public sealed record AgentContextRecord(

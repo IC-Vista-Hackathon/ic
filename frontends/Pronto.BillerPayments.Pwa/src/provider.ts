@@ -1,5 +1,5 @@
 import type { Invoice, PayerProfile, PaymentHistory, PaymentReceipt, PaymentRequest } from './types';
-import { createFlowTrace, observed, traceHeaders } from './telemetry';
+import { observed, sharedFlow, traceHeaders } from './telemetry';
 import { fetchWithTimeout, requestError } from './http';
 
 export interface PaymentQuote { feeCents: number; totalCents: number; }
@@ -14,7 +14,8 @@ export interface PaymentExperienceProvider {
 }
 
 export class ServicePaymentExperienceProvider implements PaymentExperienceProvider {
-  private readonly flow = createFlowTrace();
+  // Shared with browser telemetry so events and API requests correlate on one trace id.
+  private readonly flow = sharedFlow;
   constructor(private readonly billerId: string) {}
   private headers(json = false) { return { ...(json ? { 'content-type': 'application/json' } : {}), ...traceHeaders(this.flow, this.billerId) }; }
 

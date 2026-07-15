@@ -1,0 +1,51 @@
+name: Index compliance knowledge
+
+# On merge to main: (re)build the production AI Foundry file-search index from
+# knowledge/compliance/ so the compliance agent can ground on the latest legal corpus.
+# Post-merge only — nothing runs on pull_request, so PRs never touch the prod index.
+# We only have one (production) Foundry, so there is no nonprod target.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'knowledge/compliance/**'
+      - 'scripts/index-compliance-knowledge.py'
+      - '.github/workflows/index-compliance-knowledge.yml'
+
+permissions:
+  contents: read
+
+concurrency:
+  # Serialize index rebuilds; never cancel an in-flight one mid-ingestion.
+  group: index-compliance-knowledge
+  cancel-in-progress: false
+
+jobs:
+  index:
+    name: Rebuild Foundry index
+    runs-on: ubuntu-latest
+    environment: production
+    env:
+      # Foundry project endpoint (project `ic`). Verified working with azure-ai-projects 2.3.0.
+      # This is the services.ai.azure.com/api/projects/<project> form — NOT the account's
+      # cognitiveservices.azure.com endpoint, which the SDK's project client rejects.
+      PROJECT_ENDPOINT: ${{ vars.AIFOUNDRY_PROJECT_ENDPOINT || 'https://aif-ic-hack-jk4zmntatjem4.services.ai.azure.com/api/projects/ic' }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Azure login
+        uses: azure/login@v2
+        with:
+          creds: ${{ secrets.AZURE_CREDENTIALS }}
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install dependencies
+        run: pip install azure-ai-projects azure-identity
+
+      - name: Rebuild index
+        run: python3 scripts/index-compliance-knowledge.py

@@ -260,7 +260,8 @@ public sealed partial class BillerOnboardingService(
 
         var now = DateTimeOffset.UtcNow;
         var deployment = await repository.CreateDeploymentAsync(
-            new DeploymentRecord(deploymentId, billerId, experience.Version, "requested", now),
+            new DeploymentRecord(deploymentId, billerId, experience.Version, "requested", now,
+                Traceparent: FormatTraceparent(Activity.Current)),
             cancellationToken);
         await repository.SaveExperienceAsync(experience with { State = ExperienceRevisionState.Publishing }, experience.ETag, cancellationToken);
         await repository.SaveRunAsync(run with { State = OnboardingSessionState.Publishing, UpdatedAt = now }, run.ETag, cancellationToken);
@@ -491,6 +492,25 @@ public sealed partial class BillerOnboardingService(
     };
 
     private static Activity? StartActivity(string name) => BillerExperienceTelemetry.Source.StartActivity(name);
+
+    // W3C traceparent (00-{trace_id}-{span_id}-{flags}) captured at publish-enqueue so the Worker
+    // can link its asynchronous processing span back to the originating API request.
+    internal static string? FormatTraceparent(Activity? activity)
+    {
+        if (activity is null)
+        {
+            return null;
+        }
+
+        var context = activity.Context;
+        if (context.TraceId == default || context.SpanId == default)
+        {
+            return null;
+        }
+
+        var flags = (context.TraceFlags & ActivityTraceFlags.Recorded) != 0 ? "01" : "00";
+        return $"00-{context.TraceId}-{context.SpanId}-{flags}";
+    }
 
     private static void RecordTransition(OnboardingSessionState from, OnboardingSessionState to) =>
         BillerExperienceTelemetry.StateTransitions.Add(1, new("from", from.ToString()), new("to", to.ToString()));
