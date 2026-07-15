@@ -41,4 +41,10 @@ public sealed class ServiceException : Exception
 
     public static ServiceException BadRequest(string code, string message) =>
         new(StatusCodes.Status400BadRequest, code, message);
+
+    public static ServiceException Unauthorized(string code, string message) =>
+        new(StatusCodes.Status401Unauthorized, code, message);
+
+    public static ServiceException Forbidden(string code, string message) =>
+        new(StatusCodes.Status403Forbidden, code, message);
 }

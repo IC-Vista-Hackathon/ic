@@ -2,9 +2,15 @@ using System.Text.Json.Serialization;
 
 namespace Pronto.Payment.Contracts.V1.Purchases;
 
+/// <summary>
+/// Money-moving request: unknown members are rejected (<see cref="JsonUnmappedMemberHandling.Disallow"/>)
+/// so a caller can't smuggle unexpected fields past validation into a platform purchase.
+/// </summary>
+[JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Disallow)]
 public sealed record CreatePurchaseRequest(
     string BillerId,
-    PurchasePlan Plan);
+    PurchasePlan Plan,
+    string? IdempotencyKey = null);
 
 public sealed record PurchaseResponse(
     string PurchaseId,
@@ -24,7 +30,11 @@ public enum PurchasePlan
     Isolated,
 }
 
-/// <summary>Wire tokens pinned at the type level so serialization is host-independent.</summary>
+/// <summary>
+/// Lifecycle of a platform purchase. The completion intent is durably queued while the purchase
+/// is <c>pending</c>; it becomes <c>paid</c> only after the downstream BillerAccount transition
+/// succeeds and the local status update commits. See design/entities.md (Purchase).
+/// </summary>
 [JsonConverter(typeof(PurchaseStatusJsonConverter))]
 public enum PurchaseStatus
 {

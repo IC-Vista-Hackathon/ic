@@ -59,25 +59,101 @@ public sealed partial class BillerOnboardingService(
             ["review_brand", "review_legal_links", "review_payment_methods"],
             now);
 
-        var savedExperience = await repository.SaveExperienceAsync(experience, null, cancellationToken);
-        var savedRun = await repository.SaveRunAsync(run, null, cancellationToken);
-        if (agentContextService is not null)
+        try
         {
-            await agentContextService.EnsureAsync(
-                id,
-                savedRun.Id,
-                $"Create, review, approve, and publish a safe branded payment experience for {biller.Name}.",
-                cancellationToken);
+            var savedExperience = await repository.SaveExperienceAsync(experience, null, cancellationToken);
+            var savedRun = await repository.SaveRunAsync(run, null, cancellationToken);
+            if (agentContextService is not null)
+            {
+                await agentContextService.EnsureAsync(
+                    id,
+                    savedRun.Id,
+                    $"Create, review, approve, and publish a safe branded payment experience for {biller.Name}.",
+                    cancellationToken);
+            }
+            await (invoiceSeeder ?? new NullInvoiceSeeder()).SeedAsync(id, biller.BillType, cancellationToken);
+            LogBillerCreated(logger, id, savedRun.Id, draftGenerator.Provider);
+            return (Map(biller), Map(savedRun), Map(savedExperience));
         }
-        await (invoiceSeeder ?? new NullInvoiceSeeder()).SeedAsync(id, biller.BillType, cancellationToken);
-        LogBillerCreated(logger, id, savedRun.Id, draftGenerator.Provider);
-        return (Map(biller), Map(savedRun), Map(savedExperience));
+        catch (Exception exception) when (!IsCriticalException(exception))
+        {
+            await CleanupFailedCreationAsync(id);
+            throw;
+        }
     }
 
     public async ValueTask<BillerResponse> GetBillerAsync(string billerId, CancellationToken cancellationToken)
     {
         var biller = await GetRequiredBillerAsync(billerId, cancellationToken);
         return Map(biller);
+    }
+
+    public async ValueTask<BillerResponse> AdvancePurchaseAsync(
+        string billerId,
+        AdvanceBillerPurchaseRequest request,
+        CancellationToken cancellationToken)
+    {
+        if (string.IsNullOrWhiteSpace(request.PurchaseId))
+        {
+            throw new ArgumentException("purchase_id is required.", nameof(request));
+        }
+
+        for (var attempt = 0; attempt < 3; attempt++)
+        {
+            var current = await GetRequiredBillerAsync(billerId, cancellationToken);
+            if (current.Status is BillerStatus.Purchased or BillerStatus.Live)
+            {
+                if (current.PurchaseId == request.PurchaseId && current.Tier == request.Tier)
+                {
+                    return Map(current);
+                }
+
+                if (current.PurchaseId is null && current.Tier == request.Tier)
+                {
+                    var adopted = current with { PurchaseId = request.PurchaseId };
+                    try
+                    {
+                        return Map(await repository.SaveBillerAsync(
+                            adopted,
+                            current.ETag,
+                            cancellationToken));
+                    }
+                    catch (ConcurrencyException) when (attempt < 2)
+                    {
+                        continue;
+                    }
+                }
+
+                throw new BillerPurchaseConflictException(
+                    $"Biller '{billerId}' already has a different completed purchase.");
+            }
+
+            if (current.Status is not (BillerStatus.Prospect or BillerStatus.Demo))
+            {
+                throw new BillerPurchaseConflictException(
+                    $"Biller '{billerId}' cannot be purchased from status '{current.Status}'.");
+            }
+
+            var purchased = current with
+            {
+                Status = BillerStatus.Purchased,
+                Tier = request.Tier,
+                PurchaseId = request.PurchaseId
+            };
+
+            try
+            {
+                return Map(await repository.SaveBillerAsync(
+                    purchased,
+                    current.ETag,
+                    cancellationToken));
+            }
+            catch (ConcurrencyException) when (attempt < 2)
+            {
+            }
+        }
+
+        throw new ConcurrencyException("The biller purchase could not be committed after three attempts.");
     }
 
     public async ValueTask<OnboardingChatResponse> SendMessageAsync(
@@ -97,6 +173,12 @@ public sealed partial class BillerOnboardingService(
         var biller = await GetRequiredBillerAsync(billerId, cancellationToken);
         var run = await GetRequiredRunAsync(billerId, cancellationToken);
         var experience = await GetRequiredExperienceAsync(billerId, cancellationToken);
+        if (experience.State != ExperienceRevisionState.Draft)
+        {
+            LogValidationError(logger, billerId, "state", "Only draft experiences can be changed through chat.");
+            throw new ArgumentException("Only draft experiences can be changed through chat.");
+        }
+
         var userMessage = new OnboardingChatMessage("user", request.Message.Trim(), DateTimeOffset.UtcNow);
         var messages = run.Messages.Append(userMessage).ToArray();
         var orchestrationContext = new OrchestrationContext(
@@ -250,6 +332,37 @@ public sealed partial class BillerOnboardingService(
         {
             LogDuplicatePublication(logger, billerId, request.Revision, deploymentId);
             deployment = existing;
+            if (existing.Status == "failed")
+            {
+                try
+                {
+                    deployment = await repository.SaveDeploymentAsync(
+                        existing with
+                        {
+                            Status = "requested",
+                            UpdatedAt = now,
+                            PublishedUrl = null,
+                            FailureCode = null,
+                            FailureMessage = null,
+                            Traceparent = FormatTraceparent(Activity.Current),
+                            ClaimedAt = null,
+                            LeaseExpiresAt = null
+                        },
+                        existing.ETag,
+                        cancellationToken);
+                }
+                catch (ConcurrencyException)
+                {
+                    var concurrent = await repository.GetDeploymentAsync(billerId, deploymentId, cancellationToken);
+                    if (concurrent is null || concurrent.Status == "failed")
+                    {
+                        throw;
+                    }
+
+                    deployment = concurrent;
+                }
+                LogPublicationRequested(logger, billerId, experience.Id, deployment.Id);
+            }
         }
         else
         {
@@ -269,13 +382,15 @@ public sealed partial class BillerOnboardingService(
         // The deployment record is the durable source of truth for a publication request; advancing
         // the experience/run to Publishing is a separate, idempotent step so a retry after a failure
         // between the writes converges the states to match the deployment instead of leaving them
-        // stuck at Approved. Only Approved states are advanced, so a worker that has already moved
-        // the records past Publishing (published/failed) is never regressed.
-        if (experience.State == ExperienceRevisionState.Approved)
+        // stuck at Approved or Failed. Terminal deployments never regress workflow state.
+        var publicationInProgress = deployment.Status is "requested" or "applying" or "verifying";
+        if (publicationInProgress &&
+            experience.State is ExperienceRevisionState.Approved or ExperienceRevisionState.Failed)
         {
             await repository.SaveExperienceAsync(experience with { State = ExperienceRevisionState.Publishing }, experience.ETag, cancellationToken);
         }
-        if (run.State == OnboardingSessionState.Approved)
+        if (publicationInProgress &&
+            run.State is OnboardingSessionState.Approved or OnboardingSessionState.Failed)
         {
             await repository.SaveRunAsync(run with { State = OnboardingSessionState.Publishing, UpdatedAt = now }, run.ETag, cancellationToken);
             RecordTransition(run.State, OnboardingSessionState.Publishing);
@@ -396,6 +511,27 @@ public sealed partial class BillerOnboardingService(
         return candidate;
     }
 
+    private async ValueTask CleanupFailedCreationAsync(string billerId)
+    {
+        try
+        {
+            await repository.PurgeByBillerAsync(billerId, CancellationToken.None);
+        }
+        catch (Exception exception) when (!IsCriticalException(exception))
+        {
+            LogCreationCleanupFailed(logger, billerId, "purge", exception);
+        }
+    }
+
+    private static bool IsCriticalException(Exception exception) =>
+        exception is OutOfMemoryException
+            or StackOverflowException
+            or AccessViolationException
+            or AppDomainUnloadedException
+            or BadImageFormatException
+            or CannotUnloadAppDomainException
+            or InvalidProgramException;
+
     /// <summary>
     /// Appends -2, -3, … while keeping the result DNS-safe: the base is truncated so the
     /// total stays within 63 characters, and a hyphen exposed by the cut is trimmed so the
@@ -477,6 +613,11 @@ public sealed partial class BillerOnboardingService(
             if (string.IsNullOrWhiteSpace(action.Label) || action.Label.Length > 48)
             {
                 findings.Add(new("ACTION_LABEL_INVALID", "Action labels must contain 1 to 48 characters.", ComplianceFindingSeverity.Blocking));
+            }
+            if (!Enum.IsDefined(action.Action))
+            {
+                findings.Add(new("ACTION_TYPE_INVALID", "Actions must use a supported action type.", ComplianceFindingSeverity.Blocking));
+                continue;
             }
             if (action.Action == ExperienceActionType.SchedulePayment &&
                 !definition.EnabledPaymentCapabilities.Any(capability =>
@@ -572,7 +713,7 @@ public sealed partial class BillerOnboardingService(
     }
 
     private static BillerResponse Map(BillerRecord record) =>
-        new(record.Id, record.Name, record.Slug, record.BillType, record.PostalCode, record.Website, record.Brand, record.Support, record.PaymentRails, record.Status, record.CreatedAt);
+        new(record.Id, record.Name, record.Slug, record.BillType, record.PostalCode, record.Website, record.Brand, record.Support, record.PaymentRails, record.Status, record.CreatedAt, record.Tier);
 
     private static OnboardingSessionResponse Map(OnboardingRunRecord record) =>
         new(record.Id, record.BillerId, record.State, record.MissingFields, record.UpdatedAt);
@@ -663,11 +804,19 @@ public sealed partial class BillerOnboardingService(
         string revision,
         string findingCode,
         string findingMessage);
-
     [LoggerMessage(1904, LogLevel.Error, "Compensating approval rollback failed for biller {BillerId}, revision {Revision}; state may be inconsistent")]
     private static partial void LogCompensationFailed(
         ILogger logger,
         string billerId,
         string revision,
         Exception exception);
+
+    [LoggerMessage(1905, LogLevel.Error, "Creation cleanup operation {Operation} failed for biller {BillerId}")]
+    private static partial void LogCreationCleanupFailed(
+        ILogger logger,
+        string billerId,
+        string operation,
+        Exception exception);
 }
+
+public sealed class BillerPurchaseConflictException(string message) : Exception(message);

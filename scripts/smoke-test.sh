@@ -4,13 +4,9 @@
 # Reaches the services in the target namespace via `kubectl port-forward` (no public
 # ingress required), so it works identically for nonprod (ic-nonprod) and prod (ic).
 #
-# Checks, per API service: readiness + liveness endpoints return 200. Then a
-# functional flow against the Invoice API: seed a biller's invoices and read them
-# back.
-#
-# Scope is the stateless control-plane APIs. The Biller Experience Worker is not
-# included: it's a background publisher (deployed via overlays/prod/biller-experience.yaml)
-# whose readiness depends on live Cosmos/blob + workload identity.
+# Checks readiness + liveness for every service in the target overlay, including
+# the prod-only publication Worker and payer-site Router. Then runs a functional
+# Invoice seed/read flow.
 #
 # Usage: scripts/smoke-test.sh <namespace>
 set -euo pipefail
@@ -26,6 +22,13 @@ ALL_TARGETS=(
   "svc/ic-payment-api"
   "svc/ic-payer-account-api"
 )
+if [[ "$NAMESPACE" == "ic" ]]; then
+  API_SERVICES+=(ic-biller-experience-worker ic-payer-experience-router)
+  ALL_TARGETS+=(
+    "deploy/ic-biller-experience-worker"
+    "svc/ic-payer-experience-router"
+  )
+fi
 
 pf_pid=""
 cleanup() { [[ -n "$pf_pid" ]] && kill "$pf_pid" >/dev/null 2>&1 || true; }

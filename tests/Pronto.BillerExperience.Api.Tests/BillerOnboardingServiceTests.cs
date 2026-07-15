@@ -34,7 +34,46 @@ public sealed class BillerOnboardingServiceTests
 
         Assert.Contains("\"id\":\"biller-1\"", json, StringComparison.Ordinal);
         Assert.Contains("\"postal_code\":\"02110\"", json, StringComparison.Ordinal);
+        Assert.Contains("\"tier\":0", json, StringComparison.Ordinal);
         Assert.DoesNotContain("\"Id\"", json, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task PurchaseAdvancesBillerAndIsIdempotentForTheSamePurchase()
+    {
+        var service = CreateService();
+        var created = await service.CreateAsync(CreateRequest(), CancellationToken.None);
+        var request = new AdvanceBillerPurchaseRequest("purchase-1", BillerTier.Isolated);
+
+        var purchased = await service.AdvancePurchaseAsync(
+            created.Biller.BillerId,
+            request,
+            CancellationToken.None);
+        var replay = await service.AdvancePurchaseAsync(
+            created.Biller.BillerId,
+            request,
+            CancellationToken.None);
+
+        Assert.Equal(BillerStatus.Purchased, purchased.Status);
+        Assert.Equal(BillerTier.Isolated, purchased.Tier);
+        Assert.Equal(purchased, replay);
+    }
+
+    [Fact]
+    public async Task DifferentPurchaseCannotReplaceCompletedPurchase()
+    {
+        var service = CreateService();
+        var created = await service.CreateAsync(CreateRequest(), CancellationToken.None);
+        await service.AdvancePurchaseAsync(
+            created.Biller.BillerId,
+            new AdvanceBillerPurchaseRequest("purchase-1", BillerTier.Shared),
+            CancellationToken.None);
+
+        await Assert.ThrowsAsync<BillerPurchaseConflictException>(async () =>
+            await service.AdvancePurchaseAsync(
+                created.Biller.BillerId,
+                new AdvanceBillerPurchaseRequest("purchase-2", BillerTier.Shared),
+                CancellationToken.None));
     }
 
     [Fact]
@@ -104,6 +143,59 @@ public sealed class BillerOnboardingServiceTests
         var second = await service.PublishAsync(created.Biller.BillerId, request, CancellationToken.None);
 
         Assert.Equal(first.DeploymentId, second.DeploymentId);
+    }
+
+    [Fact]
+    public async Task FailedPublicationIsRequeuedWhenPublishIsRepeated()
+    {
+        var repository = new InMemoryBillerExperienceRepository();
+        var service = new BillerOnboardingService(
+            repository,
+            new DeterministicExperienceDraftGenerator(NullLogger<DeterministicExperienceDraftGenerator>.Instance),
+            new OrchestrationRunner(),
+            NullLogger<BillerOnboardingService>.Instance);
+        var created = await service.CreateAsync(CreateRequest(), CancellationToken.None);
+        var chat = await service.SendMessageAsync(created.Biller.BillerId, new("Ready for review"), CancellationToken.None);
+        var approved = await service.ApproveAsync(created.Biller.BillerId, new(chat.Draft!.Revision, "test-user"), CancellationToken.None);
+        var request = new PublishExperienceRequest(created.Biller.BillerId, approved.Revision);
+        var first = await service.PublishAsync(created.Biller.BillerId, request, CancellationToken.None);
+        var existing = await repository.GetDeploymentAsync(created.Biller.BillerId, first.DeploymentId, CancellationToken.None);
+        Assert.NotNull(existing);
+        await repository.SaveDeploymentAsync(
+            existing! with
+            {
+                Status = "failed",
+                FailureCode = "BUNDLE_BUILD_FAILED",
+                FailureMessage = "transient builder failure"
+            },
+            existing.ETag,
+            CancellationToken.None);
+        var failedExperience = await repository.GetLatestExperienceAsync(created.Biller.BillerId, CancellationToken.None);
+        var failedRun = await repository.GetRunAsync(created.Biller.BillerId, "onboarding", CancellationToken.None);
+        Assert.NotNull(failedExperience);
+        Assert.NotNull(failedRun);
+        await repository.SaveExperienceAsync(
+            failedExperience! with { State = ExperienceRevisionState.Failed },
+            failedExperience.ETag,
+            CancellationToken.None);
+        await repository.SaveRunAsync(
+            failedRun! with { State = OnboardingSessionState.Failed },
+            failedRun.ETag,
+            CancellationToken.None);
+
+        var retry = await service.PublishAsync(created.Biller.BillerId, request, CancellationToken.None);
+        var record = await repository.GetDeploymentAsync(created.Biller.BillerId, retry.DeploymentId, CancellationToken.None);
+        var retriedExperience = await repository.GetLatestExperienceAsync(created.Biller.BillerId, CancellationToken.None);
+        var retriedRun = await repository.GetRunAsync(created.Biller.BillerId, "onboarding", CancellationToken.None);
+
+        Assert.Equal(first.DeploymentId, retry.DeploymentId);
+        Assert.Equal(DeploymentState.Requested, retry.State);
+        Assert.NotNull(record);
+        Assert.Equal("requested", record!.Status);
+        Assert.Null(record.FailureCode);
+        Assert.Null(record.FailureMessage);
+        Assert.Equal(ExperienceRevisionState.Publishing, retriedExperience?.State);
+        Assert.Equal(OnboardingSessionState.Publishing, retriedRun?.State);
     }
 
     [Fact]

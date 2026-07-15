@@ -1,0 +1,174 @@
+{
+  "annotations": { "list": [] },
+  "description": "Deterministic MCP service-router success, latency, failure, and authorization-denial metrics from Pronto.BillerExperience.Api OpenTelemetry.",
+  "editable": true,
+  "graphTooltip": 0,
+  "schemaVersion": 39,
+  "tags": ["ic", "observability", "mcp", "service-router"],
+  "templating": {
+    "list": [
+      {
+        "name": "datasource",
+        "label": "Azure Monitor datasource",
+        "type": "datasource",
+        "query": "grafana-azure-monitor-datasource",
+        "current": {},
+        "hide": 0
+      },
+      {
+        "name": "appInsights",
+        "label": "App Insights resource id",
+        "type": "textbox",
+        "query": "/subscriptions/ca64adec-b195-49fd-a782-15553708c07c/resourceGroups/rg-ic-hack/providers/microsoft.insights/components/appi-ic-hack",
+        "current": {
+          "text": "/subscriptions/ca64adec-b195-49fd-a782-15553708c07c/resourceGroups/rg-ic-hack/providers/microsoft.insights/components/appi-ic-hack",
+          "value": "/subscriptions/ca64adec-b195-49fd-a782-15553708c07c/resourceGroups/rg-ic-hack/providers/microsoft.insights/components/appi-ic-hack"
+        },
+        "hide": 0
+      }
+    ]
+  },
+  "time": { "from": "now-24h", "to": "now" },
+  "timepicker": {},
+  "title": "IC — MCP service router",
+  "uid": "ic-mcp-service-router",
+  "version": 1,
+  "panels": [
+    {
+      "id": 1,
+      "title": "Tool success rate (%)",
+      "description": "Completed tool calls divided by invoked tool calls, grouped by the canonical snake_case tool name.",
+      "type": "timeseries",
+      "datasource": { "type": "grafana-azure-monitor-datasource", "uid": "${datasource}" },
+      "gridPos": { "h": 9, "w": 12, "x": 0, "y": 0 },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percent",
+          "min": 0,
+          "max": 100,
+          "custom": { "drawStyle": "line", "fillOpacity": 10 },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "red", "value": null },
+              { "color": "yellow", "value": 95 },
+              { "color": "green", "value": 99 }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": { "displayMode": "table", "placement": "bottom", "showLegend": true, "calcs": ["min", "mean"] },
+        "tooltip": { "mode": "multi" }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": { "type": "grafana-azure-monitor-datasource", "uid": "${datasource}" },
+          "queryType": "Azure Log Analytics",
+          "azureLogAnalytics": {
+            "resources": ["${appInsights}"],
+            "resultFormat": "time_series",
+            "query": "let invoked = customMetrics\n| where $__timeFilter(timestamp)\n| where name == \"ic.mcp.tool.invoked\"\n| extend tool = tostring(customDimensions.tool)\n| summarize invoked = sum(value) by tool, bin(timestamp, 5m);\nlet completed = customMetrics\n| where $__timeFilter(timestamp)\n| where name == \"ic.mcp.tool.completed\"\n| extend tool = tostring(customDimensions.tool)\n| summarize completed = sum(value) by tool, bin(timestamp, 5m);\ninvoked\n| join kind=leftouter completed on tool, timestamp\n| extend success_rate_pct = round(100.0 * coalesce(completed, 0.0) / invoked, 1)\n| project timestamp, tool, success_rate_pct\n| order by timestamp asc"
+          }
+        }
+      ]
+    },
+    {
+      "id": 2,
+      "title": "Tool latency p50 / p95 (ms)",
+      "description": "Percentiles over exported ic.mcp.tool.duration measurements, split by tool. outcome is available as a metric dimension for success/failure filtering.",
+      "type": "timeseries",
+      "datasource": { "type": "grafana-azure-monitor-datasource", "uid": "${datasource}" },
+      "gridPos": { "h": 9, "w": 12, "x": 12, "y": 0 },
+      "fieldConfig": {
+        "defaults": { "unit": "ms", "custom": { "drawStyle": "line", "fillOpacity": 10 } },
+        "overrides": []
+      },
+      "options": {
+        "legend": { "displayMode": "table", "placement": "bottom", "showLegend": true, "calcs": ["max", "mean"] },
+        "tooltip": { "mode": "multi" }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": { "type": "grafana-azure-monitor-datasource", "uid": "${datasource}" },
+          "queryType": "Azure Log Analytics",
+          "azureLogAnalytics": {
+            "resources": ["${appInsights}"],
+            "resultFormat": "time_series",
+            "query": "customMetrics\n| where $__timeFilter(timestamp)\n| where name == \"ic.mcp.tool.duration\"\n| extend tool = tostring(customDimensions.tool)\n| summarize p50_ms = percentile(value, 50), p95_ms = percentile(value, 95) by tool, bin(timestamp, 5m)\n| order by timestamp asc"
+          }
+        }
+      ]
+    },
+    {
+      "id": 3,
+      "title": "Tool failures",
+      "description": "Failure count by tool and coarse allowlisted category; no exception message or payload is exported.",
+      "type": "timeseries",
+      "datasource": { "type": "grafana-azure-monitor-datasource", "uid": "${datasource}" },
+      "gridPos": { "h": 9, "w": 12, "x": 0, "y": 9 },
+      "fieldConfig": {
+        "defaults": {
+          "custom": { "drawStyle": "bars", "stacking": { "mode": "normal" }, "fillOpacity": 60 }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": { "displayMode": "table", "placement": "bottom", "showLegend": true, "calcs": ["sum"] },
+        "tooltip": { "mode": "multi" }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": { "type": "grafana-azure-monitor-datasource", "uid": "${datasource}" },
+          "queryType": "Azure Log Analytics",
+          "azureLogAnalytics": {
+            "resources": ["${appInsights}"],
+            "resultFormat": "time_series",
+            "query": "customMetrics\n| where $__timeFilter(timestamp)\n| where name == \"ic.mcp.tool.failed\"\n| extend tool = tostring(customDimensions.tool), failure_category = tostring(customDimensions.failure_category)\n| summarize failures = sum(value) by tool, failure_category, bin(timestamp, 5m)\n| order by timestamp asc"
+          }
+        }
+      ]
+    },
+    {
+      "id": 4,
+      "title": "Authorization denials",
+      "description": "Capability-validation and payer-verification denials (failure_category=unauthorized), grouped by tool.",
+      "type": "timeseries",
+      "datasource": { "type": "grafana-azure-monitor-datasource", "uid": "${datasource}" },
+      "gridPos": { "h": 9, "w": 12, "x": 12, "y": 9 },
+      "fieldConfig": {
+        "defaults": {
+          "custom": { "drawStyle": "bars", "fillOpacity": 60 },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "green", "value": null },
+              { "color": "red", "value": 1 }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": { "displayMode": "table", "placement": "bottom", "showLegend": true, "calcs": ["sum"] },
+        "tooltip": { "mode": "multi" }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": { "type": "grafana-azure-monitor-datasource", "uid": "${datasource}" },
+          "queryType": "Azure Log Analytics",
+          "azureLogAnalytics": {
+            "resources": ["${appInsights}"],
+            "resultFormat": "time_series",
+            "query": "customMetrics\n| where $__timeFilter(timestamp)\n| where name == \"ic.mcp.tool.failed\"\n| extend tool = tostring(customDimensions.tool), failure_category = tostring(customDimensions.failure_category)\n| where failure_category == \"unauthorized\"\n| summarize denials = sum(value) by tool, bin(timestamp, 5m)\n| order by timestamp asc"
+          }
+        }
+      ]
+    }
+  ]
+}

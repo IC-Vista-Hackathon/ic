@@ -14,6 +14,9 @@ public sealed record PublicationDeployment(
     [property: JsonProperty("failure_code")] string? FailureCode = null,
     [property: JsonProperty("failure_message")] string? FailureMessage = null,
     [property: JsonProperty("traceparent")] string? Traceparent = null,
+    [property: JsonProperty("claimed_at")] DateTimeOffset? ClaimedAt = null,
+    [property: JsonProperty("lease_expires_at")] DateTimeOffset? LeaseExpiresAt = null,
+    [property: JsonProperty("attempt")] int Attempt = 0,
     [property: JsonProperty("_etag")] string? ETag = null);
 
 public sealed record PublicationBiller(
@@ -31,6 +34,7 @@ public static class PublicationStates
 {
     public const string Requested = "requested";
     public const string Applying = "applying";
+    public const string Verifying = "verifying";
     public const string Ready = "ready";
     public const string Failed = "failed";
 }

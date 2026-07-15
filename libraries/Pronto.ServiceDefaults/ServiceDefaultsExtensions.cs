@@ -2,10 +2,14 @@ using System.Text.Json;
 using System.Text.Json.Serialization;
 using Azure.Monitor.OpenTelemetry.AspNetCore;
 using Pronto.ServiceDefaults.Errors;
+using Pronto.ServiceDefaults.Health;
+using Pronto.ServiceDefaults.Security;
 using Microsoft.AspNetCore.Builder;
+using Microsoft.AspNetCore.Diagnostics.HealthChecks;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Diagnostics.HealthChecks;
 using Microsoft.Extensions.Logging;
 using OpenTelemetry.Instrumentation.AspNetCore;
 using OpenTelemetry.Resources;
@@ -24,6 +28,7 @@ public static class ServiceDefaultsExtensions
             options.UseUtcTimestamp = true;
         });
         builder.Services.AddServiceDefaults();
+        builder.AddServiceAuthentication();
         builder.Services.FilterHealthProbeTraces();
         var telemetry = builder.Services.AddOpenTelemetry()
             .ConfigureResource(resource => resource.AddService(serviceName));
@@ -82,19 +87,37 @@ public static class ServiceDefaultsExtensions
                         new ErrorEnvelope(new ErrorDetail("validation_failed", message)));
                 });
 
-        services.AddHealthChecks();
+        // Liveness is a trivial "process is up" check (tagged live); readiness is composed from
+        // the dependency probes hosts register with AddDependencyReadinessCheck (tagged ready).
+        services.AddHealthChecks()
+            .AddCheck("self", () => HealthCheckResult.Healthy("process alive"), tags: [HealthTags.Live]);
         services.AddTransient<CorrelationPropagationHandler>();
         return services;
     }
 
-    /// <summary>Error-envelope exception handling, controller routing, and health endpoints.</summary>
+    /// <summary>
+    /// Error-envelope exception handling, authentication/authorization, controller routing, and
+    /// the liveness/readiness health endpoints. Controllers are covered by the fail-closed
+    /// fallback policy; health probes are explicitly anonymous.
+    /// </summary>
     public static WebApplication UseServiceDefaults(this WebApplication app)
     {
         app.UseMiddleware<RequestObservabilityMiddleware>();
         app.UseMiddleware<ErrorEnvelopeMiddleware>();
+        app.UseAuthentication();
+        app.UseAuthorization();
         app.MapControllers();
-        app.MapHealthChecks("/health/live");
-        app.MapHealthChecks("/health/ready");
+
+        // Liveness: process is up, independent of dependencies (a failing dependency must not
+        // trigger pod restarts). Readiness: dependency probes must pass before taking traffic.
+        app.MapHealthChecks("/health/live", new HealthCheckOptions
+        {
+            Predicate = registration => registration.Tags.Contains(HealthTags.Live),
+        }).AllowAnonymous();
+        app.MapHealthChecks("/health/ready", new HealthCheckOptions
+        {
+            Predicate = registration => registration.Tags.Contains(HealthTags.Ready),
+        }).AllowAnonymous();
         return app;
     }
 }

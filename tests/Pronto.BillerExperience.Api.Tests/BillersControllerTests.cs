@@ -1,3 +1,5 @@
+using System.Security.Claims;
+using System.Reflection;
 using Pronto.BillerExperience.Api.Application;
 using Pronto.BillerExperience.Api.Controllers;
 using Pronto.BillerExperience.Api.Infrastructure.AI;
@@ -10,6 +12,9 @@ using Microsoft.AspNetCore.Mvc;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
 using Pronto.Agentic.Orchestration.Execution;
+using Pronto.ServiceDefaults.Security;
+using Microsoft.AspNetCore.Http;
+using Microsoft.AspNetCore.Authorization;
 using Xunit;
 
 namespace Pronto.BillerExperience.Api.Tests;
@@ -17,6 +22,16 @@ namespace Pronto.BillerExperience.Api.Tests;
 /// <summary>Covers the HTTP surface Studio drives (SSE stream excluded — functional-test territory).</summary>
 public sealed class BillersControllerTests
 {
+    [Fact]
+    public void PurchaseEndpointRequiresPaymentServicePolicy()
+    {
+        var authorize = typeof(BillersController)
+            .GetMethod(nameof(BillersController.AdvancePurchase))!
+            .GetCustomAttribute<AuthorizeAttribute>();
+
+        Assert.Equal(ServiceAuthorization.BillerPurchaseWrite, authorize?.Policy);
+    }
+
     [Fact]
     public async Task CreateReturns201WithBootstrapPayload()
     {
@@ -78,6 +93,24 @@ public sealed class BillersControllerTests
             () => controller.Get("missing-biller", CancellationToken.None));
     }
 
+    [Fact]
+    public async Task PurchaseEndpointAdvancesBillerStatusAndTier()
+    {
+        var controller = Controller();
+        var created = await controller.Create(Request(), CancellationToken.None);
+        var billerId = ((OnboardingBootstrapResponse)((CreatedAtActionResult)created.Result!).Value!)
+            .Biller.BillerId;
+
+        var result = await controller.AdvancePurchase(
+            billerId,
+            new AdvanceBillerPurchaseRequest("purchase-1", BillerTier.Isolated),
+            CancellationToken.None);
+
+        var response = Assert.IsType<BillerResponse>(((OkObjectResult)result.Result!).Value);
+        Assert.Equal(BillerStatus.Purchased, response.Status);
+        Assert.Equal(BillerTier.Isolated, response.Tier);
+    }
+
     private static BillersController Controller()
     {
         var onboarding = new BillerOnboardingService(
@@ -86,10 +119,20 @@ public sealed class BillersControllerTests
             new OrchestrationRunner(),
             NullLogger<BillerOnboardingService>.Instance,
             invoiceSeeder: null);
-        return new BillersController(
+        var controller = new BillersController(
             onboarding,
             NullLogger<BillersController>.Instance,
             Options.Create(new JsonOptions()));
+        controller.ControllerContext = new ControllerContext
+        {
+            HttpContext = new DefaultHttpContext
+            {
+                User = new ClaimsPrincipal(new ClaimsIdentity(
+                    [new Claim("roles", ServiceClaims.CrossBillerRole)],
+                    "test")),
+            },
+        };
+        return controller;
     }
 
     private static CreateBillerRequest Request() =>

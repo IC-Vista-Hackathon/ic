@@ -26,7 +26,14 @@ vi.mock('./provider', () => ({
 const invoice: Invoice = { id: 'inv-1', accountNumber: '4421', payerName: 'Pat', amountCents: 5000, dueDate: '2026-08-01', description: 'Water bill', status: 'due' };
 const payer: PayerProfile = { payer_id: 'payer-1', biller_id: 'biller-1', name: 'Pat', email: 'pat@example.com', account_numbers: ['4421'], preferences: { autopay: false, paperless: false, channels: ['email'], payment_day: null } };
 const receipt: PaymentReceipt = { confirmation: 'CONF-123', amountCents: 5000, feeCents: 0, totalCents: 5000, status: 'succeeded', payerAccountId: 'payer-1' };
-const config = { biller_id: 'biller-1', brand: { display_name: 'Acme Water', primary_color: '#123456', secondary_color: '#654321' }, content: { heading: 'Pay your bill', introduction: 'Fast and secure.' }, pwa: { name: 'Acme Water Payments' }, enabled_payment_capabilities: ['card', 'ach'] };
+const config = {
+  schema_version: '1.0',
+  biller_id: 'biller-1',
+  brand: { display_name: 'Acme Water', primary_color: '#123456', secondary_color: '#654321', font_family: null },
+  content: { heading: 'Pay your bill', introduction: 'Fast and secure.', support_text: 'Need help?', privacy_policy_url: '', terms_of_service_url: '' },
+  pwa: { name: 'Acme Water Payments', short_name: 'Acme Water', theme_color: '#123456', background_color: '#ffffff' },
+  enabled_payment_capabilities: ['card', 'ach'],
+};
 
 const names = () => trackEvent.mock.calls.map(([name]) => name);
 function assertAllAllowlisted() {

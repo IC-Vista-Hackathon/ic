@@ -22,9 +22,13 @@
             "scheduled_for": {
               "type": ["string", "null"],
               "description": "ISO date (YYYY-MM-DD) to schedule the payment for, from the confirmed plan's 'when'; null to pay immediately. Future-dated plans MUST pass this — omitting it executes the payment now."
+            },
+            "idempotency_key": {
+              "type": "string",
+              "description": "Stable unique key for this confirmed payment attempt. Reuse the same key when retrying after a timeout or transient failure."
             }
           },
-          "required": ["biller_id", "invoice_id", "method", "payer_account_id", "scheduled_for"]
+          "required": ["biller_id", "invoice_id", "method", "payer_account_id", "scheduled_for", "idempotency_key"]
         }
       }
     }

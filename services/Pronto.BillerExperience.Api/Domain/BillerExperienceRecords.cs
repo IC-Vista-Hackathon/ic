@@ -17,7 +17,10 @@ public sealed record BillerRecord(
     [property: JsonProperty("support")] BillerSupport? Support,
     [property: JsonProperty("payment_rails")] IReadOnlyList<PaymentRailReference> PaymentRails,
     [property: JsonProperty("status")] BillerStatus Status,
-    [property: JsonProperty("created_at")] DateTimeOffset CreatedAt);
+    [property: JsonProperty("created_at")] DateTimeOffset CreatedAt,
+    [property: JsonProperty("tier")] BillerTier Tier = BillerTier.Shared,
+    [property: JsonProperty("purchase_id")] string? PurchaseId = null,
+    [property: JsonProperty("_etag")] string? ETag = null);
 
 public sealed record ExperienceRecord(
     [property: JsonProperty("id")] string Id,
@@ -28,7 +31,7 @@ public sealed record ExperienceRecord(
     [property: JsonProperty("findings")] IReadOnlyList<ComplianceFinding> Findings,
     [property: JsonProperty("created_at")] DateTimeOffset CreatedAt,
     [property: JsonProperty("approved_at")] DateTimeOffset? ApprovedAt = null,
-    [property: JsonIgnore] string? ETag = null);
+    [property: JsonProperty("_etag")] string? ETag = null);
 
 public sealed record OnboardingRunRecord(
     [property: JsonProperty("id")] string Id,
@@ -53,6 +56,9 @@ public sealed record DeploymentRecord(
     [property: JsonProperty("failure_code")] string? FailureCode = null,
     [property: JsonProperty("failure_message")] string? FailureMessage = null,
     [property: JsonProperty("traceparent")] string? Traceparent = null,
+    [property: JsonProperty("claimed_at")] DateTimeOffset? ClaimedAt = null,
+    [property: JsonProperty("lease_expires_at")] DateTimeOffset? LeaseExpiresAt = null,
+    [property: JsonProperty("attempt")] int Attempt = 0,
     [property: JsonIgnore] string? ETag = null);
 
 public sealed record AgentContextRecord(

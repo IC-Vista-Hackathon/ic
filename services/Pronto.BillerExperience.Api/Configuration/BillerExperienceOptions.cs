@@ -28,6 +28,12 @@ public sealed class McpOptions
     public string ApiKey { get; set; } = string.Empty;
     public string CapabilitySigningKey { get; set; } = string.Empty;
     public int CapabilityLifetimeMinutes { get; set; } = 30;
+
+    /// <summary>
+    /// The only agent id permitted to submit a payment. Payment submission is money movement:
+    /// design/services.md restricts it to the Execution Agent path, enforced server-side here.
+    /// </summary>
+    public string ExecutionAgentId { get; set; } = "execution";
 }
 
 public sealed class ResearchOptions
@@ -50,6 +56,8 @@ public sealed class ResearchOptions
 public sealed class SupportingServicesOptions
 {
     public string InvoiceBaseUrl { get; set; } = string.Empty;
+    public string PaymentBaseUrl { get; set; } = string.Empty;
+    public string PayerAccountBaseUrl { get; set; } = string.Empty;
 }
 
 public sealed class PublishedExperienceOptions

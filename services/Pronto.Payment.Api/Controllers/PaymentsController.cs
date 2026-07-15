@@ -2,52 +2,64 @@ using System.Security.Cryptography;
 using System.Diagnostics;
 using Pronto.Invoice.Contracts.V1.Invoices;
 using Pronto.Payment.Api.Clients;
+using Pronto.Payment.Api.Domain;
 using Pronto.Payment.Api.Fees;
 using Pronto.Payment.Api.Storage;
+using Pronto.Payment.Api.Workflow;
 using Pronto.Payment.Contracts.V1.Payments;
 using Pronto.ServiceDefaults.Errors;
+using Pronto.ServiceDefaults.Security;
+using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.Extensions.Options;
 
 namespace Pronto.Payment.Api.Controllers;
 
 [ApiController]
 [Route("payments")]
+[Authorize]
 public sealed partial class PaymentsController : ControllerBase
 {
     private const string ConfirmationAlphabet = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
-    private const string IdempotencyKeyHeader = "Idempotency-Key";
     private const int MaxIdempotencyKeyLength = 200;
 
     private readonly IPaymentStore store;
     private readonly IInvoiceClient invoices;
     private readonly IBillerConfigClient configs;
+    private readonly IPayerAccountValidator payerAccounts;
+    private readonly PaymentWorkflow workflow;
+    private readonly TimeProvider clock;
+    private readonly PaymentProcessingOptions options;
     private readonly ILogger<PaymentsController> logger;
 
-    public PaymentsController(IPaymentStore store, IInvoiceClient invoices, IBillerConfigClient configs, ILogger<PaymentsController> logger)
+    public PaymentsController(
+        IPaymentStore store,
+        IInvoiceClient invoices,
+        IBillerConfigClient configs,
+        IPayerAccountValidator payerAccounts,
+        PaymentWorkflow workflow,
+        TimeProvider clock,
+        IOptions<PaymentProcessingOptions> options,
+        ILogger<PaymentsController> logger)
     {
         this.store = store;
         this.invoices = invoices;
         this.configs = configs;
+        this.payerAccounts = payerAccounts;
+        this.workflow = workflow;
+        this.clock = clock;
+        this.options = options.Value;
         this.logger = logger;
     }
 
     [HttpPost]
+    [Authorize(Policy = ServiceAuthorization.PaymentsWrite)]
     public async Task<ActionResult<PaymentResponse>> Create(
-        CreatePaymentRequest request, CancellationToken cancellationToken)
+        CreatePaymentRequest request,
+        [FromHeader(Name = "Idempotency-Key")] string? idempotencyHeader,
+        CancellationToken cancellationToken)
     {
-        var idempotencyKey = ReadIdempotencyKey();
-        if (idempotencyKey is not null)
-        {
-            // Replay: a repeat with a key we've already seen resolves to the ORIGINAL payment —
-            // before any conflict/validation check, so a client retry after a network blip never
-            // double-charges or 409s on an invoice its first call already paid.
-            var original = await store.FindByIdempotencyKeyAsync(request.BillerId, idempotencyKey, cancellationToken)
-                .ConfigureAwait(false);
-            if (original is not null)
-            {
-                return await ResolveReplayAsync(original, idempotencyKey, cancellationToken).ConfigureAwait(false);
-            }
-        }
+        BillerClaims.RequireBillerAccess(User, request.BillerId);
 
         var config = await configs.GetAsync(request.BillerId, cancellationToken).ConfigureAwait(false);
 
@@ -55,6 +67,44 @@ public sealed partial class PaymentsController : ControllerBase
         {
             throw ServiceException.BadRequest(
                 "method_not_enabled", $"payment method '{request.Method}' is not enabled for this biller");
+        }
+
+        ValidateScheduleDate(request.ScheduledFor);
+        await payerAccounts.ValidateAsync(request.BillerId, request.PayerAccountId, cancellationToken)
+            .ConfigureAwait(false);
+
+        // The header wins over the body field; either provides durable client idempotency.
+        var idempotencyKey = Normalize(idempotencyHeader) ?? Normalize(request.IdempotencyKey);
+        if (idempotencyKey is null)
+        {
+            throw ServiceException.BadRequest(
+                "idempotency_key_required",
+                "Idempotency-Key header or idempotency_key body field is required.");
+        }
+
+        if (idempotencyKey.Length > MaxIdempotencyKeyLength)
+        {
+            throw ServiceException.BadRequest(
+                "idempotency_key_too_long",
+                $"Idempotency keys must be at most {MaxIdempotencyKeyLength} characters.");
+        }
+
+        var paymentId = PaymentRecord.DeriveId(request.BillerId, idempotencyKey);
+        var fingerprint = PaymentRecord.Fingerprint(
+            request.InvoiceId, request.Method, request.PayerAccountId, request.ScheduledFor);
+
+        // Fast path: a retried request with a known key replays the original outcome (finishing a
+        // still-pending record if the first attempt crashed mid-workflow) without re-reading state.
+        if (idempotencyKey is not null)
+        {
+            var existing = await store.FindAsync(request.BillerId, paymentId, cancellationToken)
+                .ConfigureAwait(false);
+            if (existing is not null)
+            {
+                EnsureSameRequest(existing, fingerprint);
+                var replayed = await workflow.DriveInitialAsync(existing, cancellationToken).ConfigureAwait(false);
+                return BuildResult(replayed, created: false);
+            }
         }
 
         var invoice = await invoices.GetAsync(request.BillerId, request.InvoiceId, cancellationToken)
@@ -66,106 +116,104 @@ public sealed partial class PaymentsController : ControllerBase
             throw ServiceException.Conflict("already_paid", $"invoice {request.InvoiceId} is already paid");
         }
 
+        // A second payment cannot target an invoice with an active scheduled payment; the Invoice
+        // Service's scheduled→paid binding is the authority, this is the fast, clear rejection.
+        if (invoice.Status == InvoiceStatus.Scheduled)
+        {
+            throw ServiceException.Conflict(
+                "invoice_scheduled", $"invoice {request.InvoiceId} already has an active scheduled payment");
+        }
+
         var (feeCents, totalCents) = FeeCalculator.Calculate(config, request.Method, invoice.AmountCents);
-        var paymentId = Guid.NewGuid().ToString();
-        var scheduled = request.ScheduledFor is not null;
+        var now = clock.GetUtcNow();
 
-        // 1. PERSIST BEFORE MARK: durably write the payment in a recoverable Pending state (and
-        //    reserve the idempotency key) BEFORE asserting the invoice transition. A crash after
-        //    this point always leaves an auditable payment row, never an orphaned Paid invoice.
-        var pending = new PaymentResponse(
-            PaymentId: paymentId,
-            BillerId: request.BillerId,
-            InvoiceId: request.InvoiceId,
-            PayerAccountId: request.PayerAccountId,
-            Method: request.Method,
-            AmountCents: invoice.AmountCents,
-            FeeCents: feeCents,
-            TotalCents: totalCents,
-            Confirmation: MintConfirmation(),
-            Status: PaymentStatus.Pending,
-            ScheduledFor: request.ScheduledFor,
-            ReceiptMessage: config.ReceiptMessage,
-            CreatedAt: DateTimeOffset.UtcNow);
-
-        var creation = await store.CreatePendingAsync(pending, idempotencyKey, cancellationToken)
-            .ConfigureAwait(false);
-        if (creation.IsReplay)
+        // Payment-first ordering: persist a durable pending record BEFORE the invoice transition,
+        // so a crash between the two never leaves a paid/scheduled invoice with no payment.
+        var pending = new PaymentRecord
         {
-            // Concurrent first-time race on the same key: resolve to whoever won the reservation.
-            return await ResolveReplayAsync(creation.Payment, idempotencyKey, cancellationToken).ConfigureAwait(false);
-        }
-
-        // 2-3. Assert the invoice transition (atomicity authority; a concurrent duplicate loses
-        //      here with 409, leaving only a recoverable Pending row) then mark the payment terminal.
-        var payment = await FinalizeAsync(pending, cancellationToken).ConfigureAwait(false);
-        return Created($"/payments/{payment.PaymentId}?biller_id={payment.BillerId}", payment);
-    }
-
-    /// <summary>
-    /// Resolve an idempotent replay. A payment left <see cref="PaymentStatus.Pending"/> by a
-    /// mid-flight crash is resumed to completion (the invoice transition is idempotent per
-    /// payment id, so re-asserting it is safe); a terminal payment is returned verbatim.
-    /// </summary>
-    private async Task<ActionResult<PaymentResponse>> ResolveReplayAsync(
-        PaymentResponse original, string? idempotencyKey, CancellationToken cancellationToken)
-    {
-        if (original.Status == PaymentStatus.Pending)
-        {
-            var resumed = await FinalizeAsync(original, cancellationToken).ConfigureAwait(false);
-            return Ok(resumed);
-        }
-
-        LogPaymentReplayed(logger, original.PaymentId, original.BillerId, idempotencyKey, Activity.Current?.TraceId.ToString());
-        return Ok(original);
-    }
-
-    /// <summary>
-    /// Assert the invoice transition then mark the payment terminal. Re-asserting the same
-    /// transition with the same payment id is idempotent on the Invoice Service, so this is safe
-    /// to call both for a fresh payment and when resuming a crashed <c>Pending</c> one.
-    /// </summary>
-    private async Task<PaymentResponse> FinalizeAsync(PaymentResponse pending, CancellationToken cancellationToken)
-    {
-        var scheduled = pending.ScheduledFor is not null;
-        await invoices.UpdateStatusAsync(
-            pending.BillerId,
-            pending.InvoiceId,
-            new UpdateInvoiceStatusRequest(
-                scheduled ? InvoiceStatus.Scheduled : InvoiceStatus.Paid, pending.PaymentId),
-            cancellationToken).ConfigureAwait(false);
-
-        var payment = pending with
-        {
-            Status = scheduled ? PaymentStatus.Scheduled : PaymentStatus.Succeeded,
+            PaymentId = paymentId,
+            BillerId = request.BillerId,
+            InvoiceId = request.InvoiceId,
+            PayerAccountId = request.PayerAccountId,
+            Method = request.Method,
+            AmountCents = invoice.AmountCents,
+            FeeCents = feeCents,
+            TotalCents = totalCents,
+            Confirmation = MintConfirmation(),
+            ScheduledFor = request.ScheduledFor,
+            ReceiptMessage = config.ReceiptMessage,
+            Lifecycle = PaymentLifecycle.Pending,
+            IdempotencyKey = idempotencyKey,
+            RequestFingerprint = fingerprint,
+            CreatedAt = now,
+            UpdatedAt = now,
         };
-        await store.UpdateAsync(payment, cancellationToken).ConfigureAwait(false);
-        LogPaymentCreated(logger, payment.PaymentId, payment.BillerId, payment.InvoiceId, payment.Status, payment.TotalCents, Activity.Current?.TraceId.ToString());
-        return payment;
-    }
 
-    private string? ReadIdempotencyKey()
-    {
-        if (Request.Headers.TryGetValue(IdempotencyKeyHeader, out var values))
+        var begin = await store.BeginAsync(pending, cancellationToken).ConfigureAwait(false);
+        if (!begin.Created)
         {
-            var key = values.ToString().Trim();
-            if (string.IsNullOrEmpty(key))
-            {
-                return null;
-            }
-
-            if (key.Length > MaxIdempotencyKeyLength)
-            {
-                throw ServiceException.BadRequest(
-                    "idempotency_key_too_long",
-                    $"{IdempotencyKeyHeader} must be at most {MaxIdempotencyKeyLength} characters");
-            }
-
-            return key;
+            // Lost the insert race to a concurrent request for the same key: it must be the same
+            // request, and we drive/return its record rather than creating a duplicate payment.
+            EnsureSameRequest(begin.Record, fingerprint);
         }
 
-        return null;
+        var finalized = await workflow.DriveInitialAsync(begin.Record, cancellationToken).ConfigureAwait(false);
+        LogPaymentCreated(logger, finalized.PaymentId, finalized.BillerId, finalized.InvoiceId, finalized.WireStatus, finalized.TotalCents, Activity.Current?.TraceId.ToString());
+
+        return BuildResult(finalized, created: begin.Created);
     }
+
+    private ActionResult<PaymentResponse> BuildResult(PaymentRecord record, bool created)
+    {
+        if (record.Lifecycle == PaymentLifecycle.Failed)
+        {
+            // Replaying a request whose invoice transition was refused; surface the original 409.
+            throw ServiceException.Conflict(
+                record.FailureReason ?? "payment_failed",
+                $"payment {record.PaymentId} could not be completed: {record.FailureReason ?? "invoice refused the transition"}");
+        }
+
+        var response = record.ToResponse();
+        return created
+            ? Created($"/payments/{response.PaymentId}?biller_id={response.BillerId}", response)
+            : Ok(response);
+    }
+
+    private void ValidateScheduleDate(DateOnly? scheduledFor)
+    {
+        if (scheduledFor is not { } date)
+        {
+            return;
+        }
+
+        var today = DateOnly.FromDateTime(clock.GetUtcNow().UtcDateTime);
+        if (date < today)
+        {
+            throw ServiceException.BadRequest(
+                "invalid_schedule_date", "scheduled_for cannot be in the past.");
+        }
+
+        var maxDate = today.AddDays(options.MaxScheduleDays);
+        if (date > maxDate)
+        {
+            throw ServiceException.BadRequest(
+                "invalid_schedule_date", $"scheduled_for cannot be more than {options.MaxScheduleDays} days in the future.");
+        }
+    }
+
+    private static void EnsureSameRequest(PaymentRecord existing, string fingerprint)
+    {
+        if (existing.RequestFingerprint is not null
+            && !string.Equals(existing.RequestFingerprint, fingerprint, StringComparison.Ordinal))
+        {
+            throw ServiceException.Conflict(
+                "idempotency_key_conflict",
+                "the idempotency key was already used for a different payment request.");
+        }
+    }
+
+    private static string? Normalize(string? value)
+        => string.IsNullOrWhiteSpace(value) ? null : value.Trim();
 
     /// <summary>
     /// Pre-confirmation quote using the same config + FeeCalculator as payment creation,
@@ -181,6 +229,7 @@ public sealed partial class PaymentsController : ControllerBase
         var requiredBillerId = RequireQueryValue(billerId, "biller_id");
         var requiredInvoiceId = RequireQueryValue(invoiceId, "invoice_id");
         var requiredMethod = RequireQueryValue(method, "method");
+        BillerClaims.RequireBillerAccess(User, requiredBillerId);
         var config = await configs.GetAsync(requiredBillerId, cancellationToken).ConfigureAwait(false);
         if (!config.PaymentMethods.Contains(requiredMethod))
         {
@@ -204,8 +253,17 @@ public sealed partial class PaymentsController : ControllerBase
     [HttpGet("{paymentId}")]
     public async Task<ActionResult<PaymentResponse>> Get(
         string paymentId, [FromQuery(Name = "biller_id")] string billerId, CancellationToken cancellationToken)
-        => await store.FindAsync(billerId, paymentId, cancellationToken).ConfigureAwait(false)
-            ?? throw ServiceException.NotFound("not_found", $"payment {paymentId} not found");
+    {
+        BillerClaims.RequireBillerAccess(User, billerId);
+        var record = await store.FindAsync(billerId, paymentId, cancellationToken).ConfigureAwait(false);
+
+        if (record is null || !record.IsFinalized)
+        {
+            throw ServiceException.NotFound("not_found", $"payment {paymentId} not found");
+        }
+
+        return record.ToResponse();
+    }
 
     [HttpGet]
     public async Task<ActionResult<IReadOnlyList<PaymentResponse>>> List(
@@ -214,9 +272,10 @@ public sealed partial class PaymentsController : ControllerBase
         [FromQuery(Name = "invoice_id")] string? invoiceId,
         CancellationToken cancellationToken)
     {
+        BillerClaims.RequireBillerAccess(User, billerId);
         var results = await store.ListAsync(billerId, payerAccountId, invoiceId, cancellationToken).ConfigureAwait(false);
         LogPaymentsListed(logger, billerId, payerAccountId, invoiceId, results.Count, Activity.Current?.TraceId.ToString());
-        return Ok(results);
+        return Ok(results.Select(record => record.ToResponse()).ToArray());
     }
 
     private static string MintConfirmation()
@@ -242,8 +301,6 @@ public sealed partial class PaymentsController : ControllerBase
 
     [LoggerMessage(4100, LogLevel.Information, "Created payment {PaymentId} for biller {BillerId}, invoice {InvoiceId}, status {Status}, total {TotalCents}; trace {TraceId}")]
     private static partial void LogPaymentCreated(ILogger logger, string paymentId, string billerId, string invoiceId, PaymentStatus status, int totalCents, string? traceId);
-    [LoggerMessage(4102, LogLevel.Information, "Idempotent replay returned payment {PaymentId} for biller {BillerId}, key {IdempotencyKey}; trace {TraceId}")]
-    private static partial void LogPaymentReplayed(ILogger logger, string paymentId, string billerId, string? idempotencyKey, string? traceId);
     [LoggerMessage(4101, LogLevel.Information, "Listed {PaymentCount} payments for biller {BillerId}, payer {PayerAccountId}, invoice {InvoiceId}; trace {TraceId}")]
     private static partial void LogPaymentsListed(ILogger logger, string billerId, string? payerAccountId, string? invoiceId, int paymentCount, string? traceId);
 }

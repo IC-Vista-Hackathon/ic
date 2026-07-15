@@ -107,9 +107,9 @@ Docs to read before making non-trivial changes:
   blob container (keyed by biller_id/slug prefix), and a single shared router workload resolves
   the biller from the request and serves the matching prefix — because these pods only ever serve
   static content, not per-biller logic, one router replaces N per-biller Deployments. The Storage
-  Account (`modules/storage.bicep`) is live: `ic-workload` — the same identity already used for
-  Cosmos/AI Foundry — has `Storage Blob Data Contributor` on it, covering both the Worker's writes
-  and the router's reads; no separate identity per role. The router workload now exists:
+  Account (`modules/storage.bicep`) is live: `ic-workload` has `Storage Blob Data Reader` for the
+  API/router, while the separate `biller-publisher` identity has `Storage Blob Data Contributor`
+  for Worker publication. The router workload now exists:
   `services/Pronto.PayerExperience.Router` resolves the biller from `/pay/{slug}`, reads
   `billers/{slug}/active.json`, and serves that revision's `site/` prefix with SPA fallback +
   content types (deployed via `deploy/kubernetes/overlays/prod/biller-experience.yaml`, and the
@@ -149,8 +149,8 @@ is still just a placeholder README.
   (Discover → Draft → Validate → Preview → Approve), Cosmos + in-memory persistence, deterministic
   and Azure OpenAI draft generation. Phases 1-4 of the delivery plan are done.
 - `Pronto.Invoice.Api`, `Pronto.Payment.Api`, `Pronto.PayerAccount.Api` have real controllers/domain logic.
-  `Pronto.Payment.Api`'s `IBillerAccountClient` is an intentional no-op stub (Biller Experience API has
-  no account-status endpoint yet).
+  Payment purchase completion uses a durable pending/outbox workflow and the Biller Experience
+  API's idempotent biller purchase-transition endpoint.
 - **`Pronto.BillerExperience.Worker` is implemented** — `PublicationWorker.cs` polls Cosmos
   (`ClaimNextAsync`), and `PublicationProcessor`/`BlobExperienceArtifactPublisher` upload the
   versioned `config.json`/`manifest.webmanifest` + an atomic `active.json` to the

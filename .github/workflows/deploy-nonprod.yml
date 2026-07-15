@@ -1,27 +1,32 @@
 name: Deploy nonprod
 
-# On every PR: scan/build/test run via the other workflows; this one builds the
-# PR head's images, deploys them to the isolated `ic-nonprod` namespace on
-# aks-ic-hack, and runs functional/smoke tests against the deployment.
+# Trusted same-repository PRs can be deployed after a maintainer applies the
+# `safe-to-deploy` label. The workflow definition comes from the base branch;
+# only then does it build and deploy the reviewed PR head.
 
 on:
-  pull_request:
+  pull_request_target:
     branches: [main]
-    types: [opened, synchronize, reopened]
+    types: [labeled]
 
 permissions:
   contents: read
 
 concurrency:
-  # One nonprod deploy per PR; a new push cancels the in-flight one.
-  group: deploy-nonprod-${{ github.event.pull_request.number }}
+  # The namespace is shared across PRs, so serialize deployments globally.
+  group: deploy-nonprod
   cancel-in-progress: true
 
 jobs:
   build-images:
+    if: >-
+      github.event.pull_request.head.repo.full_name == github.repository &&
+      contains(fromJSON('["OWNER", "MEMBER", "COLLABORATOR"]'), github.event.pull_request.author_association) &&
+      github.event.label.name == 'safe-to-deploy'
     uses: ./.github/workflows/build-images.yml
     with:
       image_tag: ${{ github.event.pull_request.head.sha }}
+      source_ref: ${{ github.event.pull_request.head.sha }}
     secrets:
       AZURE_CREDENTIALS: ${{ secrets.AZURE_CREDENTIALS }}
 
@@ -38,22 +43,63 @@ jobs:
       OVERLAY: deploy/kubernetes/overlays/nonprod
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
 
       - name: Azure login
         uses: azure/login@v2
         with:
           creds: ${{ secrets.AZURE_CREDENTIALS }}
 
+      - name: Set up kubelogin
+        uses: azure/use-kubelogin@v1
+        with:
+          kubelogin-version: v0.2.19
+
+      - name: Verify least-privilege AKS authentication
+        run: |
+          mapfile -t auth < <(az aks show \
+            --resource-group "$AKS_RG" --name "$AKS_NAME" \
+            --query '[aadProfile.managed, aadProfile.enableAzureRbac]' -o tsv)
+          if [[ "${auth[0]:-}" != "true" || "${auth[1]:-}" != "true" ]]; then
+            echo "ERROR: AKS must use managed Entra ID and Azure RBAC; refusing local system:masters credentials." >&2
+            exit 1
+          fi
+
       - name: Get AKS credentials
         run: |
           az aks get-credentials \
             --resource-group "$AKS_RG" --name "$AKS_NAME" \
-            --admin --overwrite-existing
+            --overwrite-existing
+          kubelogin convert-kubeconfig -l azurecli
 
       - name: Pin image tags to the PR head SHA
         run: |
           sed -i "s/newTag: latest/newTag: ${IMAGE_TAG}/" "${OVERLAY}/kustomization.yaml"
           grep 'newTag' "${OVERLAY}/kustomization.yaml"
+
+      # The nonprod ic-workload service account must annotate the DEDICATED nonprod workload
+      # identity (uami-ic-hack-nonprod-workload) so its pods reach only the nonprod Cosmos
+      # account. The client id is a GUID assigned at identity-creation time, so it's not
+      # committed — resolve it from the Bicep output and substitute the placeholder in the
+      # nonprod overlay before deploying.
+      - name: Inject nonprod workload identity client id
+        run: |
+          NONPROD_CLIENT_ID=$(az deployment sub show --name ic-hack \
+            --query 'properties.outputs.nonprodWorkloadIdentityClientId.value' -o tsv 2>/dev/null || true)
+          if [ -z "$NONPROD_CLIENT_ID" ]; then
+            # The dedicated nonprod identity isn't provisioned yet (its Bicep hasn't been applied).
+            # Drop the SA override so pods fall back to the shared base identity — the current,
+            # pre-isolation behavior — rather than deploying an invalid placeholder client id.
+            # Once the infra is applied and the output exists, this branch stops running and the
+            # dedicated nonprod identity is used automatically.
+            echo "::warning::nonprodWorkloadIdentityClientId output not found; using the shared base identity until infra/bicep is applied."
+            sed -i '/- path: service-account.yaml/d' "${OVERLAY}/kustomization.yaml"
+          else
+            sed -i "s/REPLACE_WITH_NONPROD_WORKLOAD_IDENTITY_CLIENT_ID/${NONPROD_CLIENT_ID}/" \
+              "${OVERLAY}/service-account.yaml"
+            grep 'client-id' "${OVERLAY}/service-account.yaml"
+          fi
 
       - name: Deploy
         run: kubectl apply -k "${OVERLAY}"

@@ -1,8 +1,10 @@
 using Pronto.Invoice.Api;
 using Pronto.Invoice.Api.Repositories;
 using Pronto.ServiceDefaults;
+using Pronto.ServiceDefaults.Health;
 using Pronto.Persistence.Cosmos;
 using Microsoft.Azure.Cosmos;
+using Microsoft.Extensions.DependencyInjection;
 
 var builder = WebApplication.CreateBuilder(args);
 builder.AddServiceDefaults("Pronto.Invoice.Api");
@@ -19,6 +21,16 @@ if (persistence.UseCosmos)
     builder.Services.AddSingleton(CosmosClientFactory.Create(persistence, "Pronto.Invoice.Api"));
     builder.Services.AddSingleton<IInvoiceRepository>(services =>
         new CosmosInvoiceRepository(services.GetRequiredService<CosmosClient>(), persistence.DatabaseName));
+    builder.Services.AddHealthChecks().AddDependencyReadinessCheck(
+        "cosmos",
+        async (services, cancellationToken) =>
+        {
+            var database = services.GetRequiredService<CosmosClient>()
+                .GetDatabase(persistence.DatabaseName);
+            await database.ReadAsync(cancellationToken: cancellationToken);
+            await database.GetContainer("invoices")
+                .ReadContainerAsync(cancellationToken: cancellationToken);
+        });
 }
 else
 {
@@ -27,7 +39,8 @@ else
 
 
 var app = builder.Build();
-app.MapGet("/", () => Results.Ok(new ServiceInfo("Pronto.Invoice.Api", "foundation", "Invoice seeding and lookup")));
+app.MapGet("/", () => Results.Ok(new ServiceInfo("Pronto.Invoice.Api", "foundation", "Invoice seeding and lookup")))
+    .AllowAnonymous();
 app.UseServiceDefaults();
 app.Run();
 

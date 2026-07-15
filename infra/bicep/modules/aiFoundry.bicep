@@ -7,6 +7,9 @@ param workloadIdentityPrincipalId string
 param appInsightsId string
 @secure()
 param appInsightsConnectionString string
+@allowed([
+  false
+])
 param mcpConnectionEnabled bool = false
 param mcpServerUrl string = ''
 @secure()

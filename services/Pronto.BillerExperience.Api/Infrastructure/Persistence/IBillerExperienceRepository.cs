@@ -13,7 +13,10 @@ public interface IBillerExperienceRepository
     /// public reads are keyed by slug, so creation must not reuse one.
     /// </summary>
     ValueTask<bool> SlugExistsAsync(string slug, CancellationToken cancellationToken);
-    ValueTask<BillerRecord> SaveBillerAsync(BillerRecord biller, CancellationToken cancellationToken);
+    ValueTask<BillerRecord> SaveBillerAsync(
+        BillerRecord biller,
+        string? expectedETag,
+        CancellationToken cancellationToken);
     ValueTask<ExperienceRecord?> GetLatestExperienceAsync(string billerId, CancellationToken cancellationToken);
     ValueTask<ExperienceRecord> SaveExperienceAsync(ExperienceRecord experience, string? expectedETag, CancellationToken cancellationToken);
     ValueTask<OnboardingRunRecord?> GetRunAsync(string billerId, string runId, CancellationToken cancellationToken);
@@ -24,6 +27,7 @@ public interface IBillerExperienceRepository
     ValueTask<AgentContextRecord> SaveAgentContextAsync(AgentContextRecord context, string? expectedETag, CancellationToken cancellationToken);
     ValueTask<DeploymentRecord?> GetDeploymentAsync(string billerId, string deploymentId, CancellationToken cancellationToken);
     ValueTask<DeploymentRecord> CreateDeploymentAsync(DeploymentRecord deployment, CancellationToken cancellationToken);
+    ValueTask<DeploymentRecord> SaveDeploymentAsync(DeploymentRecord deployment, string? expectedETag, CancellationToken cancellationToken);
 
     /// <summary>
     /// Delete a biller and all of its experiences, runs, and deployments. Test-cleanup support

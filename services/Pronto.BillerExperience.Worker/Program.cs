@@ -2,6 +2,7 @@ using Azure.Identity;
 using Azure.Monitor.OpenTelemetry.AspNetCore;
 using Azure.Storage.Blobs;
 using k8s;
+using Microsoft.AspNetCore.Diagnostics.HealthChecks;
 using Microsoft.Extensions.Options;
 using Pronto.Agentic.Orchestration.Telemetry;
 using Pronto.BillerExperience.Worker;
@@ -42,6 +43,7 @@ builder.Services.AddSingleton(new CosmosClient(
 builder.Services.AddSingleton<IPublicationRepository>(services => new CosmosPublicationRepository(
     services.GetRequiredService<CosmosClient>(),
     publicationOptions.DatabaseName,
+    services.GetRequiredService<IOptions<PublicationOptions>>(),
     services.GetRequiredService<ILogger<CosmosPublicationRepository>>()));
 builder.Services.AddSingleton(new BlobServiceClient(
     new Uri(publicationOptions.StorageEndpoint),
@@ -51,8 +53,8 @@ builder.Services.AddSingleton(services => services.GetRequiredService<BlobServic
 builder.Services.AddSingleton<PublicationArtifactPlanFactory>();
 builder.Services.AddSingleton<IExperienceArtifactPublisher, BlobExperienceArtifactPublisher>();
 builder.Services.Configure<BundleBuildOptions>(builder.Configuration.GetSection(BundleBuildOptions.SectionName));
-// When no builder image is configured, keep the prior config-only behavior and never touch the
-// Kubernetes API (so local/CI runs don't require an in-cluster config or kubeconfig).
+// When no builder image is configured, avoid touching the Kubernetes API; publication processing
+// fails closed before active.json is flipped instead of creating a config-only live site.
 builder.Services.AddSingleton<IExperienceBundleBuilder>(services =>
 {
     var bundleOptions = services.GetRequiredService<IOptions<BundleBuildOptions>>();
@@ -92,7 +94,7 @@ if (!string.IsNullOrWhiteSpace(builder.Configuration["APPLICATIONINSIGHTS_CONNEC
 
 var app = builder.Build();
 
-app.MapHealthChecks("/health/live");
+app.MapHealthChecks("/health/live", new HealthCheckOptions { Predicate = _ => false });
 app.MapHealthChecks("/health/ready");
 
 await app.RunAsync();

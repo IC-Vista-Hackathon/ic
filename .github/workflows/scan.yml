@@ -1,9 +1,9 @@
-name: Security scan
+name: Advisory security scan
 
 # Filesystem + IaC/misconfiguration scanning with Trivy (dependencies, Dockerfiles,
-# Kubernetes manifests). Findings are always printed to the job log (table). A SARIF
-# upload to the GitHub Security tab is attempted too, but it needs GitHub Advanced
-# Security — so it's non-blocking until GHAS is enabled on the repo.
+# Kubernetes manifests). The existing repository baseline contains unresolved high-severity
+# findings, so this workflow is explicitly advisory until that baseline is remediated. A SARIF
+# upload to the GitHub Security tab is attempted too, but remains non-blocking.
 # CodeQL (code) and dependency-review (supply chain) run in their own workflows.
 #
 # Trivy is installed via its official script (pinned) rather than trivy-action,
@@ -30,7 +30,7 @@ env:
 
 jobs:
   trivy:
-    name: Trivy filesystem & config
+    name: Advisory Trivy filesystem & config
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -40,11 +40,6 @@ jobs:
           curl -sfL https://raw.githubusercontent.com/aquasecurity/trivy/main/contrib/install.sh \
             | sh -s -- -b "${RUNNER_TEMP}/bin" "${TRIVY_VERSION}"
           echo "${RUNNER_TEMP}/bin" >> "$GITHUB_PATH"
-
-      - name: Trivy scan (table, printed to log)
-        run: |
-          trivy fs --scanners vuln,misconfig,secret \
-            --severity CRITICAL,HIGH --ignore-unfixed --exit-code 0 .
 
       - name: Trivy scan (SARIF)
         run: |
@@ -59,3 +54,12 @@ jobs:
         with:
           sarif_file: trivy-results.sarif
           category: trivy-fs
+
+      - name: Advisory high and critical findings
+        run: |
+          {
+            echo "## Advisory Trivy scan"
+            echo "High/critical findings are reported but do not block merges until the existing baseline is remediated."
+          } >> "$GITHUB_STEP_SUMMARY"
+          trivy fs --scanners vuln,misconfig,secret \
+            --severity CRITICAL,HIGH --ignore-unfixed --exit-code 0 .

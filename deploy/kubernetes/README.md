@@ -18,18 +18,26 @@ The control-plane service workloads are managed with Kustomize:
   `kubectl port-forward` (deterministic, no wait on LB/DNS provisioning).
 - `overlays/prod/` — the `ic` namespace plus public kgateway `HTTPRoute`s. Adds the
   Azure-backed biller-experience stack on top of `base`: an env patch that switches
-  `ic-biller-experience-api` to Cosmos + AI Foundry + blob + App Insights
+  `ic-biller-experience-api` to Cosmos + AI Foundry + blob
   (`biller-experience-api-env-patch.yaml`), and the Worker, `biller-publisher` service
   account, Studio, and shared PWA (`biller-experience.yaml`) with their `/`, `/studio`,
-  and `/pay` routes. Deployed on merge to `main`. `kubectl apply -k overlays/prod` now
-  reproduces live prod; the App Insights connection string is the one value resolved from
-  Azure at deploy time (never committed) and substituted into the overlay. Prod preserves
+  and `/pay` routes. Deployed on merge to `main`. `kubectl apply -k overlays/prod` applies
+  a safe baseline without telemetry or bundle-build Jobs; the deploy workflow then injects
+  the App Insights connection string and SHA-pinned builder image with `kubectl set env`.
+  Prod preserves
   the existing `app.kubernetes.io/name` Deployment selectors and combined
   `ic-biller-experience` route identity so updates apply in place.
 
 Deploys are automated by GitHub Actions (`.github/workflows/deploy-{nonprod,prod}.yml`):
 each pins every image to the commit SHA (`kustomize`/`newTag`) and runs
-`kubectl apply -k deploy/kubernetes/overlays/<env>`. To apply manually:
+`kubectl apply -k deploy/kubernetes/overlays/<env>`. Nonprod deploys are limited to trusted
+same-repository PRs after a maintainer applies the `safe-to-deploy` label, and the shared
+namespace serializes those deployments. A new PR commit requires removing and reapplying the
+label so approval is tied to the reviewed head SHA. The CI identity must use cluster-user
+credentials plus the AKS RBAC Writer role; the workflows do not request AKS admin credentials
+or permit role-binding changes. Set the `SMOKE_PUBLISHED_EXPERIENCE_SLUG` repository variable to
+a stable published fixture to exercise both its public API pointer and Router bundle. To apply
+manually:
 
 ```sh
 kubectl apply -k deploy/kubernetes/overlays/nonprod   # or .../prod
@@ -49,13 +57,13 @@ The publication-plane and platform objects below are static enough to stay as ra
 | `base/service-account.yaml` | `ic-workload` service account, federated to `uami-ic-hack-workload` via workload identity (see `infra/bicep`); namespace set per overlay |
 | `overlays/{nonprod,prod}/namespace.yaml` | the `ic-nonprod` / `ic` namespaces |
 | `overlays/prod/biller-experience.yaml` | Worker, `biller-publisher` service account, Studio, shared PWA renderer, and their services (prod only) |
-| `overlays/prod/biller-experience-api-env-patch.yaml` | prod-only env patch: Cosmos + AI Foundry + blob + App Insights on `ic-biller-experience-api` |
+| `overlays/prod/biller-experience-api-env-patch.yaml` | prod-only env patch: Cosmos + AI Foundry + blob on `ic-biller-experience-api` |
 
 The non-secret sandbox endpoints (Cosmos, AI Foundry, blob) are literals in those files,
-matching `.env.example`. `APPLICATIONINSIGHTS_CONNECTION_STRING` is the one value resolved
-from Azure at deploy time (`az monitor app-insights component show`) and substituted with
-`envsubst`, so no connection string is committed. Image tags are pinned to the release SHA
-by the deploy workflow.
+matching `.env.example`. `APPLICATIONINSIGHTS_CONNECTION_STRING` is resolved from Azure at
+deploy time and injected with `kubectl set env`, so no connection string is committed. The
+bundle-builder env and all container image tags are pinned to the release SHA by the deploy
+workflow.
 
 **Pivot in progress:** published payer sites only serve static content, so the target is one
 shared **Payer Site Router** workload instead of one Deployment per biller. `Pronto.BillerExperience.Worker`
@@ -84,9 +92,13 @@ patches in `Provider=Cosmos`, the endpoint, and the `azure.workload.identity/use
 label (`overlays/{prod,nonprod}/cosmos-persistence.yaml`). The two environments point at
 **separate Cosmos accounts** — prod at `cosmos-ic-hack-<suffix>`, nonprod at
 `cosmos-ic-hack-nonprod-<suffix>` — so per-PR smoke tests exercise real Cosmos without touching
-prod data. The shared `ic-workload` identity is federated to both `system:serviceaccount:ic:ic-workload`
-and `system:serviceaccount:ic-nonprod:ic-workload` (`infra/bicep/modules/aks.bicep`) so pods in
-either namespace can obtain a Cosmos token. With shared Cosmos state each env is safe to scale
+prod data. Each environment has its **own** workload identity: prod's `uami-ic-hack-workload`
+is federated to `system:serviceaccount:ic:ic-workload` and holds data access on prod Cosmos only,
+while `uami-ic-hack-nonprod-workload` is federated to `system:serviceaccount:ic-nonprod:ic-workload`
+and holds data access on nonprod Cosmos only (`infra/bicep/modules/aks.bicep`), so a nonprod pod's
+token can never reach prod Cosmos. The `ic-workload` service account annotation carries the matching
+client id per overlay (prod uses `base/service-account.yaml`; nonprod overrides it via
+`overlays/nonprod/service-account.yaml`). With shared Cosmos state each env is safe to scale
 (kept at 1 for the sandbox). Manifests live under `base/` and deploy through the Kustomize
 overlays above.
 
