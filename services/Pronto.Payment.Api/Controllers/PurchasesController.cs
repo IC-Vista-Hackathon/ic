@@ -1,4 +1,4 @@
-using Pronto.Payment.Api.Clients;
+using Pronto.Payment.Api.Purchases;
 using Pronto.Payment.Api.Storage;
 using Pronto.Payment.Contracts.V1.Purchases;
 using Pronto.ServiceDefaults.Errors;
@@ -14,15 +14,16 @@ namespace Pronto.Payment.Api.Controllers;
 public sealed class PurchasesController : ControllerBase
 {
     private readonly IPurchaseStore store;
-    private readonly IBillerAccountClient billerAccounts;
+    private readonly PurchaseCompletionRunner completion;
 
-    public PurchasesController(IPurchaseStore store, IBillerAccountClient billerAccounts)
+    public PurchasesController(IPurchaseStore store, PurchaseCompletionRunner completion)
     {
         this.store = store;
-        this.billerAccounts = billerAccounts;
+        this.completion = completion;
     }
 
     [HttpPost]
+    [Authorize(Policy = ServiceAuthorization.PurchasesWrite)]
     public async Task<ActionResult<PurchaseResponse>> Create(
         CreatePurchaseRequest request, CancellationToken cancellationToken)
     {
@@ -35,35 +36,28 @@ public sealed class PurchasesController : ControllerBase
                 "idempotency_key is required");
         }
 
-        var pending = new PurchaseResponse(
-            PurchaseId: Guid.NewGuid().ToString(),
-            BillerId: request.BillerId.Trim(),
-            Plan: request.Plan,
-            AmountCents: request.Plan == PurchasePlan.Isolated ? 199900 : 49900,
-            Status: PurchaseStatus.Pending);
-        var reservation = await store.ReserveAsync(
-            pending,
-            request.IdempotencyKey.Trim(),
-            cancellationToken).ConfigureAwait(false);
-        if (reservation.Purchase.Status == PurchaseStatus.Paid)
+        var normalized = request with
         {
-            return Ok(reservation.Purchase);
+            BillerId = request.BillerId.Trim(),
+            IdempotencyKey = request.IdempotencyKey.Trim(),
+        };
+        var created = await store.CreatePendingAsync(normalized, cancellationToken).ConfigureAwait(false);
+        var purchase = created.Purchase;
+
+        if (purchase.Status != PurchaseStatus.Paid)
+        {
+            var paid = await completion
+                .TryCompleteAsync(
+                    new PurchaseCompletion(purchase.BillerId, purchase.PurchaseId, purchase.Plan, Attempts: 0),
+                    cancellationToken)
+                .ConfigureAwait(false);
+            purchase = paid ?? purchase;
         }
 
-        await billerAccounts.AdvanceToPurchasedAsync(
-                reservation.Purchase.BillerId,
-                reservation.Purchase.PurchaseId,
-                reservation.Purchase.Plan,
-                cancellationToken)
-            .ConfigureAwait(false);
-        var completed = await store.CompleteAsync(
-            reservation.Purchase.BillerId,
-            reservation.Purchase.PurchaseId,
-            cancellationToken).ConfigureAwait(false);
-
-        return reservation.Created
-            ? Created($"/purchases/{completed.PurchaseId}?biller_id={completed.BillerId}", completed)
-            : Ok(completed);
+        var location = $"/purchases/{purchase.PurchaseId}?biller_id={purchase.BillerId}";
+        return created.AlreadyExisted
+            ? Ok(purchase)
+            : Created(location, purchase);
     }
 
     [HttpGet("{purchaseId}")]

@@ -33,8 +33,12 @@ public static class ServiceClaims
     /// <summary>Policy Agent — owns payer registration and preference operations.</summary>
     public const string PolicyAgentRole = "agent.policy";
 
+    public const string OnboardingAgentRole = "agent.onboarding";
+
     /// <summary>Payment Service — asserts invoice status transitions (<c>due→paid/scheduled</c>).</summary>
     public const string PaymentServiceRole = "service.payment";
+
+    public const string BillerExperienceServiceRole = "service.biller-experience";
 
     /// <summary>Internal onboarding seam that seeds fake invoices.</summary>
     public const string InvoiceSeedRole = "service.invoice-seed";
@@ -58,7 +62,9 @@ public static class ServiceClaims
     [
         ExecutionAgentRole,
         PolicyAgentRole,
+        OnboardingAgentRole,
         PaymentServiceRole,
+        BillerExperienceServiceRole,
         InvoiceSeedRole,
         MaintenanceRole,
         CrossBillerRole,

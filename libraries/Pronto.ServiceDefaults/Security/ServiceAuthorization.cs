@@ -12,6 +12,10 @@ public static class ServiceAuthorization
     /// <summary>Execution Agent — <c>POST /payments</c>.</summary>
     public const string PaymentsWrite = "payments:write";
 
+    public const string PurchasesWrite = "purchases:write";
+
+    public const string BillerPurchaseWrite = "billers:purchase";
+
     /// <summary>Payment Service — <c>POST /billers/{id}/invoices/{invoiceId}/status</c>.</summary>
     public const string InvoiceStatusWrite = "invoices:status";
 
@@ -27,6 +31,10 @@ public static class ServiceAuthorization
     public static void AddServicePolicies(this AuthorizationOptions options)
     {
         options.AddPolicy(PaymentsWrite, RolePolicy(ServiceClaims.ExecutionAgentRole));
+        options.AddPolicy(
+            PurchasesWrite,
+            RolePolicy(ServiceClaims.OnboardingAgentRole, ServiceClaims.BillerExperienceServiceRole));
+        options.AddPolicy(BillerPurchaseWrite, RolePolicy(ServiceClaims.PaymentServiceRole));
         options.AddPolicy(InvoiceStatusWrite, RolePolicy(ServiceClaims.PaymentServiceRole));
         options.AddPolicy(InvoiceSeed, RolePolicy(ServiceClaims.InvoiceSeedRole, ServiceClaims.CrossBillerRole));
         options.AddPolicy(PayersWrite, RolePolicy(ServiceClaims.PolicyAgentRole));

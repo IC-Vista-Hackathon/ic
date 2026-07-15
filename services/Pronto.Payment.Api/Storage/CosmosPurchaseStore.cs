@@ -1,164 +1,211 @@
 using System.Net;
 using System.Text.Json.Serialization;
-using Pronto.Payment.Contracts.V1.Purchases;
-using Pronto.ServiceDefaults.Errors;
 using Microsoft.Azure.Cosmos;
+using Pronto.Payment.Api.Purchases;
+using Pronto.Payment.Contracts.V1.Purchases;
 
 namespace Pronto.Payment.Api.Storage;
 
-/// <summary>
-/// Cosmos-backed purchase store. Container <c>purchases</c>, partition key <c>/biller_id</c>.
-/// One purchase per biller is enforced by a deterministic sentinel document id.
-/// </summary>
-public sealed class CosmosPurchaseStore : IPurchaseStore
+public sealed class CosmosPurchaseStore : IPurchaseStore, IPurchaseCompletionOutbox
 {
-    private const string SingletonDocumentId = "00000000-0000-0000-0000-000000000001";
     private readonly Container container;
 
     public CosmosPurchaseStore(CosmosClient client, string databaseName)
         => container = client.GetContainer(databaseName, "purchases");
 
-    public async Task<PurchaseReservation> ReserveAsync(
-        PurchaseResponse purchase,
-        string idempotencyKey,
+    public async Task<PurchaseCreateResult> CreatePendingAsync(
+        CreatePurchaseRequest request,
         CancellationToken cancellationToken = default)
     {
-        var partitionKey = new PartitionKey(purchase.BillerId);
-        var legacy = await FindLegacyAsync(purchase.BillerId, cancellationToken);
-        if (legacy is not null)
-        {
-            throw AlreadyPurchased(purchase.BillerId);
-        }
-
+        var purchase = new PurchaseResponse(
+            PurchaseIdentity.ForBiller(request.BillerId),
+            request.BillerId,
+            request.Plan,
+            PurchasePricing.AmountFor(request.Plan),
+            PurchaseStatus.Pending);
         var document = new PurchaseDocument
         {
-            Id = SingletonDocumentId,
+            Id = purchase.PurchaseId,
             BillerId = purchase.BillerId,
-            IdempotencyKey = idempotencyKey,
             Purchase = purchase,
+            IdempotencyKey = NormalizeIdempotencyKey(request.IdempotencyKey),
+            Completion = new PurchaseCompletion(
+                purchase.BillerId,
+                purchase.PurchaseId,
+                purchase.Plan,
+                Attempts: 0),
         };
+        var partitionKey = new PartitionKey(request.BillerId);
 
         try
         {
-            var response = await container.CreateItemAsync(
-                document,
-                partitionKey,
-                cancellationToken: cancellationToken);
-            return new PurchaseReservation(response.Resource.Purchase, Created: true);
+            await container.CreateItemAsync(
+                    document,
+                    partitionKey,
+                    cancellationToken: cancellationToken)
+                .ConfigureAwait(false);
+            return new PurchaseCreateResult(purchase, AlreadyExisted: false);
         }
         catch (CosmosException exception) when (exception.StatusCode == HttpStatusCode.Conflict)
         {
-            var existing = await ReadSingletonAsync(purchase.BillerId, cancellationToken)
-                ?? throw AlreadyPurchased(purchase.BillerId);
-            if (existing.IdempotencyKey == idempotencyKey
-                && existing.Purchase.Plan == purchase.Plan)
+            var existing = await ReadDocumentAsync(request.BillerId, purchase.PurchaseId, cancellationToken)
+                .ConfigureAwait(false);
+            if (existing is null)
             {
-                return new PurchaseReservation(existing.Purchase, Created: false);
+                throw;
             }
 
-            throw AlreadyPurchased(purchase.BillerId);
+            PurchaseRetryPolicy.EnsureIdempotentReplay(
+                existing.BillerId,
+                existing.Purchase.Plan,
+                existing.IdempotencyKey,
+                request.Plan,
+                document.IdempotencyKey);
+            return new PurchaseCreateResult(existing.Purchase, AlreadyExisted: true);
         }
     }
 
-    public async Task<PurchaseResponse> CompleteAsync(
+    public async Task<PurchaseResponse?> FindAsync(
         string billerId,
         string purchaseId,
         CancellationToken cancellationToken = default)
     {
-        for (var attempt = 0; attempt < 3; attempt++)
-        {
-            var response = await container.ReadItemAsync<PurchaseDocument>(
-                SingletonDocumentId,
-                new PartitionKey(billerId),
-                cancellationToken: cancellationToken);
-            if (response.Resource.Purchase.PurchaseId != purchaseId)
-            {
-                throw ServiceException.NotFound("not_found", $"purchase {purchaseId} not found");
-            }
-
-            if (response.Resource.Purchase.Status == PurchaseStatus.Paid)
-            {
-                return response.Resource.Purchase;
-            }
-
-            var updated = response.Resource with
-            {
-                Purchase = response.Resource.Purchase with { Status = PurchaseStatus.Paid }
-            };
-            try
-            {
-                var replaced = await container.ReplaceItemAsync(
-                    updated,
-                    SingletonDocumentId,
-                    new PartitionKey(billerId),
-                    new ItemRequestOptions { IfMatchEtag = response.ETag },
-                    cancellationToken);
-                return replaced.Resource.Purchase;
-            }
-            catch (CosmosException exception) when (
-                exception.StatusCode == HttpStatusCode.PreconditionFailed && attempt < 2)
-            {
-            }
-        }
-
-        throw ServiceException.Conflict(
-            "purchase_concurrency",
-            $"purchase {purchaseId} could not be completed due to concurrent updates");
+        var document = await ReadDocumentAsync(billerId, purchaseId, cancellationToken).ConfigureAwait(false);
+        return document?.Purchase;
     }
 
-    public async Task<PurchaseResponse?> FindAsync(
-        string billerId, string purchaseId, CancellationToken cancellationToken = default)
+    public async Task<IReadOnlyList<PurchaseCompletion>> ListPendingCompletionsAsync(
+        int maxCount,
+        CancellationToken cancellationToken = default)
     {
-        var singleton = await ReadSingletonAsync(billerId, cancellationToken);
-        if (singleton?.Purchase.PurchaseId == purchaseId)
+        var query = new QueryDefinition(
+                "SELECT TOP @maxCount VALUE c.completion FROM c WHERE IS_DEFINED(c.completion) AND NOT IS_NULL(c.completion)")
+            .WithParameter("@maxCount", maxCount);
+        using var iterator = container.GetItemQueryIterator<PurchaseCompletion>(query);
+        var completions = new List<PurchaseCompletion>(maxCount);
+
+        while (iterator.HasMoreResults && completions.Count < maxCount)
         {
-            return singleton.Purchase;
+            var page = await iterator.ReadNextAsync(cancellationToken).ConfigureAwait(false);
+            completions.AddRange(page);
         }
+
+        return completions;
+    }
+
+    public async Task<PurchaseResponse?> CompleteAsync(
+        PurchaseCompletion completion,
+        CancellationToken cancellationToken = default)
+    {
+        var document = await ReadDocumentAsync(
+                completion.BillerId,
+                completion.PurchaseId,
+                cancellationToken)
+            .ConfigureAwait(false);
+        if (document is null)
+        {
+            return null;
+        }
+
+        if (document.Purchase.Status == PurchaseStatus.Paid && document.Completion is null)
+        {
+            return document.Purchase;
+        }
+
+        var paid = document.Purchase with { Status = PurchaseStatus.Paid };
+        var completed = document with
+        {
+            Purchase = paid,
+            Completion = null,
+            LastCompletionError = null,
+        };
 
         try
         {
-            var legacy = await container.ReadItemAsync<PurchaseDocument>(
-                purchaseId,
-                new PartitionKey(billerId),
-                cancellationToken: cancellationToken);
-            return legacy.Resource.Purchase;
+            await container.ReplaceItemAsync(
+                    completed,
+                    completed.Id,
+                    new PartitionKey(completed.BillerId),
+                    new ItemRequestOptions { IfMatchEtag = document.ETag },
+                    cancellationToken)
+                .ConfigureAwait(false);
+            return paid;
         }
-        catch (CosmosException exception) when (exception.StatusCode == HttpStatusCode.NotFound)
+        catch (CosmosException exception) when (exception.StatusCode == HttpStatusCode.PreconditionFailed)
         {
-            return null;
+            var current = await ReadDocumentAsync(
+                    completion.BillerId,
+                    completion.PurchaseId,
+                    cancellationToken)
+                .ConfigureAwait(false);
+            return current?.Purchase.Status == PurchaseStatus.Paid ? current.Purchase : null;
+        }
+    }
+
+    public async Task RecordCompletionFailureAsync(
+        PurchaseCompletion completion,
+        string failureReason,
+        CancellationToken cancellationToken = default)
+    {
+        var document = await ReadDocumentAsync(
+                completion.BillerId,
+                completion.PurchaseId,
+                cancellationToken)
+            .ConfigureAwait(false);
+        if (document?.Completion is null)
+        {
+            return;
+        }
+
+        var failed = document with
+        {
+            Completion = document.Completion with { Attempts = document.Completion.Attempts + 1 },
+            LastCompletionError = failureReason,
+        };
+
+        try
+        {
+            await container.ReplaceItemAsync(
+                    failed,
+                    failed.Id,
+                    new PartitionKey(failed.BillerId),
+                    new ItemRequestOptions { IfMatchEtag = document.ETag },
+                    cancellationToken)
+                .ConfigureAwait(false);
+        }
+        catch (CosmosException exception) when (exception.StatusCode == HttpStatusCode.PreconditionFailed)
+        {
         }
     }
 
     public async Task PurgeByBillerAsync(string billerId, CancellationToken cancellationToken = default)
     {
-        var partition = new PartitionKey(billerId);
-        using var iterator = container.GetItemQueryIterator<IdOnly>(
-            new QueryDefinition("SELECT c.id FROM c"),
-            requestOptions: new QueryRequestOptions { PartitionKey = partition });
-
-        while (iterator.HasMoreResults)
+        var purchaseId = PurchaseIdentity.ForBiller(billerId);
+        try
         {
-            var page = await iterator.ReadNextAsync(cancellationToken);
-            foreach (var item in page)
-            {
-                await container.DeleteItemAsync<PurchaseDocument>(
-                    item.Id, partition, cancellationToken: cancellationToken);
-            }
+            await container.DeleteItemAsync<PurchaseDocument>(
+                    purchaseId,
+                    new PartitionKey(billerId),
+                    cancellationToken: cancellationToken)
+                .ConfigureAwait(false);
+        }
+        catch (CosmosException exception) when (exception.StatusCode == HttpStatusCode.NotFound)
+        {
         }
     }
 
-    private sealed record IdOnly([property: JsonPropertyName("id")] string Id);
-
-    private async Task<PurchaseDocument?> ReadSingletonAsync(
+    private async Task<PurchaseDocument?> ReadDocumentAsync(
         string billerId,
+        string purchaseId,
         CancellationToken cancellationToken)
     {
         try
         {
             var response = await container.ReadItemAsync<PurchaseDocument>(
-                SingletonDocumentId,
-                new PartitionKey(billerId),
-                cancellationToken: cancellationToken);
+                    purchaseId,
+                    new PartitionKey(billerId),
+                    cancellationToken: cancellationToken)
+                .ConfigureAwait(false);
             return response.Resource;
         }
         catch (CosmosException exception) when (exception.StatusCode == HttpStatusCode.NotFound)
@@ -167,33 +214,8 @@ public sealed class CosmosPurchaseStore : IPurchaseStore
         }
     }
 
-    private async Task<PurchaseResponse?> FindLegacyAsync(
-        string billerId,
-        CancellationToken cancellationToken)
-    {
-        var query = new QueryDefinition(
-            "SELECT TOP 1 VALUE c.purchase FROM c WHERE c.id != @singleton")
-            .WithParameter("@singleton", SingletonDocumentId);
-        using var iterator = container.GetItemQueryIterator<PurchaseResponse>(
-            query,
-            requestOptions: new QueryRequestOptions
-            {
-                PartitionKey = new PartitionKey(billerId),
-                MaxItemCount = 1
-            });
-        if (!iterator.HasMoreResults)
-        {
-            return null;
-        }
-
-        var page = await iterator.ReadNextAsync(cancellationToken);
-        return page.FirstOrDefault();
-    }
-
-    private static ServiceException AlreadyPurchased(string billerId) =>
-        ServiceException.Conflict(
-            "already_purchased",
-            $"biller {billerId} already purchased or started purchasing the platform");
+    private static string? NormalizeIdempotencyKey(string? idempotencyKey) =>
+        string.IsNullOrWhiteSpace(idempotencyKey) ? null : idempotencyKey.Trim();
 
     private sealed record PurchaseDocument
     {
@@ -203,10 +225,19 @@ public sealed class CosmosPurchaseStore : IPurchaseStore
         [JsonPropertyName("biller_id")]
         public required string BillerId { get; init; }
 
+        [JsonPropertyName("purchase")]
+        public required PurchaseResponse Purchase { get; init; }
+
         [JsonPropertyName("idempotency_key")]
         public string? IdempotencyKey { get; init; }
 
-        [JsonPropertyName("purchase")]
-        public required PurchaseResponse Purchase { get; init; }
+        [JsonPropertyName("completion")]
+        public PurchaseCompletion? Completion { get; init; }
+
+        [JsonPropertyName("last_completion_error")]
+        public string? LastCompletionError { get; init; }
+
+        [JsonPropertyName("_etag")]
+        public string? ETag { get; init; }
     }
 }

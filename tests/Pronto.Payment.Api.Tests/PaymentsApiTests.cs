@@ -21,7 +21,7 @@ public sealed class PaymentsApiTests : IClassFixture<TestingAppFactory>
     };
 
     private readonly FakeInvoiceClient fakeInvoices = new();
-    private readonly FakeBillerAccountClient fakeBillers = new();
+    private readonly FakeBillerAccountClient fakeBillerAccounts = new();
     private readonly HttpClient client;
 
     public PaymentsApiTests(TestingAppFactory factory)
@@ -30,7 +30,7 @@ public sealed class PaymentsApiTests : IClassFixture<TestingAppFactory>
             builder.ConfigureServices(services =>
             {
                 services.Replace(ServiceDescriptor.Singleton<IInvoiceClient>(fakeInvoices));
-                services.Replace(ServiceDescriptor.Singleton<IBillerAccountClient>(fakeBillers));
+                services.Replace(ServiceDescriptor.Singleton<IBillerAccountClient>(fakeBillerAccounts));
             }))
             .CreateClient();
     }
@@ -144,21 +144,24 @@ public sealed class PaymentsApiTests : IClassFixture<TestingAppFactory>
     public async Task PurchaseRetryResumesPendingWorkflowWithSamePurchaseId()
     {
         var billerId = Guid.NewGuid().ToString();
-        fakeBillers.FailNext = true;
+        fakeBillerAccounts.FailuresBeforeSuccess = 1;
         var request = new CreatePurchaseRequest(
             billerId,
             PurchasePlan.Shared,
             "retryable-purchase");
 
         var failed = await client.PostAsJsonAsync("purchases", request, Wire);
-        Assert.Equal(HttpStatusCode.InternalServerError, failed.StatusCode);
+        Assert.Equal(HttpStatusCode.Created, failed.StatusCode);
+        var pending = await failed.Content.ReadFromJsonAsync<PurchaseResponse>(Wire);
+        Assert.Equal(PurchaseStatus.Pending, pending!.Status);
 
         var retried = await client.PostAsJsonAsync("purchases", request, Wire);
         Assert.Equal(HttpStatusCode.OK, retried.StatusCode);
         var purchase = await retried.Content.ReadFromJsonAsync<PurchaseResponse>(Wire);
         Assert.Equal(PurchaseStatus.Paid, purchase!.Status);
-        Assert.Equal(2, fakeBillers.PurchaseIds.Count);
-        Assert.Single(fakeBillers.PurchaseIds.Distinct(StringComparer.Ordinal));
+        Assert.Equal(pending.PurchaseId, purchase.PurchaseId);
+        Assert.Equal(2, fakeBillerAccounts.Attempts.Count);
+        Assert.Single(fakeBillerAccounts.Attempts.Select(attempt => attempt.IdempotencyKey).Distinct(StringComparer.Ordinal));
     }
 
     [Fact]
@@ -178,25 +181,4 @@ public sealed class PaymentsApiTests : IClassFixture<TestingAppFactory>
         Assert.Equal(firstInvoice.Id, payment.InvoiceId);
     }
 
-    private sealed class FakeBillerAccountClient : IBillerAccountClient
-    {
-        public bool FailNext { get; set; }
-        public List<string> PurchaseIds { get; } = [];
-
-        public Task AdvanceToPurchasedAsync(
-            string billerId,
-            string purchaseId,
-            PurchasePlan plan,
-            CancellationToken cancellationToken)
-        {
-            PurchaseIds.Add(purchaseId);
-            if (FailNext)
-            {
-                FailNext = false;
-                throw new HttpRequestException("Biller API unavailable.");
-            }
-
-            return Task.CompletedTask;
-        }
-    }
 }

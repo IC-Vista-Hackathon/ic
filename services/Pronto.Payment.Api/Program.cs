@@ -25,6 +25,7 @@ if (persistence.UseCosmos)
         "cosmos", (services, _) => services.GetRequiredService<CosmosClient>().ReadAccountAsync());
 }
 
+builder.Services.AddPurchaseWorkflow(builder.Configuration);
 builder.Services.RemoveAll<IBillerAccountClient>();
 builder.Services.AddHttpClient<IBillerAccountClient, HttpBillerAccountClient>(client =>
     client.BaseAddress = new Uri(

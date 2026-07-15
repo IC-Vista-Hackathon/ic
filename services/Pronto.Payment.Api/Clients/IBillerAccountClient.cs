@@ -8,15 +8,16 @@ using System.Text.Json;
 namespace Pronto.Payment.Api.Clients;
 
 /// <summary>
-/// Cross-service write: advance BillerAccount.status to purchased (and tier to the plan)
-/// after a Purchase is paid. Design/entities.md documents this handoff.
+/// Advances the BillerAccount owned by Biller Configuration Service after purchase. Implementors
+/// must treat <paramref name="idempotencyKey"/> idempotently because a successful downstream
+/// transition can be retried before the local purchase is marked paid.
 /// </summary>
 public interface IBillerAccountClient
 {
     Task AdvanceToPurchasedAsync(
         string billerId,
-        string purchaseId,
         PurchasePlan plan,
+        string idempotencyKey,
         CancellationToken cancellationToken);
 }
 
@@ -30,12 +31,12 @@ public sealed class HttpBillerAccountClient(HttpClient http) : IBillerAccountCli
 
     public async Task AdvanceToPurchasedAsync(
         string billerId,
-        string purchaseId,
         PurchasePlan plan,
+        string idempotencyKey,
         CancellationToken cancellationToken)
     {
         var request = new AdvanceBillerPurchaseRequest(
-            purchaseId,
+            idempotencyKey,
             plan == PurchasePlan.Isolated ? BillerTier.Isolated : BillerTier.Shared);
         var response = await http.PostAsJsonAsync(
             new Uri($"billers/{billerId}/purchase", UriKind.Relative),
@@ -57,4 +58,15 @@ public sealed class HttpBillerAccountClient(HttpClient http) : IBillerAccountCli
             "biller_purchase_failed",
             "Biller account could not be advanced to purchased.");
     }
+}
+
+public sealed class UnavailableBillerAccountClient : IBillerAccountClient
+{
+    public Task AdvanceToPurchasedAsync(
+        string billerId,
+        PurchasePlan plan,
+        string idempotencyKey,
+        CancellationToken cancellationToken) =>
+        Task.FromException(new InvalidOperationException(
+            "BillerAccount completion client is not configured; purchase remains queued for retry."));
 }
