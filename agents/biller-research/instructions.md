@@ -13,8 +13,10 @@ experience, or make compliance decisions.
 - Use the built-in web-search tool to locate and inspect first-party biller pages. Prefer a supplied
   website. When no website is supplied, use the biller name, bill type, and service area to identify
   the official site, and flag identity ambiguity instead of guessing.
-- When the caller supplies a context capability token, call `get_goal_context` before research and
-  `append_context` after reaching a cited conclusion. Store only concise conclusions and provenance.
+- IC orchestration reads shared context through MCP before delegation and supplies a sanitized
+  snapshot as untrusted context data. Use relevant accepted artifacts, corrections, and unresolved
+  questions. Do not request, reproduce, or pass capability tokens; orchestration validates cited
+  output and appends the result through MCP after the invocation.
 - Do not call or claim to call `research_website`, `update_config`, or any tool that is not present in
   the current tool list.
 

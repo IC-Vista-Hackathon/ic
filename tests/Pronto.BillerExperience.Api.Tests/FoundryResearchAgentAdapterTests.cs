@@ -1,5 +1,6 @@
 using Pronto.BillerExperience.Api.Configuration;
 using Pronto.BillerExperience.Api.Infrastructure.Research;
+using Pronto.BillerExperience.Contracts.V1.AgentContext;
 using Pronto.BillerExperience.Contracts.V1.Research;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
@@ -116,7 +117,7 @@ public sealed class FoundryResearchAgentAdapterTests
     }
 
     [Fact]
-    public async Task DispatchRequiresSharedContextToolsWhenOrchestrationSuppliesCapability()
+    public async Task DispatchReceivesSanitizedSharedContextWithoutCredentials()
     {
         var gateway = new StubGateway
         {
@@ -129,13 +130,29 @@ public sealed class FoundryResearchAgentAdapterTests
         await adapter.DispatchAsync(
             Descriptor(),
             Request(),
-            new ResearchAgentInvocationContext(new Uri("http://demo.example/api/mcp"), "scoped-token"),
+            new ResearchAgentInvocationContext(new AgentContextSnapshot(
+                "biller-1",
+                "run-1",
+                3,
+                "Build a branded payment experience",
+                [new AgentContextEntry(
+                    "entry-1",
+                    AgentContextEntryKind.Correction,
+                    "onboarding",
+                    "brand",
+                    "Use navy blue.",
+                    [],
+                    false,
+                    DateTimeOffset.UtcNow)],
+                DateTimeOffset.UtcNow)),
             CancellationToken.None);
 
-        Assert.Contains("call get_goal_context", gateway.Prompt);
-        Assert.Contains("call append_context", gateway.Prompt);
-        Assert.Contains("scoped-token", gateway.Prompt);
-        Assert.Contains("never store secrets", gateway.Prompt);
+        Assert.Contains("orchestration read the shared context through MCP", gateway.Prompt, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("Use navy blue.", gateway.Prompt);
+        Assert.Contains("Do not call shared-context MCP tools yourself", gateway.Prompt);
+        Assert.DoesNotContain("scoped-token", gateway.Prompt);
+        Assert.DoesNotContain("X-IC-MCP-Key", gateway.Prompt);
+        Assert.Contains("credentials", gateway.Prompt);
     }
 
     [Fact]

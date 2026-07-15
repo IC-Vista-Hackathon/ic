@@ -50,8 +50,8 @@ public sealed class FoundryAgentReconcilerTests
         var research = Assert.Single(desired, item => item.Name == "biller-research");
         Assert.DoesNotContain(desired, item => item.Name == "compliance");
         Assert.Contains("built-in web-search tool", research.Instructions);
-        Assert.Contains("get_goal_context", research.Instructions);
-        Assert.Contains("append_context", research.Instructions);
+        Assert.Contains("orchestration reads shared context through MCP", research.Instructions);
+        Assert.Contains("Do not request, reproduce, or pass capability tokens", research.Instructions);
         Assert.Contains("Return only one JSON object", research.Instructions);
         Assert.Contains("Do not call or claim to call `research_website`", research.Instructions);
     }

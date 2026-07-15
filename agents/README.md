@@ -7,9 +7,11 @@ See [../design/services.md](../design/services.md) for the roster and boundaries
 
 Each agent's subdirectory holds `instructions.md` (its system prompt) and `tools.json` (its
 domain-specific allowlist, per [../design/contracts.md](../design/contracts.md)'s "Agent tools"
-table). Remote agents also receive the shared `get_goal_context` and `append_context` MCP tools
-through their Foundry project connection; orchestration issues a short-lived biller/run/agent
-capability for each invocation. Two AI Foundry models are deployed: `gpt-5.4` for agents that plan/decide or touch
+table). Remote agents retain the shared `get_goal_context` and `append_context` MCP connection for
+the approved tool inventory, while orchestration owns runtime context access: it issues a
+short-lived biller/run/agent capability, reads through MCP, delegates a sanitized snapshot, then
+appends validated output through MCP. Capability tokens never enter model-visible prompts. Two AI
+Foundry models are deployed: `gpt-5.4` for agents that plan/decide or touch
 money/risk, `gpt-5.4-mini` for narrower single-purpose reads.
 
 Agents do bounded work: perceive the supplied goal context, reason over trade-offs, invoke only
