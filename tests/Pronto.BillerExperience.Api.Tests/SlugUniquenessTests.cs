@@ -39,6 +39,34 @@ public sealed class SlugUniquenessTests
     }
 
     [Fact]
+    public async Task MaxLengthSlugCollisionStaysWithin63Characters()
+    {
+        var service = CreateService();
+        var maxLengthSlug = new string('a', 63);
+
+        var first = await service.CreateAsync(
+            Request() with { Slug = maxLengthSlug }, CancellationToken.None);
+        var second = await service.CreateAsync(
+            Request() with { Slug = maxLengthSlug }, CancellationToken.None);
+
+        Assert.Equal(maxLengthSlug, first.Biller.Slug);
+        Assert.Equal(new string('a', 61) + "-2", second.Biller.Slug);
+    }
+
+    [Fact]
+    public async Task TruncationNeverLeavesDoubleHyphenBeforeSuffix()
+    {
+        var service = CreateService();
+        var hyphenAtBoundary = new string('a', 60) + "-bc"; // 63 chars; cut lands on the hyphen
+
+        await service.CreateAsync(Request() with { Slug = hyphenAtBoundary }, CancellationToken.None);
+        var second = await service.CreateAsync(
+            Request() with { Slug = hyphenAtBoundary }, CancellationToken.None);
+
+        Assert.Equal(new string('a', 60) + "-2", second.Biller.Slug);
+    }
+
+    [Fact]
     public async Task UnrepairableSlugStillRejected()
     {
         var service = CreateService();

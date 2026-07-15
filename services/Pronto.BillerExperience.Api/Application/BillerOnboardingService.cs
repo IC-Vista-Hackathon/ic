@@ -288,10 +288,31 @@ public sealed partial class BillerOnboardingService(
         var candidate = requested;
         for (var suffix = 2; await repository.SlugExistsAsync(candidate, cancellationToken); suffix++)
         {
-            candidate = $"{requested}-{suffix}";
+            candidate = SuffixSlug(requested, suffix);
+            if (!SlugRegex().IsMatch(candidate))
+            {
+                LogValidationError(logger, null, "slug", "Slug cannot be auto-deduplicated.");
+                throw new ArgumentException(
+                    $"Slug '{requested}' cannot be auto-deduplicated within the 63-character limit.");
+            }
         }
 
         return candidate;
+    }
+
+    /// <summary>
+    /// Appends -2, -3, … while keeping the result DNS-safe: the base is truncated so the
+    /// total stays within 63 characters, and a hyphen exposed by the cut is trimmed so the
+    /// suffix never produces a double hyphen or a dangling one.
+    /// </summary>
+    private static string SuffixSlug(string baseSlug, int suffix)
+    {
+        var tail = $"-{suffix}";
+        var maxBaseLength = 63 - tail.Length;
+        var trimmedBase = baseSlug.Length <= maxBaseLength
+            ? baseSlug
+            : baseSlug[..maxBaseLength].TrimEnd('-');
+        return $"{trimmedBase}{tail}";
     }
 
     private async ValueTask<BillerRecord> GetRequiredBillerAsync(string billerId, CancellationToken cancellationToken) =>
