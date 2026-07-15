@@ -39,7 +39,7 @@ public sealed class BillingDiscoveryEngineTests
             "Home, auto, and life premiums must all be paid in full; no installments.").State;
         Assert.All(state.Profile.Categories, category =>
             Assert.Equal(SettlementMode.PayInFull, category.PaymentTerms?.Mode));
-        Assert.False(state.Progress.IsComplete);
+        Assert.True(state.Progress.IsComplete);
         Assert.Equal(BillingDiscoveryDimension.Confirmation, state.CurrentQuestion?.Dimension);
 
         state = _engine.ApplyAnswer("diego", state.Profile, "Yes, that is correct.").State;
@@ -153,7 +153,7 @@ public sealed class BillingDiscoveryEngineTests
     }
 
     [Fact]
-    public async Task ProductionEnabledServiceBlocksApprovalUntilProfileIsConfirmed()
+    public async Task ProductionEnabledServiceAppliesAssumptionsInsteadOfBlockingApproval()
     {
         var repository = new InMemoryBillerExperienceRepository();
         var generator = new DeterministicExperienceDraftGenerator(NullLogger<DeterministicExperienceDraftGenerator>.Instance);
@@ -162,11 +162,48 @@ public sealed class BillingDiscoveryEngineTests
         var created = await service.CreateAsync(
             new CreateBillerRequest("Association", "association", "Other", "10001"), CancellationToken.None);
 
-        var blocked = await Assert.ThrowsAsync<ExperienceValidationException>(() => service.ApproveAsync(
-            created.Biller.BillerId, new ApproveExperienceRequest(created.Draft.Revision, "tester"), CancellationToken.None).AsTask());
+        var approved = await service.ApproveAsync(
+            created.Biller.BillerId, new ApproveExperienceRequest(created.Draft.Revision, "tester"), CancellationToken.None);
 
-        Assert.Contains(blocked.Findings, finding => finding.Code == "BILLING_DISCOVERY_INCOMPLETE");
-        Assert.Equal("billing.categories", created.Session.CurrentQuestion?.QuestionId);
+        Assert.Equal(ExperienceRevisionState.Approved, approved.State);
+        var session = await service.GetSessionAsync(created.Biller.BillerId, CancellationToken.None);
+        Assert.True(session.DiscoveryProgress?.IsComplete);
+        Assert.NotEmpty(session.BillingProfile?.Assumptions ?? []);
+    }
+
+    [Fact]
+    public void MissingValuesBecomeExplicitConservativeAssumptions()
+    {
+        var turn = _engine.ApplyAssumptions("utility", new BillingProfile("1.0",
+        [
+            new BillingCategory("water", "Water Usage")
+        ]), "Utilities");
+
+        Assert.True(turn.State.Progress.IsComplete);
+        Assert.Equal(BillingDiscoveryDimension.Confirmation, turn.State.CurrentQuestion?.Dimension);
+        var category = Assert.Single(turn.State.Profile.Categories);
+        Assert.Equal(BillingCadenceKind.Monthly, category.Cadence?.Kind);
+        Assert.Equal("past_due", Assert.Single(category.StateRules!).ResultingState);
+        Assert.Equal(SettlementMode.PayInFull, category.PaymentTerms?.Mode);
+        Assert.Equal(3, turn.AddedAssumptions.Count);
+        Assert.All(turn.AddedAssumptions, assumption => Assert.Contains("Water Usage", assumption.Description));
+        Assert.Contains("You can publish now", turn.Reply);
+    }
+
+    [Fact]
+    public void CategoryOnlyUtilitySelectionIsPreservedBeforeAssumptionsAreApplied()
+    {
+        var selected = _engine.ApplyAnswer("utility", null, "Electric, water, gas, and sewer").State.Profile;
+        var turn = _engine.ApplyAssumptions("utility", selected, "Utilities");
+
+        Assert.Equal(["Electric", "Water", "Gas", "Sewer"],
+            turn.State.Profile.Categories.Select(category => category.DisplayName));
+        Assert.All(turn.State.Profile.Categories, category =>
+        {
+            Assert.Equal(BillingCadenceKind.Monthly, category.Cadence?.Kind);
+            Assert.NotNull(category.PaymentTerms);
+            Assert.NotEmpty(category.StateRules!);
+        });
     }
 
     [Fact]
