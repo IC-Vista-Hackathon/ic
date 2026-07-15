@@ -378,7 +378,7 @@ function matchScenario(text: string): ScenarioResult {
   if (/(delinquent|delinquency|past due|past-due|overdue|late)/.test(t)) {
     const daysMatch = t.match(/(\d+)\s*(?:day|days)/);
     const days = daysMatch ? Number(daysMatch[1]) : 45;
-    const mentionsLateFee = /(late fee|late charge|penalty|fee)/.test(t);
+    const mentionsLateFee = /(late fee|late charge|late-fee|penalty)/.test(t);
     const baseBalance = 342.18;
     const lateFee = 25.00;
     const lines = [`Account is ${days} days past due.`];
