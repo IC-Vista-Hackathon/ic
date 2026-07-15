@@ -10,9 +10,9 @@ public sealed class ExecutionAgentContractTests
     {
         var root = FindRepositoryRoot();
         var instructions = File.ReadAllText(
-            Path.Combine(root, "agents", "execution", "instructions.md"));
+            Path.Join(root, "agents", "execution", "instructions.md"));
         using var tools = JsonDocument.Parse(
-            File.ReadAllText(Path.Combine(root, "agents", "execution", "tools.json")));
+            File.ReadAllText(Path.Join(root, "agents", "execution", "tools.json")));
         var payInvoice = tools.RootElement
             .GetProperty("tools")
             .EnumerateArray()
@@ -32,7 +32,7 @@ public sealed class ExecutionAgentContractTests
     private static string FindRepositoryRoot()
     {
         var directory = new DirectoryInfo(AppContext.BaseDirectory);
-        while (directory is not null && !Directory.Exists(Path.Combine(directory.FullName, "agents")))
+        while (directory is not null && !Directory.Exists(Path.Join(directory.FullName, "agents")))
             directory = directory.Parent;
         return directory?.FullName
             ?? throw new DirectoryNotFoundException("Repository root was not found.");

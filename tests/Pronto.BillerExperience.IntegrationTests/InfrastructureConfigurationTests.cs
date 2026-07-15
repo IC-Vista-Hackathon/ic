@@ -8,7 +8,7 @@ public sealed class InfrastructureConfigurationTests
     public void ProductionManifestsContainNoTemplatePlaceholders()
     {
         var root = FindRepositoryRoot();
-        var overlay = Path.Combine(root, "deploy", "kubernetes", "overlays", "prod");
+        var overlay = Path.Join(root, "deploy", "kubernetes", "overlays", "prod");
 
         Assert.All(
             Directory.GetFiles(overlay, "*.yaml", SearchOption.AllDirectories),
@@ -21,7 +21,7 @@ public sealed class InfrastructureConfigurationTests
         var root = FindRepositoryRoot();
         foreach (var name in new[] { "deploy-nonprod.yml", "deploy-prod.yml" })
         {
-            var workflow = File.ReadAllText(Path.Combine(root, ".github", "workflows", name));
+            var workflow = File.ReadAllText(Path.Join(root, ".github", "workflows", name));
             Assert.DoesNotContain("--admin", workflow, StringComparison.Ordinal);
             Assert.Contains("aadProfile.enableAzureRbac", workflow, StringComparison.Ordinal);
         }
@@ -32,7 +32,7 @@ public sealed class InfrastructureConfigurationTests
     {
         var root = FindRepositoryRoot();
         var workflow = File.ReadAllText(
-            Path.Combine(root, ".github", "workflows", "deploy-nonprod.yml"));
+            Path.Join(root, ".github", "workflows", "deploy-nonprod.yml"));
 
         Assert.Contains("pull_request_target:", workflow, StringComparison.Ordinal);
         Assert.Contains("types: [labeled]", workflow, StringComparison.Ordinal);
@@ -46,8 +46,8 @@ public sealed class InfrastructureConfigurationTests
         var root = FindRepositoryRoot();
         foreach (var path in new[]
                  {
-                     Path.Combine(root, "infra", "bicep", "main.bicep"),
-                     Path.Combine(root, "infra", "bicep", "modules", "aiFoundry.bicep"),
+                     Path.Join(root, "infra", "bicep", "main.bicep"),
+                     Path.Join(root, "infra", "bicep", "modules", "aiFoundry.bicep"),
                  })
         {
             var bicep = File.ReadAllText(path);
@@ -58,7 +58,7 @@ public sealed class InfrastructureConfigurationTests
         }
 
         var prodEnvironment = File.ReadAllText(
-            Path.Combine(
+            Path.Join(
                 root,
                 "deploy",
                 "kubernetes",
@@ -83,16 +83,16 @@ public sealed class InfrastructureConfigurationTests
     public void SecurityScansAreBlockingOrExplicitlyAdvisory()
     {
         var root = FindRepositoryRoot();
-        var workflows = Path.Combine(root, ".github", "workflows");
+        var workflows = Path.Join(root, ".github", "workflows");
         Assert.DoesNotContain(
             "continue-on-error: true",
-            File.ReadAllText(Path.Combine(workflows, "codeql.yml")),
+            File.ReadAllText(Path.Join(workflows, "codeql.yml")),
             StringComparison.Ordinal);
         Assert.DoesNotContain(
             "continue-on-error: true",
-            File.ReadAllText(Path.Combine(workflows, "dependency-review.yml")),
+            File.ReadAllText(Path.Join(workflows, "dependency-review.yml")),
             StringComparison.Ordinal);
-        var trivy = File.ReadAllText(Path.Combine(workflows, "scan.yml"));
+        var trivy = File.ReadAllText(Path.Join(workflows, "scan.yml"));
         Assert.Contains("name: Advisory security scan", trivy, StringComparison.Ordinal);
         Assert.Contains("name: Advisory Trivy filesystem & config", trivy, StringComparison.Ordinal);
         Assert.Contains(
@@ -105,7 +105,7 @@ public sealed class InfrastructureConfigurationTests
     private static string FindRepositoryRoot()
     {
         var directory = new DirectoryInfo(AppContext.BaseDirectory);
-        while (directory is not null && !Directory.Exists(Path.Combine(directory.FullName, "deploy")))
+        while (directory is not null && !Directory.Exists(Path.Join(directory.FullName, "deploy")))
             directory = directory.Parent;
         return directory?.FullName
             ?? throw new DirectoryNotFoundException("Repository root was not found.");
