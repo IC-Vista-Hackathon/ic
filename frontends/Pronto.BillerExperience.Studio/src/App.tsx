@@ -108,6 +108,10 @@ interface State {
   modal: 'signup' | 'checkout' | null;
   purchased: boolean;
   accountCreated: boolean;
+  accountEmail: string | null;
+  signupEmail: string;
+  signupPassword: string;
+  signupError: string | null;
   lobs: Lob[];
   editingLobId: string | null;
   pendingLob: boolean;
@@ -206,6 +210,8 @@ const STATE_OPTIONS = ['California', 'Colorado', 'Connecticut', 'Florida', 'Illi
 function hashString(str: string): number { let h = 0; for (let i = 0; i < str.length; i++) { h = (h * 31 + str.charCodeAt(i)) >>> 0; } return h; }
 function paletteFromString(str: string): Palette { return PALETTES[hashString(str || 'default') % PALETTES.length]; }
 function initialsFrom(name: string): string { return (name || '').trim().split(/\s+/).slice(0, 2).map((w) => w[0]?.toUpperCase() || '').join('') || 'YB'; }
+function initialsFromEmail(email: string): string { const local = (email || '').trim().split('@')[0] || ''; const parts = local.split(/[^a-zA-Z0-9]+/).filter(Boolean); const initials = parts.slice(0, 2).map((p) => p[0]?.toUpperCase() || '').join(''); return initials || 'YB'; }
+const MIN_PASSWORD_LENGTH = 8;
 function domainFromWebsite(url: string): string { if (!url) return ''; return url.trim().toLowerCase().replace(/^https?:\/\//, '').replace(/^www\./, '').split('/')[0]; }
 
 function extractColorsFromImage(img: HTMLImageElement): string[] {
@@ -323,7 +329,7 @@ const INITIAL_STATE: State = {
   brand: null, compliance: null,
   payerStep: 0, amount: 128.42, methodType: 'card', autopayOptIn: false, paperlessOptIn: false, processing: false,
   analyzeStage: 0,
-  modal: null, purchased: false, accountCreated: false, lobs: [], editingLobId: null, pendingLob: false,
+  modal: null, purchased: false, accountCreated: false, accountEmail: null, signupEmail: '', signupPassword: '', signupError: null, lobs: [], editingLobId: null, pendingLob: false,
   viewingStatementId: null,
   agreedToCompliance: false, docs: [], newDocName: '', expandedCompliance: [],
   logoDataUrl: null, logoFetchOk: false, extractedColors: null,
@@ -720,9 +726,11 @@ export function App() {
 
   const goPricing = () => patch({ screen: 'pricing', pendingLob: true });
   const backToPreviewOrDashboard = () => patch((st) => ({ screen: st.accountCreated ? 'dashboard' : 'preview' }));
-  const openSignup = () => patch({ modal: 'signup' });
+  const openSignup = () => patch({ modal: 'signup', signupError: null });
   const openCheckout = () => { trackEvent('studio.purchase_started', { biller_id: s.backendBillerId ?? undefined }); patch({ modal: 'checkout' }); };
   const closeModal = () => patch({ modal: null });
+  const setSignupEmail = (e: React.ChangeEvent<HTMLInputElement>) => patch({ signupEmail: e.target.value, signupError: null });
+  const setSignupPassword = (e: React.ChangeEvent<HTMLInputElement>) => patch({ signupPassword: e.target.value, signupError: null });
 
   const saveLob = (published: boolean) => patch((st) => {
     const lob: Lob = {
@@ -736,7 +744,15 @@ export function App() {
     const lobs = exists ? st.lobs.map((l) => (l.id === lob.id ? lob : l)) : [...st.lobs, lob];
     return { lobs, accountCreated: true, purchased: st.purchased || published, screen: 'dashboard', modal: null, editingLobId: null, pendingLob: false };
   });
-  const submitSignup = (e: FormEvent) => { e.preventDefault(); if (s.pendingLob) saveLob(false); else patch({ modal: null }); };
+  const submitSignup = (e: FormEvent) => {
+    e.preventDefault();
+    const email = s.signupEmail.trim();
+    if (!email) { patch({ signupError: 'Enter your work email.' }); return; }
+    if (!s.signupPassword) { patch({ signupError: 'Enter a password.' }); return; }
+    if (s.signupPassword.length < MIN_PASSWORD_LENGTH) { patch({ signupError: `Password must be at least ${MIN_PASSWORD_LENGTH} characters.` }); return; }
+    patch({ accountEmail: email, accountCreated: true, signupError: null, signupPassword: '' });
+    if (s.pendingLob) saveLob(false); else patch({ modal: null });
+  };
   const submitCheckout = async (e: FormEvent) => {
     e.preventDefault();
     if (s.publishing) return;
@@ -912,6 +928,7 @@ export function App() {
   const previewMaxWidth = s.previewDevice === 'mobile' ? '390px' : '1000px';
   const scenarioGridCols = s.previewDevice === 'mobile' ? 'repeat(2,1fr)' : 'repeat(4,1fr)';
   const siteSlug = (s.bizName || 'yourbusiness').toLowerCase().replace(/[^a-z0-9]+/g, '') || 'yourbusiness';
+  const accountEmail = s.accountEmail || `demo@${siteSlug}.com`;
 
   const guestCheckoutAllowedLabel = s.guestCheckoutAllowed ? 'Allowed' : 'Not allowed';
   const offerAutopayLabel = s.offerAutopay ? 'Yes' : 'No';
@@ -1885,8 +1902,8 @@ export function App() {
           </nav>
           <main style={css('flex:1;padding:var(--invoicecloud-spacing-xl);max-width:1250px')}>
             <div style={css('display:flex;justify-content:space-between;align-items:center;margin-bottom:var(--invoicecloud-spacing-m)')}>
-              <div><h2 style={css('margin-bottom:2px')}>Welcome back</h2><div style={css('font-size:13px;color:var(--invoicecloud-utility-neutral-60)')}>demo@{siteSlug}.com</div></div>
-              <span style={css('width:36px;height:36px;border-radius:50%;background:var(--invoicecloud-primary);color:#fff;display:flex;align-items:center;justify-content:center;font-weight:700;font-size:13px')}>DM</span>
+              <div><h2 style={css('margin-bottom:2px')}>Welcome back</h2><div style={css('font-size:13px;color:var(--invoicecloud-utility-neutral-60)')}>{accountEmail}</div></div>
+              <span style={css('width:36px;height:36px;border-radius:50%;background:var(--invoicecloud-primary);color:#fff;display:flex;align-items:center;justify-content:center;font-weight:700;font-size:13px')}>{initialsFromEmail(accountEmail)}</span>
             </div>
             {!s.purchased && (
               <div style={css('display:flex;align-items:center;justify-content:space-between;background:var(--invoicecloud-intent-info-background);border:1px solid var(--invoicecloud-intent-info-border);border-radius:10px;padding:var(--invoicecloud-spacing-s) var(--invoicecloud-spacing-m);margin-bottom:var(--invoicecloud-spacing-l)')}>
@@ -1937,9 +1954,12 @@ export function App() {
               <button type="button" onClick={closeModal} aria-label="Close" style={css('background:none;border:none;cursor:pointer;padding:4px')}><img src={asset('assets/icons/MenuClose.svg')} alt="" style={css('width:14px;height:14px')} /></button>
             </div>
             <label style={css('display:block;font-size:13px;font-weight:500;margin-bottom:4px')}>Work email</label>
-            <input type="email" required placeholder={`you@${siteSlug}.com`} style={css('width:100%;padding:12px 14px;border-radius:4px;border:1px solid var(--invoicecloud-surface-default-border);font-size:15px;margin-bottom:var(--invoicecloud-spacing-s)')} />
+            <input type="email" required value={s.signupEmail} onChange={setSignupEmail} placeholder={`you@${siteSlug}.com`} style={css('width:100%;padding:12px 14px;border-radius:4px;border:1px solid var(--invoicecloud-surface-default-border);font-size:15px;margin-bottom:var(--invoicecloud-spacing-s)')} />
             <label style={css('display:block;font-size:13px;font-weight:500;margin-bottom:4px')}>Password</label>
-            <input type="password" required placeholder="Create a password" style={css('width:100%;padding:12px 14px;border-radius:4px;border:1px solid var(--invoicecloud-surface-default-border);font-size:15px;margin-bottom:var(--invoicecloud-spacing-l)')} />
+            <input type="password" value={s.signupPassword} onChange={setSignupPassword} aria-invalid={s.signupError ? true : undefined} placeholder={`At least ${MIN_PASSWORD_LENGTH} characters`} style={css(`width:100%;padding:12px 14px;border-radius:4px;border:1px solid ${s.signupError ? 'var(--invoicecloud-intent-error-border)' : 'var(--invoicecloud-surface-default-border)'};font-size:15px;margin-bottom:${s.signupError ? 'var(--invoicecloud-spacing-s)' : 'var(--invoicecloud-spacing-l)'}`)} />
+            {s.signupError && (
+              <div role="alert" style={css('background:var(--invoicecloud-intent-error-background);border:1px solid var(--invoicecloud-intent-error-border);color:var(--invoicecloud-intent-error);border-radius:8px;padding:10px 12px;font-size:13px;margin-bottom:var(--invoicecloud-spacing-l)')}>{s.signupError}</div>
+            )}
             <button type="submit" style={css('width:100%;background:var(--invoicecloud-primary);color:#fff;border:none;border-radius:10px;padding:14px;font-size:15px;font-weight:700;cursor:pointer')}>Create Account &amp; Save Draft</button>
           </form>
         </div>
