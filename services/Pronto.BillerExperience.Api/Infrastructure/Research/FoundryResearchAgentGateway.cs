@@ -2,6 +2,7 @@ using System.Diagnostics;
 using Azure.AI.Extensions.OpenAI;
 using Azure.AI.Projects;
 using Azure.Core;
+using System.ClientModel;
 using Pronto.BillerExperience.Api.Configuration;
 using Microsoft.Extensions.Options;
 using OpenAI.Responses;
@@ -30,6 +31,7 @@ public sealed partial class FoundryAgentServiceGateway : IFoundryAgentServiceGat
 {
     private readonly AIProjectClient _project;
     private readonly ILogger<FoundryAgentServiceGateway> _logger;
+    private readonly ResearchOptions _options;
 
     public FoundryAgentServiceGateway(
         IOptions<BillerExperienceOptions> options,
@@ -45,6 +47,7 @@ public sealed partial class FoundryAgentServiceGateway : IFoundryAgentServiceGat
 
         _project = new AIProjectClient(endpoint, credential);
         _logger = logger;
+        _options = research;
     }
 
     public async Task<IReadOnlyList<FoundryAgentDefinition>> ListAgentsAsync(CancellationToken cancellationToken)
@@ -94,37 +97,29 @@ public sealed partial class FoundryAgentServiceGateway : IFoundryAgentServiceGat
         LogInvocationStarted(_logger, agentId, Activity.Current?.TraceId.ToString());
         try
         {
-            var responses = _project.ProjectOpenAIClient
-                .GetProjectResponsesClientForAgent(new AgentReference(agentId));
-            var response = (await responses.CreateResponseAsync(
-                prompt,
-                previousResponseId: null,
-                cancellationToken)).Value;
-            var texts = new List<string>();
-            var citations = new List<FoundryCitation>();
-            foreach (var message in response.OutputItems.OfType<MessageResponseItem>())
+            var maximumAttempts = Math.Clamp(_options.FoundryMaxAttempts, 1, 5);
+            for (var attempt = 1; attempt <= maximumAttempts; attempt++)
             {
-                foreach (var content in message.Content)
+                activity?.SetTag("gen_ai.request.attempt", attempt);
+                try
                 {
-                    if (!string.IsNullOrWhiteSpace(content.Text)) texts.Add(content.Text);
-                    foreach (var citation in content.OutputTextAnnotations.OfType<UriCitationMessageAnnotation>())
-                    {
-                        citations.Add(new FoundryCitation(citation.Uri, citation.Title));
-                    }
+                    var output = await InvokeOnceAsync(agentId, prompt, cancellationToken);
+                    activity?.SetStatus(ActivityStatusCode.Ok);
+                    LogInvocationCompleted(_logger, agentId, output.Citations.Count,
+                        Stopwatch.GetElapsedTime(startedAt).TotalMilliseconds, Activity.Current?.TraceId.ToString());
+                    return output;
+                }
+                catch (ClientResultException exception) when (
+                    IsTransient(exception.Status) && attempt < maximumAttempts)
+                {
+                    var delay = RetryDelay(exception, attempt);
+                    LogInvocationRetry(_logger, agentId, exception.Status, attempt, maximumAttempts,
+                        delay.TotalMilliseconds, Activity.Current?.TraceId.ToString());
+                    await Task.Delay(delay, cancellationToken);
                 }
             }
 
-            if (texts.Count == 0)
-            {
-                throw new FoundryResearchException("research.foundry_empty_output", "Foundry agent returned no text output.", false);
-            }
-
-            activity?.SetStatus(ActivityStatusCode.Ok);
-            LogInvocationCompleted(_logger, agentId, citations.Count,
-                Stopwatch.GetElapsedTime(startedAt).TotalMilliseconds, Activity.Current?.TraceId.ToString());
-            return new FoundryAgentOutput(
-                string.Join(Environment.NewLine, texts),
-                citations.DistinctBy(citation => citation.Url).ToArray());
+            throw new InvalidOperationException("Foundry invocation exhausted its attempts without a result.");
         }
         catch (FoundryResearchException exception)
         {
@@ -132,12 +127,83 @@ public sealed partial class FoundryAgentServiceGateway : IFoundryAgentServiceGat
             LogInvocationFailure(_logger, agentId, exception.Code, Activity.Current?.TraceId.ToString(), exception);
             throw;
         }
+        catch (ClientResultException exception) when (exception.Status == 429)
+        {
+            const string errorCode = "research.foundry_rate_limited";
+            activity?.SetStatus(ActivityStatusCode.Error, errorCode);
+            LogInvocationFailure(_logger, agentId, errorCode, Activity.Current?.TraceId.ToString(), exception);
+            throw new FoundryResearchException(errorCode, "Foundry model capacity is temporarily rate-limited.", true, exception);
+        }
         catch (Exception exception) when (exception is not OperationCanceledException and not FoundryResearchException)
         {
             activity?.SetStatus(ActivityStatusCode.Error, "research.foundry_request_failed");
             LogInvocationFailure(_logger, agentId, "research.foundry_request_failed", Activity.Current?.TraceId.ToString(), exception);
             throw new FoundryResearchException("research.foundry_request_failed", "Foundry request failed.", true, exception);
         }
+    }
+
+    private async Task<FoundryAgentOutput> InvokeOnceAsync(
+        string agentId,
+        string prompt,
+        CancellationToken cancellationToken)
+    {
+        var responses = _project.ProjectOpenAIClient
+            .GetProjectResponsesClientForAgent(new AgentReference(agentId));
+        var response = (await responses.CreateResponseAsync(
+            prompt,
+            previousResponseId: null,
+            cancellationToken)).Value;
+        var texts = new List<string>();
+        var citations = new List<FoundryCitation>();
+        foreach (var message in response.OutputItems.OfType<MessageResponseItem>())
+        {
+            foreach (var content in message.Content)
+            {
+                if (!string.IsNullOrWhiteSpace(content.Text)) texts.Add(content.Text);
+                foreach (var citation in content.OutputTextAnnotations.OfType<UriCitationMessageAnnotation>())
+                {
+                    citations.Add(new FoundryCitation(citation.Uri, citation.Title));
+                }
+            }
+        }
+
+        if (texts.Count == 0)
+        {
+            throw new FoundryResearchException("research.foundry_empty_output", "Foundry agent returned no text output.", false);
+        }
+
+        return new FoundryAgentOutput(
+            string.Join(Environment.NewLine, texts),
+            citations.DistinctBy(citation => citation.Url).ToArray());
+    }
+
+    private static bool IsTransient(int status) => status == 429 || status >= 500;
+
+    private TimeSpan RetryDelay(ClientResultException exception, int attempt)
+    {
+        var baseDelay = Math.Clamp(_options.FoundryRetryBaseDelayMilliseconds, 100, 5_000);
+        const int maximumDelayMilliseconds = 10_000;
+        var fallback = Math.Min(baseDelay * Math.Pow(2, attempt - 1), maximumDelayMilliseconds);
+        var headers = exception.GetRawResponse()?.Headers;
+        if (headers is not null)
+        {
+            if ((headers.TryGetValue("retry-after-ms", out var milliseconds) ||
+                 headers.TryGetValue("x-ms-retry-after-ms", out milliseconds)) &&
+                double.TryParse(milliseconds, System.Globalization.NumberStyles.Number,
+                    System.Globalization.CultureInfo.InvariantCulture, out var parsedMilliseconds))
+            {
+                return TimeSpan.FromMilliseconds(Math.Clamp(parsedMilliseconds, baseDelay, maximumDelayMilliseconds));
+            }
+
+            if (headers.TryGetValue("retry-after", out var seconds) &&
+                double.TryParse(seconds, System.Globalization.NumberStyles.Number,
+                    System.Globalization.CultureInfo.InvariantCulture, out var parsedSeconds))
+            {
+                return TimeSpan.FromMilliseconds(Math.Clamp(parsedSeconds * 1_000, baseDelay, maximumDelayMilliseconds));
+            }
+        }
+
+        return TimeSpan.FromMilliseconds(fallback);
     }
 
     [LoggerMessage(2669, LogLevel.Error, "Foundry agent inventory failed; trace {TraceId}")]
@@ -157,6 +223,16 @@ public sealed partial class FoundryAgentServiceGateway : IFoundryAgentServiceGat
 
     [LoggerMessage(2676, LogLevel.Information, "Foundry agent {AgentId} completed with {CitationCount} citations in {DurationMs} ms; trace {TraceId}")]
     private static partial void LogInvocationCompleted(ILogger logger, string agentId, int citationCount, double durationMs, string? traceId);
+
+    [LoggerMessage(2677, LogLevel.Warning, "Foundry agent {AgentId} returned HTTP {StatusCode} on attempt {Attempt}/{MaximumAttempts}; retrying in {DelayMs} ms; trace {TraceId}")]
+    private static partial void LogInvocationRetry(
+        ILogger logger,
+        string agentId,
+        int statusCode,
+        int attempt,
+        int maximumAttempts,
+        double delayMs,
+        string? traceId);
 
 }
 
