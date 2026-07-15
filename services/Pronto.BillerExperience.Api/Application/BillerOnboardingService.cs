@@ -243,7 +243,9 @@ public sealed partial class BillerOnboardingService(
                 discoveryTurn = billingDiscovery.ApplyAnswer(billerId, run.BillingProfile, request.Message.Trim());
             }
         }
-        var effectiveBillingProfile = discoveryTurn?.State.Profile ?? run.BillingProfile ?? BillingProfile.Empty;
+        var sourceBillingProfile = discoveryTurn?.State.Profile ?? run.BillingProfile ?? BillingProfile.Empty;
+        var assumptionTurn = billingDiscovery?.ApplyAssumptions(billerId, sourceBillingProfile, biller.BillType);
+        var effectiveBillingProfile = assumptionTurn?.State.Profile ?? sourceBillingProfile;
         activity?.SetTag("ic.billing.category_count", effectiveBillingProfile.Categories.Count);
         activity?.SetTag("ic.billing.discovery_complete", billingDiscovery?.Inspect(effectiveBillingProfile).Progress.IsComplete ?? false);
         var orchestrationContext = new OrchestrationContext(
@@ -264,11 +266,15 @@ public sealed partial class BillerOnboardingService(
             new BillerExperienceChatWorkflowInput(biller, experience, messages, effectiveBillingProfile, eventSink),
             orchestrationContext,
             cancellationToken);
-        var boundedReply = discoveryTurn is null
+        var discoveryReply = assumptionTurn?.AddedAssumptions.Count > 0
+            ? assumptionTurn.Reply
+            : discoveryTurn?.Reply;
+        var boundedReply = string.IsNullOrWhiteSpace(discoveryReply)
             ? generated.Reply
-            : $"{generated.Reply.Trim()}\n\n{discoveryTurn.Reply}";
+            : $"{generated.Reply.Trim()}\n\n{discoveryReply}";
         var assistantMessage = new OnboardingChatMessage("assistant", boundedReply, DateTimeOffset.UtcNow);
-        var missingFields = discoveryTurn?.State.MissingFields ?? generated.MissingFields;
+        var effectiveDiscovery = billingDiscovery?.Inspect(effectiveBillingProfile);
+        var missingFields = effectiveDiscovery?.MissingFields ?? generated.MissingFields;
         var nextState = missingFields.Count == 0
             ? OnboardingSessionState.DraftReady
             : OnboardingSessionState.CollectingInformation;
@@ -297,9 +303,9 @@ public sealed partial class BillerOnboardingService(
 
         var savedExperience = await repository.SaveExperienceAsync(updatedExperience, experience.ETag, cancellationToken);
         var savedRun = await repository.SaveRunAsync(updatedRun, latestRun.ETag, cancellationToken);
-        if (discoveryTurn?.AnswerAccepted == true && agentContextService is not null)
+        if ((discoveryTurn?.AnswerAccepted == true || assumptionTurn?.AddedAssumptions.Count > 0) && agentContextService is not null)
         {
-            await ShareBillingProfileAsync(billerId, savedRun.Id, discoveryTurn.State.Profile, cancellationToken);
+            await ShareBillingProfileAsync(billerId, savedRun.Id, effectiveBillingProfile, cancellationToken);
         }
         BillerExperienceTelemetry.ChatTurns.Add(1, new KeyValuePair<string, object?>("provider", draftGenerator.Provider));
         RecordTransition(run.State, nextState);
@@ -417,17 +423,18 @@ public sealed partial class BillerOnboardingService(
             throw new ArgumentException("The requested revision is not current.");
         }
 
-        var discovery = billingDiscovery?.Inspect(run.BillingProfile);
-        if (discovery is not null && !discovery.Progress.IsComplete)
+        var assumptionTurn = billingDiscovery?.ApplyAssumptions(billerId, run.BillingProfile, biller.BillType);
+        if (assumptionTurn is not null)
         {
-            var finding = new ComplianceFinding(
-                "BILLING_DISCOVERY_INCOMPLETE",
-                $"Complete the billing interview before approval. Next required item: {discovery.CurrentQuestion?.Prompt}",
-                ComplianceFindingSeverity.Blocking);
-            LogBlockingFinding(logger, billerId, experience.Id, finding.Code, finding.Message);
-            throw new ExperienceValidationException(
-                "The billing policy is incomplete. Continue the chat and confirm category-specific cadence, state rules, and payment terms.",
-                [finding]);
+            experience = experience with
+            {
+                Definition = experience.Definition with { Billing = BillingProfilePresentation.Project(assumptionTurn.State.Profile) }
+            };
+            run = run with
+            {
+                BillingProfile = assumptionTurn.State.Profile,
+                MissingFields = assumptionTurn.State.MissingFields
+            };
         }
 
         var findings = await _compliance.ReviewAsync(

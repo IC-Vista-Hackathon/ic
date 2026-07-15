@@ -67,6 +67,7 @@ export interface BillingProfile {
   schema_version: string;
   confirmed: boolean;
   categories: BillingCategory[];
+  assumptions?: Array<{ question_id: string; description: string }> | null;
 }
 
 export interface BillingCategory {
