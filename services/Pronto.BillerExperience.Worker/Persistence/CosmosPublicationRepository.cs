@@ -1,6 +1,7 @@
 using System.Diagnostics;
 using System.Net;
 using Microsoft.Azure.Cosmos;
+using Microsoft.Extensions.Options;
 using Pronto.BillerExperience.Contracts.V1.Experiences;
 using Pronto.BillerExperience.Contracts.V1.Onboarding;
 
@@ -9,8 +10,10 @@ namespace Pronto.BillerExperience.Worker.Persistence;
 public sealed partial class CosmosPublicationRepository(
     CosmosClient client,
     string databaseName,
+    IOptions<PublicationOptions> options,
     ILogger<CosmosPublicationRepository> logger) : IPublicationRepository
 {
+    private readonly PublicationOptions _options = options.Value;
     private Container Billers => client.GetContainer(databaseName, "billers");
     private Container Configs => client.GetContainer(databaseName, "configs");
     private Container Deployments => client.GetContainer(databaseName, "deployments");
@@ -21,9 +24,21 @@ public sealed partial class CosmosPublicationRepository(
         using var activity = PublicationTelemetry.Source.StartActivity("publication.claim");
         try
         {
+            var now = DateTimeOffset.UtcNow;
             var query = new QueryDefinition(
-                "SELECT TOP 1 * FROM c WHERE c.status = @status ORDER BY c.requested_at")
-                .WithParameter("@status", PublicationStates.Requested);
+                """
+                SELECT TOP 1 * FROM c
+                WHERE c.status = @requested
+                   OR ((c.status = @applying OR c.status = @verifying)
+                       AND (NOT IS_DEFINED(c.lease_expires_at)
+                            OR IS_NULL(c.lease_expires_at)
+                            OR c.lease_expires_at <= @now))
+                ORDER BY c.requested_at
+                """)
+                .WithParameter("@requested", PublicationStates.Requested)
+                .WithParameter("@applying", PublicationStates.Applying)
+                .WithParameter("@verifying", PublicationStates.Verifying)
+                .WithParameter("@now", now);
             using var iterator = Deployments.GetItemQueryIterator<PublicationDeployment>(
                 query,
                 requestOptions: new QueryRequestOptions { MaxItemCount = 1 });
@@ -41,8 +56,13 @@ public sealed partial class CosmosPublicationRepository(
 
             var claimed = candidate with
             {
-                Status = PublicationStates.Applying,
-                UpdatedAt = DateTimeOffset.UtcNow,
+                Status = candidate.Status == PublicationStates.Verifying
+                    ? PublicationStates.Verifying
+                    : PublicationStates.Applying,
+                UpdatedAt = now,
+                ClaimedAt = now,
+                LeaseExpiresAt = now.AddSeconds(Math.Max(60, _options.ClaimLeaseSeconds)),
+                Attempt = candidate.Attempt + 1,
                 FailureCode = null,
                 FailureMessage = null
             };

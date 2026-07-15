@@ -1,7 +1,7 @@
 namespace Pronto.BillerExperience.Worker.Building;
 
-// Used when no builder image is configured (local dev, CI, config-only environments): the
-// Worker keeps its prior behavior of publishing config/manifest without a static bundle.
+// Used when no builder image is configured so local startup does not require Kubernetes.
+// PublicationProcessor fails closed before publishing when this builder is disabled.
 public sealed class NoOpBundleBuilder : IExperienceBundleBuilder
 {
     public bool Enabled => false;

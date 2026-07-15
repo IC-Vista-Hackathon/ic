@@ -18,7 +18,7 @@ public static class PayerSitePaths
         if (slug.Length == 0) return null;
 
         var relative = slash < 0 ? string.Empty : rest[(slash + 1)..];
-        if (relative.Length == 0 || relative.EndsWith('/')) relative += "index.html";
+        relative = relative.Length == 0 ? "index.html" : relative.TrimEnd('/');
         return (slug, relative);
     }
 
@@ -47,9 +47,14 @@ public static class PayerSitePaths
             _ => "application/octet-stream",
         };
 
-    // Hashed assets are content-addressed and immutable; the SPA entry must revalidate.
+    // Only hashed build assets are content-addressed and immutable; stable PWA/runtime files
+    // like sw.js, manifest.webmanifest, and config.json must revalidate across revision cutovers.
     public static string CacheControl(string relativePath) =>
-        relativePath.Equals("index.html", StringComparison.OrdinalIgnoreCase)
-            ? "no-cache, no-store, must-revalidate"
-            : "public, max-age=31536000, immutable";
+        IsImmutableAsset(relativePath)
+            ? "public, max-age=31536000, immutable"
+            : "no-cache, no-store, must-revalidate";
+
+    private static bool IsImmutableAsset(string relativePath) =>
+        relativePath.StartsWith("assets/", StringComparison.OrdinalIgnoreCase)
+        && Path.GetFileNameWithoutExtension(relativePath).Contains('-', StringComparison.Ordinal);
 }

@@ -9,4 +9,5 @@ public sealed class PublicationOptions
     public string ContainerName { get; init; } = "payer-experiences";
     public string PublicBaseUrl { get; init; } = "http://localhost:8080";
     public int PollIntervalSeconds { get; init; } = 5;
+    public int ClaimLeaseSeconds { get; init; } = 1800;
 }

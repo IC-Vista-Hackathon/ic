@@ -1,6 +1,7 @@
 using Azure.Identity;
 using Azure.Monitor.OpenTelemetry.AspNetCore;
 using Azure.Storage.Blobs;
+using Microsoft.AspNetCore.Diagnostics.HealthChecks;
 using OpenTelemetry.Resources;
 using Pronto.PayerExperience.Router;
 
@@ -29,7 +30,8 @@ builder.Services.AddSingleton(new BlobServiceClient(
 builder.Services.AddSingleton(services => services.GetRequiredService<BlobServiceClient>()
     .GetBlobContainerClient(routerOptions.ContainerName));
 builder.Services.AddSingleton<PayerSiteRouter>();
-builder.Services.AddHealthChecks();
+builder.Services.AddHealthChecks()
+    .AddCheck<RouterStorageHealthCheck>("payer_experience_storage", tags: ["ready"]);
 
 var openTelemetry = builder.Services.AddOpenTelemetry()
     .ConfigureResource(resource => resource.AddService("Pronto.PayerExperience.Router"));
@@ -40,7 +42,7 @@ if (!string.IsNullOrWhiteSpace(builder.Configuration["APPLICATIONINSIGHTS_CONNEC
 
 var app = builder.Build();
 
-app.MapHealthChecks("/health/live");
+app.MapHealthChecks("/health/live", new HealthCheckOptions { Predicate = _ => false });
 app.MapHealthChecks("/health/ready");
 app.Map("/pay/{**path}", (HttpContext context, PayerSiteRouter router) => router.HandleAsync(context));
 

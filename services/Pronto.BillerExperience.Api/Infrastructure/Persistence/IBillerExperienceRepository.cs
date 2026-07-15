@@ -24,6 +24,7 @@ public interface IBillerExperienceRepository
     ValueTask<AgentContextRecord> SaveAgentContextAsync(AgentContextRecord context, string? expectedETag, CancellationToken cancellationToken);
     ValueTask<DeploymentRecord?> GetDeploymentAsync(string billerId, string deploymentId, CancellationToken cancellationToken);
     ValueTask<DeploymentRecord> CreateDeploymentAsync(DeploymentRecord deployment, CancellationToken cancellationToken);
+    ValueTask<DeploymentRecord> SaveDeploymentAsync(DeploymentRecord deployment, string? expectedETag, CancellationToken cancellationToken);
 
     /// <summary>
     /// Delete a biller and all of its experiences, runs, and deployments. Test-cleanup support

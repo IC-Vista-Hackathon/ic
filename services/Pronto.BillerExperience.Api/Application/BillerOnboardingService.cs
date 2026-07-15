@@ -264,6 +264,37 @@ public sealed partial class BillerOnboardingService(
         {
             LogDuplicatePublication(logger, billerId, request.Revision, deploymentId);
             deployment = existing;
+            if (existing.Status == "failed")
+            {
+                try
+                {
+                    deployment = await repository.SaveDeploymentAsync(
+                        existing with
+                        {
+                            Status = "requested",
+                            UpdatedAt = now,
+                            PublishedUrl = null,
+                            FailureCode = null,
+                            FailureMessage = null,
+                            Traceparent = FormatTraceparent(Activity.Current),
+                            ClaimedAt = null,
+                            LeaseExpiresAt = null
+                        },
+                        existing.ETag,
+                        cancellationToken);
+                }
+                catch (ConcurrencyException)
+                {
+                    var concurrent = await repository.GetDeploymentAsync(billerId, deploymentId, cancellationToken);
+                    if (concurrent is null || concurrent.Status == "failed")
+                    {
+                        throw;
+                    }
+
+                    deployment = concurrent;
+                }
+                LogPublicationRequested(logger, billerId, experience.Id, deployment.Id);
+            }
         }
         else
         {
@@ -283,13 +314,15 @@ public sealed partial class BillerOnboardingService(
         // The deployment record is the durable source of truth for a publication request; advancing
         // the experience/run to Publishing is a separate, idempotent step so a retry after a failure
         // between the writes converges the states to match the deployment instead of leaving them
-        // stuck at Approved. Only Approved states are advanced, so a worker that has already moved
-        // the records past Publishing (published/failed) is never regressed.
-        if (experience.State == ExperienceRevisionState.Approved)
+        // stuck at Approved or Failed. Terminal deployments never regress workflow state.
+        var publicationInProgress = deployment.Status is "requested" or "applying" or "verifying";
+        if (publicationInProgress &&
+            experience.State is ExperienceRevisionState.Approved or ExperienceRevisionState.Failed)
         {
             await repository.SaveExperienceAsync(experience with { State = ExperienceRevisionState.Publishing }, experience.ETag, cancellationToken);
         }
-        if (run.State == OnboardingSessionState.Approved)
+        if (publicationInProgress &&
+            run.State is OnboardingSessionState.Approved or OnboardingSessionState.Failed)
         {
             await repository.SaveRunAsync(run with { State = OnboardingSessionState.Publishing, UpdatedAt = now }, run.ETag, cancellationToken);
             RecordTransition(run.State, OnboardingSessionState.Publishing);
