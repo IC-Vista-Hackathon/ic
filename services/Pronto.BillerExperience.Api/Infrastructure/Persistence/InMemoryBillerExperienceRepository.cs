@@ -13,6 +13,13 @@ public sealed class InMemoryBillerExperienceRepository : IBillerExperienceReposi
     private readonly ConcurrentDictionary<string, AgentContextRecord> _agentContexts = new();
     private readonly ConcurrentDictionary<string, DeploymentRecord> _deployments = new();
 
+    public ValueTask<bool> SlugExistsAsync(string slug, CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        return ValueTask.FromResult(_billers.Values.Any(
+            biller => string.Equals(biller.Slug, slug, StringComparison.Ordinal)));
+    }
+
     public ValueTask<BillerRecord> CreateBillerAsync(BillerRecord biller, CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();

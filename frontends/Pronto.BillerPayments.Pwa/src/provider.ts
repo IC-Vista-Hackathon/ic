@@ -2,11 +2,14 @@ import type { Invoice, PayerProfile, PaymentHistory, PaymentReceipt, PaymentRequ
 import { createFlowTrace, observed, traceHeaders } from './telemetry';
 import { fetchWithTimeout, requestError } from './http';
 
+export interface PaymentQuote { feeCents: number; totalCents: number; }
+
 export interface PaymentExperienceProvider {
   getInvoices(accountNumber: string): Promise<Invoice[]>;
   findPayer(accountNumber: string): Promise<PayerProfile | undefined>;
   updatePreferences(payerId: string, preferences: PayerProfile['preferences']): Promise<PayerProfile['preferences']>;
   getPayments(payerId: string): Promise<PaymentHistory[]>;
+  quote(invoiceId: string, method: string): Promise<PaymentQuote>;
   pay(request: PaymentRequest): Promise<PaymentReceipt>;
 }
 
@@ -19,6 +22,12 @@ export class ServicePaymentExperienceProvider implements PaymentExperienceProvid
     const response = await fetchWithTimeout(`/invoices/billers/${encodeURIComponent(this.billerId)}/invoices?account_number=${encodeURIComponent(accountNumber)}&include_closed=true`, { headers: this.headers() });
     const payload = await read<{ invoices: Array<{ id: string; account_number: string; payer_name: string; amount_cents: number; due_date: string; description: string; status: string }> }>(response);
     return payload.invoices.map(invoice => ({ id: invoice.id, accountNumber: invoice.account_number, payerName: invoice.payer_name, amountCents: invoice.amount_cents, dueDate: invoice.due_date, description: invoice.description, status: invoice.status }));
+  }); }
+
+  // Server-side quote: the same fee policy the payment itself will apply — never computed client-side.
+  quote(invoiceId: string, method: string) { return observed('pwa.payment.quote', async () => {
+    const payload = await read<{ fee_cents: number; total_cents: number }>(await fetchWithTimeout(`/payments/quote?biller_id=${encodeURIComponent(this.billerId)}&invoice_id=${encodeURIComponent(invoiceId)}&method=${encodeURIComponent(method)}`, { headers: this.headers() }));
+    return { feeCents: payload.fee_cents, totalCents: payload.total_cents };
   }); }
 
   async findPayer(accountNumber: string) {
@@ -45,8 +54,8 @@ export class ServicePaymentExperienceProvider implements PaymentExperienceProvid
         payer = await read<PayerProfile>(await fetchWithTimeout('/payers', { method: 'POST', headers: this.headers(true), body: JSON.stringify({ biller_id: this.billerId, name: request.payerName, email: request.payerEmail, phone: null, account_numbers: [request.accountNumber], preferences }) }));
       }
     }
-    const payment = await read<{ confirmation: string; amount_cents: number; fee_cents: number; status: string; scheduled_for?: string }>(await fetchWithTimeout('/payments', { method: 'POST', headers: this.headers(true), body: JSON.stringify({ biller_id: this.billerId, invoice_id: request.invoiceId, method: request.method, payer_account_id: payer?.payer_id, scheduled_for: request.scheduledFor }) }));
-    return { confirmation: payment.confirmation, amountCents: payment.amount_cents, feeCents: payment.fee_cents, status: payment.status, scheduledFor: payment.scheduled_for, payerAccountId: payer?.payer_id };
+    const payment = await read<{ confirmation: string; amount_cents: number; fee_cents: number; total_cents: number; status: string; scheduled_for?: string }>(await fetchWithTimeout('/payments', { method: 'POST', headers: this.headers(true), body: JSON.stringify({ biller_id: this.billerId, invoice_id: request.invoiceId, method: request.method, payer_account_id: payer?.payer_id, scheduled_for: request.scheduledFor }) }));
+    return { confirmation: payment.confirmation, amountCents: payment.amount_cents, feeCents: payment.fee_cents, totalCents: payment.total_cents, status: payment.status, scheduledFor: payment.scheduled_for, payerAccountId: payer?.payer_id };
   }); }
 }
 

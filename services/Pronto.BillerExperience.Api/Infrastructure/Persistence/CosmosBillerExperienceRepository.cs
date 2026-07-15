@@ -45,6 +45,24 @@ public sealed partial class CosmosBillerExperienceRepository(
             return response.Resource;
         });
 
+    public ValueTask<bool> SlugExistsAsync(string slug, CancellationToken cancellationToken) =>
+        ObserveAsync("query", "billers", slug, async () =>
+        {
+            // Cross-partition by design: billers partition on /id and slug lookups are rare
+            // (creation-time only).
+            var query = new QueryDefinition("SELECT TOP 1 c.id FROM c WHERE c.slug = @slug")
+                .WithParameter("@slug", slug);
+            using var iterator = Billers.GetItemQueryIterator<IdOnly>(
+                query, requestOptions: new QueryRequestOptions { MaxItemCount = 1 });
+            if (!iterator.HasMoreResults)
+            {
+                return false;
+            }
+
+            var page = await iterator.ReadNextAsync(cancellationToken);
+            return page.Resource.Any();
+        });
+
     public ValueTask<ExperienceRecord?> GetLatestExperienceAsync(string billerId, CancellationToken cancellationToken) =>
         ObserveAsync<ExperienceRecord?>("query", "configs", billerId, async () =>
         {
