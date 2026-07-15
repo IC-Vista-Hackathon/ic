@@ -3,35 +3,30 @@ using Pronto.Payment.Contracts.V1.Purchases;
 namespace Pronto.Payment.Api.Clients;
 
 /// <summary>
-/// Cross-service write: advance BillerAccount.status to purchased (and tier to the plan)
-/// after a Purchase is paid. Design/entities.md documents this handoff.
+/// Advances the BillerAccount owned by Biller Configuration Service after purchase. Implementors
+/// must treat <paramref name="idempotencyKey"/> idempotently because a successful downstream
+/// transition can be retried before the local purchase is marked paid.
 /// </summary>
 public interface IBillerAccountClient
 {
-    Task AdvanceToPurchasedAsync(string billerId, PurchasePlan plan, CancellationToken cancellationToken);
+    Task AdvanceToPurchasedAsync(
+        string billerId,
+        PurchasePlan plan,
+        string idempotencyKey,
+        CancellationToken cancellationToken);
 }
 
 /// <summary>
-/// No-op stub: BillerExperience.Api has no account-status endpoint yet. Logs the intent so
-/// the demo trace shows where the real call goes.
+/// Fail-closed default used until a parent host provides the Biller Configuration Service client.
+/// Throwing keeps the purchase pending and durably queued rather than falsely reporting paid.
 /// </summary>
-public sealed partial class NoOpBillerAccountClient : IBillerAccountClient
+public sealed class UnavailableBillerAccountClient : IBillerAccountClient
 {
-    private readonly ILogger<NoOpBillerAccountClient> logger;
-
-    public NoOpBillerAccountClient(ILogger<NoOpBillerAccountClient> logger)
-    {
-        this.logger = logger;
-    }
-
-    public Task AdvanceToPurchasedAsync(string billerId, PurchasePlan plan, CancellationToken cancellationToken)
-    {
-        LogWouldAdvance(logger, billerId, plan);
-        return Task.CompletedTask;
-    }
-
-    [LoggerMessage(
-        Level = LogLevel.Information,
-        Message = "Would advance BillerAccount {BillerId} to purchased (tier {Plan}) — endpoint pending on BillerExperience.Api")]
-    private static partial void LogWouldAdvance(ILogger logger, string billerId, PurchasePlan plan);
+    public Task AdvanceToPurchasedAsync(
+        string billerId,
+        PurchasePlan plan,
+        string idempotencyKey,
+        CancellationToken cancellationToken) =>
+        Task.FromException(new InvalidOperationException(
+            "BillerAccount completion client is not configured; purchase remains queued for retry."));
 }

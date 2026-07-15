@@ -21,13 +21,17 @@ public sealed class PaymentsApiTests : IClassFixture<WebApplicationFactory<Progr
     };
 
     private readonly FakeInvoiceClient fakeInvoices = new();
+    private readonly FakeBillerAccountClient fakeBillerAccounts = new();
     private readonly HttpClient client;
 
     public PaymentsApiTests(WebApplicationFactory<Program> factory)
     {
         client = factory.WithWebHostBuilder(builder =>
             builder.ConfigureServices(services =>
-                services.Replace(ServiceDescriptor.Singleton<IInvoiceClient>(fakeInvoices))))
+            {
+                services.Replace(ServiceDescriptor.Singleton<IInvoiceClient>(fakeInvoices));
+                services.Replace(ServiceDescriptor.Singleton<IBillerAccountClient>(fakeBillerAccounts));
+            }))
             .CreateClient();
     }
 

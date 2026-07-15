@@ -46,4 +46,16 @@ public sealed class PurchaseContractsTests
 
         Assert.Equal(completed, roundTripped);
     }
+
+    [Fact]
+    public void CreatePurchaseRequestRoundTripsIdempotencyKey()
+    {
+        var request = new CreatePurchaseRequest("b-1", PurchasePlan.Shared, "purchase-op-1");
+
+        var json = JsonSerializer.Serialize(request, CaseInsensitive);
+        var roundTripped = JsonSerializer.Deserialize<CreatePurchaseRequest>(json, CaseInsensitive);
+
+        Assert.Contains("\"idempotency_key\":\"purchase-op-1\"", json, StringComparison.Ordinal);
+        Assert.Equal(request, roundTripped);
+    }
 }
