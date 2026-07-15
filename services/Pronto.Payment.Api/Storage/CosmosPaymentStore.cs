@@ -35,6 +35,7 @@ public sealed class CosmosPaymentStore : IPaymentStore
         }
         catch (CosmosException exception) when (exception.StatusCode == HttpStatusCode.Conflict)
         {
+            // Idempotent insert lost the race (or is a client retry): return the existing record.
             var existing = await FindAsync(pending.BillerId, pending.PaymentId, cancellationToken)
                 .ConfigureAwait(false);
             if (existing is null)
@@ -185,6 +186,7 @@ public sealed class CosmosPaymentStore : IPaymentStore
             }
             catch (CosmosException exception) when (exception.StatusCode == HttpStatusCode.PreconditionFailed)
             {
+                // Another processor claimed it first; re-query for the next candidate.
             }
         }
 
