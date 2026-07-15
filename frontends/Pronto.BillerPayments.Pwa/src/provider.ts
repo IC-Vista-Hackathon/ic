@@ -1,5 +1,5 @@
 import type { Invoice, PayerProfile, PaymentHistory, PaymentReceipt, PaymentRequest } from './types';
-import { observed, sharedFlow, traceHeaders } from './telemetry';
+import { logError, observed, sharedFlow, traceHeaders } from './telemetry';
 import { fetchWithTimeout, requestError } from './http';
 
 export interface PaymentQuote { feeCents: number; totalCents: number; }
@@ -47,16 +47,26 @@ export class ServicePaymentExperienceProvider implements PaymentExperienceProvid
 
   pay(request: PaymentRequest) { return observed('pwa.payment.submit', async () => {
     let payer = await this.findPayer(request.accountNumber);
+    const payment = await read<{ confirmation: string; amount_cents: number; fee_cents: number; total_cents: number; status: string; scheduled_for?: string }>(await fetchWithTimeout('/payments', {
+      method: 'POST',
+      headers: { ...this.headers(true), 'idempotency-key': request.idempotencyKey },
+      body: JSON.stringify({ biller_id: this.billerId, invoice_id: request.invoiceId, method: request.method, payer_account_id: payer?.payer_id, scheduled_for: request.scheduledFor }),
+    }));
+    let preferenceUpdateFailed = false;
     if (request.autoPay || request.paperless) {
       const preferences = { autopay: request.autoPay, paperless: request.paperless, channels: ['email'] as Array<'email'|'sms'>, payment_day: request.autoPay ? 15 : null };
-      if (payer) {
-        payer = { ...payer, preferences: await this.updatePreferences(payer.payer_id, preferences) };
-      } else {
-        payer = await read<PayerProfile>(await fetchWithTimeout('/payers', { method: 'POST', headers: this.headers(true), body: JSON.stringify({ biller_id: this.billerId, name: request.payerName, email: request.payerEmail, phone: null, account_numbers: [request.accountNumber], preferences }) }));
+      try {
+        if (payer) {
+          payer = { ...payer, preferences: await this.updatePreferences(payer.payer_id, preferences) };
+        } else {
+          payer = await read<PayerProfile>(await fetchWithTimeout('/payers', { method: 'POST', headers: this.headers(true), body: JSON.stringify({ biller_id: this.billerId, name: request.payerName, email: request.payerEmail, phone: null, account_numbers: [request.accountNumber], preferences }) }));
+        }
+      } catch (caught) {
+        preferenceUpdateFailed = true;
+        logError('pwa.preferences.save_failed', caught);
       }
     }
-    const payment = await read<{ confirmation: string; amount_cents: number; fee_cents: number; total_cents: number; status: string; scheduled_for?: string }>(await fetchWithTimeout('/payments', { method: 'POST', headers: this.headers(true), body: JSON.stringify({ biller_id: this.billerId, invoice_id: request.invoiceId, method: request.method, payer_account_id: payer?.payer_id, scheduled_for: request.scheduledFor }) }));
-    return { confirmation: payment.confirmation, amountCents: payment.amount_cents, feeCents: payment.fee_cents, totalCents: payment.total_cents, status: payment.status, scheduledFor: payment.scheduled_for, payerAccountId: payer?.payer_id };
+    return { confirmation: payment.confirmation, amountCents: payment.amount_cents, feeCents: payment.fee_cents, totalCents: payment.total_cents, status: payment.status, scheduledFor: payment.scheduled_for, payerAccountId: payer?.payer_id, preferenceUpdateFailed };
   }); }
 }
 

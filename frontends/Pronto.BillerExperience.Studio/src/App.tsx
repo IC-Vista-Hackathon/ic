@@ -143,6 +143,9 @@ interface Lob {
   selfServiceHistory: boolean;
   selfServiceUpdate: boolean;
   feeHandling: string;
+  backendBillerId: string | null;
+  backendDraft: ExperienceRevision | null;
+  deployment: Deployment | null;
 }
 
 type Screen = 'landing' | 'wizard' | 'analyzing' | 'results' | 'preview' | 'pricing' | 'dashboard';
@@ -415,6 +418,9 @@ const WIZARD_RESET: Partial<State> = {
   guestCheckoutAllowed: true, offerAutopay: true, enrollDuringPayment: true, offerPaperless: true, reminderChannel: 'email', acceptedMethods: ['card', 'ach'],
   selfServiceHistory: true, selfServiceUpdate: true, feeHandling: 'absorb', aiApplied: false, aiRationale: {}, editingSection: null,
   csvFileName: null, importedFields: [], csvOverriddenFields: [], accountNumber: null,
+  backendBillerId: null, backendDraft: null, deployment: null, publishing: false, publishError: null,
+  agentActivity: [], activityConnection: 'idle', orchestrationError: null, analysisComplete: false,
+  previewProposal: null, previewChatInput: '', previewChatBusy: false, previewChatError: null, previewChatReply: null, previewGenerationMode: null,
 };
 
 const INITIAL_STATE: State = {
@@ -514,8 +520,41 @@ export function App() {
   const [state, setState] = useState<State>(INITIAL_STATE);
   const timers = useRef<ReturnType<typeof setTimeout>[]>([]);
   const saveBtnRef = useRef<HTMLButtonElement>(null);
+  const signupDialogRef = useRef<HTMLFormElement>(null);
+  const checkoutDialogRef = useRef<HTMLFormElement>(null);
+  const modalTriggerRef = useRef<HTMLElement | null>(null);
 
   useEffect(() => () => { timers.current.forEach(clearTimeout); }, []);
+  useEffect(() => {
+    if (!state.modal) return;
+    const dialog = state.modal === 'signup' ? signupDialogRef.current : checkoutDialogRef.current;
+    if (!dialog) return;
+    const focusable = Array.from(dialog.querySelectorAll<HTMLElement>('button, input, select, textarea, [href], [tabindex]:not([tabindex="-1"])'));
+    const initial = dialog.querySelector<HTMLElement>('[data-autofocus]') ?? focusable[0];
+    initial?.focus();
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') {
+        event.preventDefault();
+        setState(current => ({ ...current, modal: null }));
+        return;
+      }
+      if (event.key !== 'Tab' || focusable.length === 0) return;
+      const first = focusable[0];
+      const last = focusable[focusable.length - 1];
+      if (event.shiftKey && document.activeElement === first) {
+        event.preventDefault();
+        last.focus();
+      } else if (!event.shiftKey && document.activeElement === last) {
+        event.preventDefault();
+        first.focus();
+      }
+    };
+    document.addEventListener('keydown', handleKeyDown);
+    return () => {
+      document.removeEventListener('keydown', handleKeyDown);
+      modalTriggerRef.current?.focus();
+    };
+  }, [state.modal]);
 
   type Updater = Partial<State> | ((st: State) => Partial<State> | null);
   const patch = (u: Updater) => setState((st) => { const next = typeof u === 'function' ? u(st) : u; return next ? { ...st, ...next } : st; });
@@ -855,8 +894,11 @@ export function App() {
 
   const goPricing = () => patch({ screen: 'pricing', pendingLob: true });
   const backToPreviewOrDashboard = () => patch((st) => (st.accountCreated ? { screen: 'dashboard', dashboardSection: 'home' } : { screen: 'preview' }));
-  const openSignup = () => patch({ modal: 'signup', signupError: null });
-  const openCheckout = () => { trackEvent('studio.purchase_started', { biller_id: s.backendBillerId ?? undefined }); patch({ modal: 'checkout' }); };
+  const rememberModalTrigger = () => {
+    modalTriggerRef.current = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+  };
+  const openSignup = () => { rememberModalTrigger(); patch({ modal: 'signup', pendingLob: true, signupError: null }); };
+  const openCheckout = () => { rememberModalTrigger(); trackEvent('studio.purchase_started', { biller_id: s.backendBillerId ?? undefined }); patch({ modal: 'checkout' }); };
   const closeModal = () => patch({ modal: null });
   const setSignupEmail = (e: React.ChangeEvent<HTMLInputElement>) => patch({ signupEmail: e.target.value, signupError: null });
   const setSignupPassword = (e: React.ChangeEvent<HTMLInputElement>) => patch({ signupPassword: e.target.value, signupError: null });
@@ -868,6 +910,9 @@ export function App() {
       brand: st.brand, compliance: st.compliance, published, docs: st.docs, logoDataUrl: st.logoDataUrl, accountNumber: st.accountNumber,
       guestCheckoutAllowed: st.guestCheckoutAllowed, offerAutopay: st.offerAutopay, enrollDuringPayment: st.enrollDuringPayment, offerPaperless: st.offerPaperless,
       reminderChannel: st.reminderChannel, acceptedMethods: st.acceptedMethods, selfServiceHistory: st.selfServiceHistory, selfServiceUpdate: st.selfServiceUpdate, feeHandling: st.feeHandling,
+      backendBillerId: st.backendBillerId,
+      backendDraft: st.backendDraft,
+      deployment: st.deployment,
     };
     const exists = st.lobs.some((l) => l.id === lob.id);
     const lobs = exists ? st.lobs.map((l) => (l.id === lob.id ? lob : l)) : [...st.lobs, lob];
@@ -956,22 +1001,24 @@ export function App() {
     }
   };
 
-  const addLob = () => { trackEvent('studio.onboarding_started', { biller_id: s.backendBillerId ?? undefined }); patch({ screen: 'wizard', ...WIZARD_RESET }); };
+  const addLob = () => { trackEvent('studio.onboarding_started'); patch({ screen: 'wizard', ...WIZARD_RESET }); };
   const editLob = (lob: Lob) => {
     patch({
       screen: 'wizard', wizardStep: 0, vertical: lob.vertical, bizName: lob.bizName, selectedStates: lob.selectedStates || [], website: lob.website, skipWebsite: !!lob.skipWebsite,
       brand: lob.brand, compliance: lob.compliance, editingLobId: lob.id, agreedToCompliance: true, docs: lob.docs || [], newDocName: '', logoDataUrl: lob.logoDataUrl || null, logoFetchOk: false, extractedColors: null,
       guestCheckoutAllowed: lob.guestCheckoutAllowed, offerAutopay: lob.offerAutopay, enrollDuringPayment: lob.enrollDuringPayment, offerPaperless: lob.offerPaperless,
       reminderChannel: lob.reminderChannel, acceptedMethods: lob.acceptedMethods || ['card', 'ach'], selfServiceHistory: lob.selfServiceHistory, selfServiceUpdate: lob.selfServiceUpdate, feeHandling: lob.feeHandling, accountNumber: lob.accountNumber || null,
+      backendBillerId: lob.backendBillerId, backendDraft: lob.backendDraft, deployment: lob.deployment, publishing: false, publishError: null,
       aiApplied: true, aiRationale: {}, editingSection: null,
     });
     checkLogoFetch(lob.website, !!lob.skipWebsite);
   };
   const previewLob = (lob: Lob) => {
-    trackEvent('studio.preview_opened', { device: s.previewDevice, biller_id: s.backendBillerId ?? undefined });
+    trackEvent('studio.preview_opened', { device: s.previewDevice, biller_id: lob.backendBillerId ?? undefined });
     patch({
       screen: 'preview', payerStep: 0, brand: lob.brand, compliance: lob.compliance, bizName: lob.bizName, vertical: lob.vertical, website: lob.website, skipWebsite: !!lob.skipWebsite, logoDataUrl: lob.logoDataUrl || null, logoFetchOk: false,
       guestCheckoutAllowed: lob.guestCheckoutAllowed, offerAutopay: lob.offerAutopay, enrollDuringPayment: lob.enrollDuringPayment, offerPaperless: lob.offerPaperless, acceptedMethods: lob.acceptedMethods || ['card', 'ach'], accountNumber: lob.accountNumber || null,
+      editingLobId: lob.id, backendBillerId: lob.backendBillerId, backendDraft: lob.backendDraft, deployment: lob.deployment, publishing: false, publishError: null,
       methodType: 'card', autopayOptIn: false, paperlessOptIn: false,
     });
     checkLogoFetch(lob.website, !!lob.skipWebsite);
@@ -1207,6 +1254,7 @@ export function App() {
 
   return (
     <div style={css('font-family:var(--invoicecloud-font-family-primary);min-height:100vh;background:var(--invoicecloud-utility-neutral-05);color:var(--invoicecloud-utility-neutral-100);text-wrap:pretty')}>
+      <div inert={s.modal !== null} aria-hidden={s.modal !== null}>
 
       {/* ================= LANDING ================= */}
       {s.screen === 'landing' && (
@@ -2322,19 +2370,20 @@ export function App() {
           </main>
         </div>
       )}
+      </div>
 
       {/* ================= MODALS ================= */}
       {s.modal === 'signup' && (
         <div style={css('position:fixed;inset:0;background:rgba(28,28,28,.5);display:flex;align-items:center;justify-content:center;z-index:60;padding:var(--invoicecloud-spacing-l)')}>
-          <form onSubmit={submitSignup} style={css('background:#fff;border-radius:14px;width:100%;max-width:420px;padding:var(--invoicecloud-spacing-l);box-shadow:var(--invoicecloud-elevation-3)')}>
+          <form ref={signupDialogRef} role="dialog" aria-modal="true" aria-labelledby="signup-dialog-title" onSubmit={submitSignup} style={css('background:#fff;border-radius:14px;width:100%;max-width:420px;padding:var(--invoicecloud-spacing-l);box-shadow:var(--invoicecloud-elevation-3)')}>
             <div style={css('display:flex;justify-content:space-between;align-items:center;margin-bottom:var(--invoicecloud-spacing-m)')}>
-              <h3 style={css('font-size:18px')}>Create your account</h3>
+              <h3 id="signup-dialog-title" style={css('font-size:18px')}>Create your account</h3>
               <button type="button" onClick={closeModal} aria-label="Close" style={css('background:none;border:none;cursor:pointer;padding:4px')}><img src={asset('assets/icons/MenuClose.svg')} alt="" style={css('width:14px;height:14px')} /></button>
             </div>
-            <label style={css('display:block;font-size:13px;font-weight:500;margin-bottom:4px')}>Work email</label>
-            <input type="email" required value={s.signupEmail} onChange={setSignupEmail} placeholder={`you@${siteSlug}.com`} style={css('width:100%;padding:12px 14px;border-radius:4px;border:1px solid var(--invoicecloud-surface-default-border);font-size:15px;margin-bottom:var(--invoicecloud-spacing-s)')} />
-            <label style={css('display:block;font-size:13px;font-weight:500;margin-bottom:4px')}>Password</label>
-            <input type="password" value={s.signupPassword} onChange={setSignupPassword} aria-invalid={s.signupError ? true : undefined} placeholder={`At least ${MIN_PASSWORD_LENGTH} characters`} style={css(`width:100%;padding:12px 14px;border-radius:4px;border:1px solid ${s.signupError ? 'var(--invoicecloud-intent-error-border)' : 'var(--invoicecloud-surface-default-border)'};font-size:15px;margin-bottom:${s.signupError ? 'var(--invoicecloud-spacing-s)' : 'var(--invoicecloud-spacing-l)'}`)} />
+            <label htmlFor="signup-email" style={css('display:block;font-size:13px;font-weight:500;margin-bottom:4px')}>Work email</label>
+            <input id="signup-email" data-autofocus type="email" required autoComplete="email" value={s.signupEmail} onChange={setSignupEmail} placeholder={`you@${siteSlug}.com`} style={css('width:100%;padding:12px 14px;border-radius:4px;border:1px solid var(--invoicecloud-surface-default-border);font-size:15px;margin-bottom:var(--invoicecloud-spacing-s)')} />
+            <label htmlFor="signup-password" style={css('display:block;font-size:13px;font-weight:500;margin-bottom:4px')}>Password</label>
+            <input id="signup-password" type="password" autoComplete="new-password" value={s.signupPassword} onChange={setSignupPassword} aria-invalid={s.signupError ? true : undefined} placeholder={`At least ${MIN_PASSWORD_LENGTH} characters`} style={css(`width:100%;padding:12px 14px;border-radius:4px;border:1px solid ${s.signupError ? 'var(--invoicecloud-intent-error-border)' : 'var(--invoicecloud-surface-default-border)'};font-size:15px;margin-bottom:${s.signupError ? 'var(--invoicecloud-spacing-s)' : 'var(--invoicecloud-spacing-l)'}`)} />
             {s.signupError && (
               <div role="alert" style={css('background:var(--invoicecloud-intent-error-background);border:1px solid var(--invoicecloud-intent-error-border);color:var(--invoicecloud-intent-error);border-radius:8px;padding:10px 12px;font-size:13px;margin-bottom:var(--invoicecloud-spacing-l)')}>{s.signupError}</div>
             )}
@@ -2345,17 +2394,21 @@ export function App() {
 
       {s.modal === 'checkout' && (
         <div style={css('position:fixed;inset:0;background:rgba(28,28,28,.5);display:flex;align-items:center;justify-content:center;z-index:60;padding:var(--invoicecloud-spacing-l)')}>
-          <form onSubmit={submitCheckout} style={css('background:#fff;border-radius:14px;width:100%;max-width:420px;padding:var(--invoicecloud-spacing-l);box-shadow:var(--invoicecloud-elevation-3)')}>
+          <form ref={checkoutDialogRef} role="dialog" aria-modal="true" aria-labelledby="checkout-dialog-title" onSubmit={submitCheckout} style={css('background:#fff;border-radius:14px;width:100%;max-width:420px;padding:var(--invoicecloud-spacing-l);box-shadow:var(--invoicecloud-elevation-3)')}>
             <div style={css('display:flex;justify-content:space-between;align-items:center;margin-bottom:var(--invoicecloud-spacing-m)')}>
-              <h3 style={css('font-size:18px')}>Publish {s.bizName}</h3>
+              <h3 id="checkout-dialog-title" style={css('font-size:18px')}>Publish {s.bizName}</h3>
               <button type="button" onClick={closeModal} aria-label="Close" style={css('background:none;border:none;cursor:pointer;padding:4px')}><img src={asset('assets/icons/MenuClose.svg')} alt="" style={css('width:14px;height:14px')} /></button>
             </div>
             <div style={css('background:var(--invoicecloud-primary-tint);border-radius:10px;padding:var(--invoicecloud-spacing-s);font-size:13px;margin-bottom:var(--invoicecloud-spacing-m);display:flex;justify-content:space-between')}><span>Pronto Publish</span><span style={css('font-weight:700')}>$199/mo</span></div>
-            <label style={css('display:block;font-size:13px;font-weight:500;margin-bottom:4px')}>Card number</label>
-            <input type="text" required placeholder="4242 4242 4242 4242" style={css('width:100%;padding:12px 14px;border-radius:4px;border:1px solid var(--invoicecloud-surface-default-border);font-family:var(--invoicecloud-font-family-mono);margin-bottom:var(--invoicecloud-spacing-s)')} />
+            <label htmlFor="checkout-card-number" style={css('display:block;font-size:13px;font-weight:500;margin-bottom:4px')}>Card number</label>
+            <input id="checkout-card-number" data-autofocus type="text" required inputMode="numeric" autoComplete="cc-number" placeholder="4242 4242 4242 4242" style={css('width:100%;padding:12px 14px;border-radius:4px;border:1px solid var(--invoicecloud-surface-default-border);font-family:var(--invoicecloud-font-family-mono);margin-bottom:var(--invoicecloud-spacing-s)')} />
             <div style={css('display:flex;gap:var(--invoicecloud-spacing-s);margin-bottom:var(--invoicecloud-spacing-l)')}>
-              <input type="text" required placeholder="MM/YY" style={css('width:100%;padding:12px 14px;border-radius:4px;border:1px solid var(--invoicecloud-surface-default-border);font-family:var(--invoicecloud-font-family-mono)')} />
-              <input type="text" required placeholder="CVC" style={css('width:100%;padding:12px 14px;border-radius:4px;border:1px solid var(--invoicecloud-surface-default-border);font-family:var(--invoicecloud-font-family-mono)')} />
+              <label htmlFor="checkout-expiry" style={css('display:flex;flex:1;flex-direction:column;gap:4px;font-size:13px;font-weight:500')}>Expiration
+                <input id="checkout-expiry" type="text" required inputMode="numeric" autoComplete="cc-exp" placeholder="MM/YY" style={css('width:100%;padding:12px 14px;border-radius:4px;border:1px solid var(--invoicecloud-surface-default-border);font-family:var(--invoicecloud-font-family-mono)')} />
+              </label>
+              <label htmlFor="checkout-cvc" style={css('display:flex;flex:1;flex-direction:column;gap:4px;font-size:13px;font-weight:500')}>Security code
+                <input id="checkout-cvc" type="text" required inputMode="numeric" autoComplete="cc-csc" placeholder="CVC" style={css('width:100%;padding:12px 14px;border-radius:4px;border:1px solid var(--invoicecloud-surface-default-border);font-family:var(--invoicecloud-font-family-mono)')} />
+              </label>
             </div>
             {(s.publishing || s.deployment) && (
               <div role="status" aria-live="polite" style={css('background:var(--invoicecloud-primary-tint);border-radius:8px;padding:10px 12px;font-size:13px;margin-bottom:var(--invoicecloud-spacing-s)')}>

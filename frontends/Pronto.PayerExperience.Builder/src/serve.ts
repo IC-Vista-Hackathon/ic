@@ -1,6 +1,7 @@
 import { createReadStream, existsSync, statSync } from 'node:fs';
 import { createServer, type Server } from 'node:http';
 import { join, normalize, sep } from 'node:path';
+import { validateSlug } from './paths';
 
 const CONTENT_TYPES: Record<string, string> = {
   '.html': 'text/html; charset=utf-8',
@@ -27,12 +28,18 @@ export interface StaticSite {
 // the same contract the production Blob-backed router must honor, so what the Playwright
 // gate exercises matches what payers get.
 export async function serveBundle(distDir: string, slug: string, port = 0): Promise<StaticSite> {
-  const prefix = `/pay/${slug}/`;
+  const prefix = `/pay/${validateSlug(slug)}/`;
   const root = normalize(distDir);
   const rootWithSep = root.endsWith(sep) ? root : root + sep;
   const server = createServer((request, response) => {
     const requestUrl = new URL(request.url ?? '/', 'http://localhost');
-    let pathname = decodeURIComponent(requestUrl.pathname);
+    let pathname: string;
+    try {
+      pathname = decodeURIComponent(requestUrl.pathname);
+    } catch {
+      response.writeHead(400).end();
+      return;
+    }
     if (!pathname.startsWith(prefix)) {
       response.writeHead(404).end();
       return;

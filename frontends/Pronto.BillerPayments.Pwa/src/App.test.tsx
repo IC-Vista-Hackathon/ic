@@ -32,10 +32,11 @@ const receipt: PaymentReceipt = {
 };
 
 const config = {
+  schema_version: '1.0',
   biller_id: 'biller-1',
-  brand: { display_name: 'Acme Water', primary_color: '#123456', secondary_color: '#654321' },
-  content: { heading: 'Pay your bill', introduction: 'Fast and secure.' },
-  pwa: { name: 'Acme Water Payments' },
+  brand: { display_name: 'Acme Water', primary_color: '#123456', secondary_color: '#654321', font_family: null },
+  content: { heading: 'Pay your bill', introduction: 'Fast and secure.', support_text: 'Need help?', privacy_policy_url: '', terms_of_service_url: '' },
+  pwa: { name: 'Acme Water Payments', short_name: 'Acme Water', theme_color: '#123456', background_color: '#ffffff' },
   enabled_payment_capabilities: ['card', 'ach'],
 };
 
