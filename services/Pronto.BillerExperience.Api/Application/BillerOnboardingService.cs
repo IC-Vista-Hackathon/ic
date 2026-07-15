@@ -221,9 +221,21 @@ public sealed partial class BillerOnboardingService(
                         throw new ArgumentException($"The guided billing answers are stale or out of order. Expected {expectedName}.", nameof(request));
                     }
 
-                    discoveryTurn = billingDiscovery.ApplyAnswer(billerId, profile, answer.Answer.Trim());
+                    // A guided client asks one question per dimension, but the server expands the
+                    // question graph per billing category. Fan the single answer across the sibling
+                    // per-category questions of the same dimension so multi-category billers stay in
+                    // sync instead of desyncing the fixed client answer stream.
+                    var answerText = answer.Answer.Trim();
+                    discoveryTurn = billingDiscovery.ApplyAnswer(billerId, profile, answerText);
                     profile = discoveryTurn.State.Profile;
                     if (!discoveryTurn.AnswerAccepted) break;
+                    while (discoveryTurn.State.CurrentQuestion?.Dimension == answer.Dimension)
+                    {
+                        var sibling = billingDiscovery.ApplyAnswer(billerId, profile, answerText);
+                        if (!sibling.AnswerAccepted) break;
+                        discoveryTurn = sibling;
+                        profile = discoveryTurn.State.Profile;
+                    }
                 }
             }
             else

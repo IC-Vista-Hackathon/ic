@@ -186,6 +186,38 @@ public sealed class BillingDiscoveryEngineTests
             Assert.Single(draft.Definition.Billing!.Categories, category => category.DisplayName == "Special Assessment")));
     }
 
+    [Fact]
+    public async Task GuidedStudioGenericAnswersFanOutAcrossMultipleCategories()
+    {
+        var repository = new InMemoryBillerExperienceRepository();
+        var generator = new DeterministicExperienceDraftGenerator(NullLogger<DeterministicExperienceDraftGenerator>.Instance);
+        var service = new BillerOnboardingService(repository, generator, new OrchestrationRunner(),
+            NullLogger<BillerOnboardingService>.Instance, billingDiscovery: _engine);
+        var created = await service.CreateAsync(
+            new CreateBillerRequest("Acme Water Utility", "acme-water-utility", "Utilities", "85001"), CancellationToken.None);
+
+        // The Studio collects one generic answer per dimension (no category named). With two
+        // billing categories the server expands cadence/state_rules/payment_terms per category,
+        // so the answer must fan out or the fixed four-answer batch desyncs and 400s.
+        var response = await service.SendMessageAsync(created.Biller.BillerId, new SendOnboardingMessageRequest(
+            "Build the requested utility experience.",
+            [
+                new(BillingDiscoveryDimension.Categories, "Water usage charges and sewer service fee."),
+                new(BillingDiscoveryDimension.Cadence, "Everything is billed monthly."),
+                new(BillingDiscoveryDimension.StateRules, "Accounts become delinquent after a 30-day grace period."),
+                new(BillingDiscoveryDimension.PaymentTerms, "Everything must be paid in full.")
+            ]), CancellationToken.None);
+
+        Assert.Equal(2, response.Session.BillingProfile?.Categories.Count);
+        Assert.All(response.Session.BillingProfile!.Categories, category =>
+        {
+            Assert.NotNull(category.Cadence);
+            Assert.NotEmpty(category.StateRules!);
+            Assert.Equal(SettlementMode.PayInFull, category.PaymentTerms?.Mode);
+        });
+        Assert.Equal(BillingDiscoveryDimension.Confirmation, response.Session.CurrentQuestion?.Dimension);
+    }
+
     private static string DescribeTerms(BillingPresentationCategory category) =>
         category.PaymentMode == SettlementMode.InstallmentsAllowed
             ? $"Up to {category.MaximumInstallments} installments"
