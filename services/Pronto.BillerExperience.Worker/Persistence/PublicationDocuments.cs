@@ -13,6 +13,7 @@ public sealed record PublicationDeployment(
     [property: JsonProperty("published_url")] Uri? PublishedUrl = null,
     [property: JsonProperty("failure_code")] string? FailureCode = null,
     [property: JsonProperty("failure_message")] string? FailureMessage = null,
+    [property: JsonProperty("traceparent")] string? Traceparent = null,
     [property: JsonProperty("_etag")] string? ETag = null);
 
 public sealed record PublicationBiller(
