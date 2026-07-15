@@ -1,8 +1,11 @@
+using System.Security.Claims;
 using Pronto.Invoice.Api.Common;
 using Pronto.Invoice.Api.Controllers;
 using Pronto.Invoice.Api.Domain;
 using Pronto.Invoice.Api.Repositories;
 using Pronto.Invoice.Contracts.V1.Invoices;
+using Pronto.ServiceDefaults.Security;
+using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
 using Xunit;
 using WireStatus = Pronto.Invoice.Contracts.V1.Invoices.InvoiceStatus;
@@ -34,7 +37,16 @@ public sealed class InvoiceStatusTransitionTests
     private static InvoicesController NewController(out InMemoryInvoiceRepository repo)
     {
         repo = new InMemoryInvoiceRepository();
-        return new InvoicesController(repo, TimeProvider.System);
+        // Stand in for the authentication the HTTP pipeline would perform before the action.
+        var principal = new ClaimsPrincipal(new ClaimsIdentity(
+            [new Claim("roles", ServiceClaims.CrossBillerRole)], "Test"));
+        return new InvoicesController(repo, TimeProvider.System)
+        {
+            ControllerContext = new ControllerContext
+            {
+                HttpContext = new DefaultHttpContext { User = principal },
+            },
+        };
     }
 
     [Theory]

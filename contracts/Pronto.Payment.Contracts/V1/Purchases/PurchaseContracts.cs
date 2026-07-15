@@ -2,6 +2,11 @@ using System.Text.Json.Serialization;
 
 namespace Pronto.Payment.Contracts.V1.Purchases;
 
+/// <summary>
+/// Money-moving request: unknown members are rejected (<see cref="JsonUnmappedMemberHandling.Disallow"/>)
+/// so a caller can't smuggle unexpected fields past validation into a platform purchase.
+/// </summary>
+[JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Disallow)]
 public sealed record CreatePurchaseRequest(
     string BillerId,
     PurchasePlan Plan);

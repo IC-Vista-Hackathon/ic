@@ -2,7 +2,9 @@ using Pronto.PayerAccount.Api;
 using Pronto.PayerAccount.Api.Storage;
 using Pronto.Persistence.Cosmos;
 using Pronto.ServiceDefaults;
+using Pronto.ServiceDefaults.Health;
 using Microsoft.Azure.Cosmos;
+using Microsoft.Extensions.DependencyInjection;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -19,6 +21,8 @@ if (persistence.UseCosmos)
     builder.Services.AddSingleton(CosmosClientFactory.Create(persistence, "Pronto.PayerAccount.Api"));
     builder.Services.AddSingleton<IPayerStore>(services =>
         new CosmosPayerStore(services.GetRequiredService<CosmosClient>(), persistence.DatabaseName));
+    builder.Services.AddHealthChecks().AddDependencyReadinessCheck(
+        "cosmos", (services, _) => services.GetRequiredService<CosmosClient>().ReadAccountAsync());
 }
 else
 {

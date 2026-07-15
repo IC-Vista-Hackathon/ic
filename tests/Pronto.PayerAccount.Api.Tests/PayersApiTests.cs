@@ -8,7 +8,7 @@ using Xunit;
 
 namespace Pronto.PayerAccount.Api.Tests;
 
-public sealed class PayersApiTests : IClassFixture<WebApplicationFactory<Program>>
+public sealed class PayersApiTests : IClassFixture<TestingAppFactory>
 {
     private static readonly JsonSerializerOptions Wire = new(JsonSerializerDefaults.Web)
     {
@@ -18,7 +18,7 @@ public sealed class PayersApiTests : IClassFixture<WebApplicationFactory<Program
 
     private readonly HttpClient client;
 
-    public PayersApiTests(WebApplicationFactory<Program> factory)
+    public PayersApiTests(TestingAppFactory factory)
     {
         client = factory.CreateClient();
     }

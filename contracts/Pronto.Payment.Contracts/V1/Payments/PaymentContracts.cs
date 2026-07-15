@@ -2,6 +2,12 @@ using System.Text.Json.Serialization;
 
 namespace Pronto.Payment.Contracts.V1.Payments;
 
+/// <summary>
+/// Money-moving request: unknown members are rejected (<see cref="JsonUnmappedMemberHandling.Disallow"/>)
+/// so a caller can't smuggle unexpected fields past validation into a payment (e.g. a typo'd
+/// <c>amount_cents</c> silently ignored, or a field a future version would honour).
+/// </summary>
+[JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Disallow)]
 public sealed record CreatePaymentRequest(
     string BillerId,
     string InvoiceId,
