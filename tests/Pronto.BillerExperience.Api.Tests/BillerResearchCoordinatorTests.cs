@@ -99,6 +99,27 @@ public sealed class BillerResearchCoordinatorTests
         Assert.Equal("scoped-token", context.ContextCapabilityToken);
     }
 
+    [Fact]
+    public async Task FoundryAgentCanResearchBillerWithoutWebsite()
+    {
+        var dispatcher = new StubDispatcher((agent, request) =>
+        {
+            Assert.Null(request.Website);
+            Assert.Equal("Example Water", request.BillerName);
+            return Completed(agent.Id);
+        });
+        var coordinator = Create(
+            new StubCatalog([Agent("foundry-worker", "biller_research") with { Provider = "foundry" }]),
+            dispatcher,
+            []);
+
+        var response = await coordinator.ResearchAsync(
+            new BillerResearchRequest(null, "brand", BillerName: "Example Water", BillType: "Utility"));
+
+        Assert.Equal(ResearchOutcome.Completed, response.Outcome);
+        Assert.Equal(["foundry-worker"], dispatcher.Dispatched);
+    }
+
     private static BillerResearchCoordinator Create(
         IResearchAgentCatalog catalog,
         IResearchAgentDispatcher dispatcher,
