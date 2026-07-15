@@ -2,6 +2,7 @@ import { readFile, readdir } from 'node:fs/promises';
 import { join, relative, sep } from 'node:path';
 import { BlobServiceClient } from '@azure/storage-blob';
 import { DefaultAzureCredential } from '@azure/identity';
+import { validateRevision, validateSlug } from './paths';
 
 const CONTENT_TYPES: Record<string, string> = {
   html: 'text/html; charset=utf-8',
@@ -46,10 +47,12 @@ export async function publishBundle({
   containerName = 'payer-experiences',
   writeActive = true,
 }: PublishInputs): Promise<PublishResult> {
+  const safeSlug = validateSlug(slug);
+  const safeRevision = validateRevision(revision);
   const service = new BlobServiceClient(storageEndpoint, new DefaultAzureCredential());
   const container = service.getContainerClient(containerName);
 
-  const sitePrefix = `billers/${slug}/revisions/${revision}/site`;
+  const sitePrefix = `billers/${safeSlug}/revisions/${safeRevision}/site`;
   const files = await walk(distDir);
   for (const file of files) {
     const rel = relative(distDir, file).split(sep).join('/');
@@ -71,8 +74,8 @@ export async function publishBundle({
   }
 
   // Active pointer written last so a partially-uploaded revision is never served.
-  const activeBlob = `billers/${slug}/active.json`;
-  const pointer = JSON.stringify({ slug, revision, site_prefix: sitePrefix, entry: `${sitePrefix}/index.html` });
+  const activeBlob = `billers/${safeSlug}/active.json`;
+  const pointer = JSON.stringify({ slug: safeSlug, revision: safeRevision, site_prefix: sitePrefix, entry: `${sitePrefix}/index.html` });
   await container.getBlockBlobClient(activeBlob).uploadData(Buffer.from(pointer), {
     blobHTTPHeaders: { blobContentType: 'application/json', blobCacheControl: 'no-cache, no-store, must-revalidate' },
   });
