@@ -8,8 +8,8 @@ public sealed class ComplianceDefinitionTests
     public void AgentPolicyRequiresGroundedRetrievalAndSafeUncertaintyHandling()
     {
         var root = FindRepositoryRoot();
-        var instructions = File.ReadAllText(Path.Combine(root, "agents", "compliance", "instructions.md"));
-        var tools = File.ReadAllText(Path.Combine(root, "agents", "compliance", "tools.json"));
+        var instructions = File.ReadAllText(Path.Join(root, "agents", "compliance", "instructions.md"));
+        var tools = File.ReadAllText(Path.Join(root, "agents", "compliance", "tools.json"));
 
         Assert.Contains("Run file search for every review", instructions, StringComparison.Ordinal);
         Assert.Contains("federal material", instructions, StringComparison.Ordinal);
@@ -28,8 +28,8 @@ public sealed class ComplianceDefinitionTests
     public void ProvisioningBindsAndSmokeTestsVectorStoreBeforeCleanup()
     {
         var root = FindRepositoryRoot();
-        var script = File.ReadAllText(Path.Combine(root, "scripts", "index-compliance-knowledge.py"));
-        var workflow = File.ReadAllText(Path.Combine(root, ".github", "workflows", "index-compliance-knowledge.yml"));
+        var script = File.ReadAllText(Path.Join(root, "scripts", "index-compliance-knowledge.py"));
+        var workflow = File.ReadAllText(Path.Join(root, ".github", "workflows", "index-compliance-knowledge.yml"));
 
         Assert.Contains("FileSearchTool(vector_store_ids=[store.id]", script, StringComparison.Ordinal);
         Assert.Contains("project.agents.create_version", script, StringComparison.Ordinal);
@@ -46,7 +46,7 @@ public sealed class ComplianceDefinitionTests
     private static string FindRepositoryRoot()
     {
         var directory = new DirectoryInfo(AppContext.BaseDirectory);
-        while (directory is not null && !File.Exists(Path.Combine(directory.FullName, "Pronto.slnx")))
+        while (directory is not null && !File.Exists(Path.Join(directory.FullName, "Pronto.slnx")))
         {
             directory = directory.Parent;
         }
