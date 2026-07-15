@@ -40,6 +40,21 @@ public sealed class FoundryAgentReconcilerTests
         await Assert.ThrowsAsync<InvalidOperationException>(() => reconciler.ReconcileAsync(CancellationToken.None));
     }
 
+    [Fact]
+    public void BillerResearchDefinitionMatchesProvisionedToolsAndWireContract()
+    {
+        var desired = FoundryAgentReconciler.LoadDesired(
+            new AgentProvisioningOptions { DefinitionsPath = "agents" },
+            FindRepositoryRoot());
+
+        var research = Assert.Single(desired, item => item.Name == "biller-research");
+        Assert.Contains("built-in web-search tool", research.Instructions);
+        Assert.Contains("get_goal_context", research.Instructions);
+        Assert.Contains("append_context", research.Instructions);
+        Assert.Contains("Return only one JSON object", research.Instructions);
+        Assert.Contains("Do not call or claim to call `research_website`", research.Instructions);
+    }
+
     private static string FindRepositoryRoot()
     {
         var directory = new DirectoryInfo(AppContext.BaseDirectory);

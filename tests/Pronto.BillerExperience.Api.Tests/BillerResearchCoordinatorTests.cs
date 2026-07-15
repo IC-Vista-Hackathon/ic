@@ -120,6 +120,28 @@ public sealed class BillerResearchCoordinatorTests
         Assert.Equal(["foundry-worker"], dispatcher.Dispatched);
     }
 
+    [Fact]
+    public async Task SingleAgentFailurePreservesRootErrorAndRetryability()
+    {
+        var dispatcher = new StubDispatcher((_, _) => new BillerResearchResponse(
+            ResearchOutcome.Failed,
+            [],
+            [],
+            ["research.foundry_invalid_output"],
+            "research.foundry_invalid_output",
+            false));
+        var coordinator = Create(
+            new StubCatalog([Agent("foundry-worker", "biller_research") with { Provider = "foundry" }]),
+            dispatcher,
+            []);
+
+        var response = await coordinator.ResearchAsync(Request());
+
+        Assert.Equal(ResearchOutcome.Failed, response.Outcome);
+        Assert.Equal("research.foundry_invalid_output", response.ErrorCode);
+        Assert.False(response.Retryable);
+    }
+
     private static BillerResearchCoordinator Create(
         IResearchAgentCatalog catalog,
         IResearchAgentDispatcher dispatcher,

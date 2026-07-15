@@ -45,8 +45,9 @@ internal sealed partial class BillerExperienceChatWorkflow(
                     "Research was skipped because no research provider was available.", research.ErrorCode),
                 ResearchOutcome.Degraded => (OrchestrationEventStatus.Degraded,
                     "Research completed with warnings.", research.ErrorCode),
-                ResearchOutcome.Failed => (OrchestrationEventStatus.Failed,
-                    "Research failed.", research.ErrorCode),
+                ResearchOutcome.Failed when !researchRequired => (OrchestrationEventStatus.Degraded,
+                    "Research was unavailable; continuing with supplied biller information.", research.ErrorCode),
+                ResearchOutcome.Failed => (OrchestrationEventStatus.Failed, "Research failed.", research.ErrorCode),
                 _ => (OrchestrationEventStatus.Completed, "Research completed successfully.", null)
             });
         var research = await researchStep.ExecuteAsync(input.Biller, context, cancellationToken);
@@ -67,18 +68,6 @@ internal sealed partial class BillerExperienceChatWorkflow(
                     .Distinct(StringComparer.Ordinal)
                     .ToArray()
             };
-            await input.EventSink.PublishAsync(new OrchestrationEvent(
-                Guid.NewGuid().ToString("N"),
-                DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
-                context.RunId,
-                "biller-research",
-                "Biller Research",
-                OrchestrationEventStatus.Degraded,
-                "Research was unavailable; continuing with supplied biller information.",
-                DateTimeOffset.UtcNow,
-                Activity.Current?.TraceId.ToString(),
-                research.ErrorCode,
-                research.Retryable), CancellationToken.None);
         }
 
         var designStep = new ObservableOrchestrationStep<ExperienceRecord, DraftGenerationResult>(

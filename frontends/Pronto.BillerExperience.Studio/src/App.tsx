@@ -5,6 +5,7 @@ import { toBillerSlug } from './slug';
 import { trackEvent } from './insights';
 import { categorizeError } from './telemetryPolicy';
 import { logError, logEvent } from './telemetry';
+import { agentActivityMeta } from './agentActivityMeta';
 import type { AgentActivity, Deployment, ExperienceDefinition, ExperienceRevision } from './types';
 
 const PUBLISH_FAILURE_MESSAGE = 'We could not publish your payer site. Please try again. If the problem continues, contact support.';
@@ -512,7 +513,7 @@ function AgentActivityPanel({
                 <div style={css('display:flex;align-items:center;gap:8px')}><b style={css(`color:${color(status)}`)}>{icon(status)}</b><strong>{item.display_name}</strong></div>
                 <code title={item.agent_id} style={css('display:block;margin:5px 0;font-size:11px;overflow:hidden;text-overflow:ellipsis')}>{item.agent_id}</code>
                 <small>{settled ? 'Agent did not report a result before the run finished.' : item.summary}</small>
-                <small style={css('display:block;margin-top:5px;color:var(--invoicecloud-utility-neutral-70)')}>{status}{!settled && item.duration_ms !== undefined ? ` · ${Math.round(item.duration_ms)} ms` : ''}{item.error_code ? ` · ${item.error_code}` : ''}</small>
+                <small style={css('display:block;margin-top:5px;color:var(--invoicecloud-utility-neutral-70)')}>{agentActivityMeta(item, status, !settled)}</small>
               </article>
             );
           })}

@@ -2,6 +2,7 @@
 FROM mcr.microsoft.com/dotnet/sdk:10.0 AS build
 WORKDIR /src
 COPY Directory.Build.props Directory.Packages.props NuGet.config global.json ./
+COPY contracts/Pronto.BillerExperience.Contracts/Pronto.BillerExperience.Contracts.csproj contracts/Pronto.BillerExperience.Contracts/
 COPY contracts/Pronto.Invoice.Contracts/Pronto.Invoice.Contracts.csproj contracts/Pronto.Invoice.Contracts/
 COPY contracts/Pronto.Payment.Contracts/Pronto.Payment.Contracts.csproj contracts/Pronto.Payment.Contracts/
 COPY libraries/Pronto.Persistence.Cosmos/Pronto.Persistence.Cosmos.csproj libraries/Pronto.Persistence.Cosmos/
