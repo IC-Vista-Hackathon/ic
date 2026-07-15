@@ -31,9 +31,11 @@ try {
   const page = await browser.newPage();
   page.on('console', message => log(`console.${message.type()}: ${message.text().slice(0, 200)}`));
 
-  const beacon = page.waitForRequest(
-    request => request.method() === 'POST' &&
-      (request.url().includes('applicationinsights.azure.com') || request.url().includes('/v2/track')),
+  // Wait for the ingestion RESPONSE, not just the request — closing the browser right after the
+  // request starts aborts the in-flight POST and the event never reaches Application Insights.
+  const beacon = page.waitForResponse(
+    response => response.request().method() === 'POST' &&
+      (response.url().includes('applicationinsights.azure.com') || response.url().includes('/v2/track')),
     { timeout: beaconTimeoutMs },
   );
 
@@ -45,8 +47,11 @@ try {
   const flowId = await page.evaluate(() => sessionStorage.getItem('pronto.pwa.flow_id'));
   log(`flow id ${flowId}`);
 
-  const beaconRequest = await beacon.catch(() => fail(`no Application Insights beacon left the page within ${beaconTimeoutMs}ms`));
-  log(`beacon sent to ${new URL(beaconRequest.url()).host}`);
+  const beaconResponse = await beacon.catch(() => fail(`no Application Insights beacon completed within ${beaconTimeoutMs}ms`));
+  if (beaconResponse.status() !== 200) fail(`ingestion endpoint returned ${beaconResponse.status()}`);
+  const receipt = await beaconResponse.json().catch(() => undefined);
+  if (receipt && receipt.itemsAccepted < 1) fail(`ingestion accepted 0 items: ${JSON.stringify(receipt)}`);
+  log(`beacon accepted by ${new URL(beaconResponse.url()).host} (itemsAccepted=${receipt?.itemsAccepted ?? 'unknown'})`);
 
   console.log(JSON.stringify({ flowId, beaconSeen: true }));
 } finally {
