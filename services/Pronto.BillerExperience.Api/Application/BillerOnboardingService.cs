@@ -95,6 +95,74 @@ public sealed partial class BillerOnboardingService(
         return Map(biller);
     }
 
+    public async ValueTask<BillerResponse> AdvancePurchaseAsync(
+        string billerId,
+        AdvanceBillerPurchaseRequest request,
+        CancellationToken cancellationToken)
+    {
+        if (string.IsNullOrWhiteSpace(request.PurchaseId))
+        {
+            throw new ArgumentException("purchase_id is required.", nameof(request));
+        }
+
+        for (var attempt = 0; attempt < 3; attempt++)
+        {
+            var current = await GetRequiredBillerAsync(billerId, cancellationToken);
+            if (current.Status is BillerStatus.Purchased or BillerStatus.Live)
+            {
+                if (current.PurchaseId == request.PurchaseId && current.Tier == request.Tier)
+                {
+                    return Map(current);
+                }
+
+                if (current.PurchaseId is null && current.Tier == request.Tier)
+                {
+                    var adopted = current with { PurchaseId = request.PurchaseId };
+                    try
+                    {
+                        return Map(await repository.SaveBillerAsync(
+                            adopted,
+                            current.ETag,
+                            cancellationToken));
+                    }
+                    catch (ConcurrencyException) when (attempt < 2)
+                    {
+                        continue;
+                    }
+                }
+
+                throw new BillerPurchaseConflictException(
+                    $"Biller '{billerId}' already has a different completed purchase.");
+            }
+
+            if (current.Status is not (BillerStatus.Prospect or BillerStatus.Demo))
+            {
+                throw new BillerPurchaseConflictException(
+                    $"Biller '{billerId}' cannot be purchased from status '{current.Status}'.");
+            }
+
+            var purchased = current with
+            {
+                Status = BillerStatus.Purchased,
+                Tier = request.Tier,
+                PurchaseId = request.PurchaseId
+            };
+
+            try
+            {
+                return Map(await repository.SaveBillerAsync(
+                    purchased,
+                    current.ETag,
+                    cancellationToken));
+            }
+            catch (ConcurrencyException) when (attempt < 2)
+            {
+            }
+        }
+
+        throw new ConcurrencyException("The biller purchase could not be committed after three attempts.");
+    }
+
     public async ValueTask<OnboardingChatResponse> SendMessageAsync(
         string billerId,
         SendOnboardingMessageRequest request,
@@ -496,7 +564,7 @@ public sealed partial class BillerOnboardingService(
     }
 
     private static BillerResponse Map(BillerRecord record) =>
-        new(record.Id, record.Name, record.Slug, record.BillType, record.PostalCode, record.Website, record.Brand, record.Support, record.PaymentRails, record.Status, record.CreatedAt);
+        new(record.Id, record.Name, record.Slug, record.BillType, record.PostalCode, record.Website, record.Brand, record.Support, record.PaymentRails, record.Status, record.CreatedAt, record.Tier);
 
     private static OnboardingSessionResponse Map(OnboardingRunRecord record) =>
         new(record.Id, record.BillerId, record.State, record.MissingFields, record.UpdatedAt);
@@ -588,3 +656,5 @@ public sealed partial class BillerOnboardingService(
         string findingCode,
         string findingMessage);
 }
+
+public sealed class BillerPurchaseConflictException(string message) : Exception(message);

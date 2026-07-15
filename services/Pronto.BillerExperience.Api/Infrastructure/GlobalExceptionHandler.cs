@@ -19,6 +19,7 @@ public sealed partial class GlobalExceptionHandler(
             ExperienceValidationException => (StatusCodes.Status422UnprocessableEntity, "Experience is not ready to publish", "experience_validation_blocked"),
             KeyNotFoundException => (StatusCodes.Status404NotFound, "Resource not found", "resource_not_found"),
             ArgumentException => (StatusCodes.Status400BadRequest, "Invalid request", "invalid_request"),
+            BillerPurchaseConflictException => (StatusCodes.Status409Conflict, "Purchase conflict", "purchase_conflict"),
             ConcurrencyException => (StatusCodes.Status409Conflict, "Concurrent update", "concurrent_update"),
             _ => (StatusCodes.Status500InternalServerError, "Unexpected error", "unexpected_error")
         };

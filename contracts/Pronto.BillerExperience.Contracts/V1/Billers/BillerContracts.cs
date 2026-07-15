@@ -21,7 +21,12 @@ public sealed record BillerResponse(
     BillerSupport? Support,
     IReadOnlyList<PaymentRailReference> PaymentRails,
     BillerStatus Status,
-    DateTimeOffset CreatedAt);
+    DateTimeOffset CreatedAt,
+    BillerTier Tier = BillerTier.Shared);
+
+public sealed record AdvanceBillerPurchaseRequest(
+    string PurchaseId,
+    BillerTier Tier);
 
 public enum BillerStatus
 {
@@ -29,6 +34,12 @@ public enum BillerStatus
     Demo,
     Purchased,
     Live
+}
+
+public enum BillerTier
+{
+    Shared,
+    Isolated
 }
 
 public sealed record BillerBrand(

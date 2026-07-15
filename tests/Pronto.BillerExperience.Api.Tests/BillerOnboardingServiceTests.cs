@@ -34,7 +34,46 @@ public sealed class BillerOnboardingServiceTests
 
         Assert.Contains("\"id\":\"biller-1\"", json, StringComparison.Ordinal);
         Assert.Contains("\"postal_code\":\"02110\"", json, StringComparison.Ordinal);
+        Assert.Contains("\"tier\":0", json, StringComparison.Ordinal);
         Assert.DoesNotContain("\"Id\"", json, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task PurchaseAdvancesBillerAndIsIdempotentForTheSamePurchase()
+    {
+        var service = CreateService();
+        var created = await service.CreateAsync(CreateRequest(), CancellationToken.None);
+        var request = new AdvanceBillerPurchaseRequest("purchase-1", BillerTier.Isolated);
+
+        var purchased = await service.AdvancePurchaseAsync(
+            created.Biller.BillerId,
+            request,
+            CancellationToken.None);
+        var replay = await service.AdvancePurchaseAsync(
+            created.Biller.BillerId,
+            request,
+            CancellationToken.None);
+
+        Assert.Equal(BillerStatus.Purchased, purchased.Status);
+        Assert.Equal(BillerTier.Isolated, purchased.Tier);
+        Assert.Equal(purchased, replay);
+    }
+
+    [Fact]
+    public async Task DifferentPurchaseCannotReplaceCompletedPurchase()
+    {
+        var service = CreateService();
+        var created = await service.CreateAsync(CreateRequest(), CancellationToken.None);
+        await service.AdvancePurchaseAsync(
+            created.Biller.BillerId,
+            new AdvanceBillerPurchaseRequest("purchase-1", BillerTier.Shared),
+            CancellationToken.None);
+
+        await Assert.ThrowsAsync<BillerPurchaseConflictException>(async () =>
+            await service.AdvancePurchaseAsync(
+                created.Biller.BillerId,
+                new AdvanceBillerPurchaseRequest("purchase-2", BillerTier.Shared),
+                CancellationToken.None));
     }
 
     [Fact]

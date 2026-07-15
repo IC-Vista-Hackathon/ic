@@ -35,6 +35,17 @@ public sealed partial class BillersController(
     public async Task<ActionResult<BillerResponse>> Get(string billerId, CancellationToken cancellationToken) =>
         Ok(await onboarding.GetBillerAsync(billerId, cancellationToken));
 
+    [HttpPost("{billerId}/purchase")]
+    [ProducesResponseType<BillerResponse>(StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status400BadRequest)]
+    [ProducesResponseType(StatusCodes.Status404NotFound)]
+    [ProducesResponseType(StatusCodes.Status409Conflict)]
+    public async Task<ActionResult<BillerResponse>> AdvancePurchase(
+        string billerId,
+        [FromBody] AdvanceBillerPurchaseRequest request,
+        CancellationToken cancellationToken) =>
+        Ok(await onboarding.AdvancePurchaseAsync(billerId, request, cancellationToken));
+
     [HttpGet("{billerId}/session")]
     [ProducesResponseType<OnboardingSessionResponse>(StatusCodes.Status200OK)]
     public async Task<ActionResult<OnboardingSessionResponse>> GetSession(string billerId, CancellationToken cancellationToken) =>

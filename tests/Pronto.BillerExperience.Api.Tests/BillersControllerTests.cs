@@ -78,6 +78,24 @@ public sealed class BillersControllerTests
             () => controller.Get("missing-biller", CancellationToken.None));
     }
 
+    [Fact]
+    public async Task PurchaseEndpointAdvancesBillerStatusAndTier()
+    {
+        var controller = Controller();
+        var created = await controller.Create(Request(), CancellationToken.None);
+        var billerId = ((OnboardingBootstrapResponse)((CreatedAtActionResult)created.Result!).Value!)
+            .Biller.BillerId;
+
+        var result = await controller.AdvancePurchase(
+            billerId,
+            new AdvanceBillerPurchaseRequest("purchase-1", BillerTier.Isolated),
+            CancellationToken.None);
+
+        var response = Assert.IsType<BillerResponse>(((OkObjectResult)result.Result!).Value);
+        Assert.Equal(BillerStatus.Purchased, response.Status);
+        Assert.Equal(BillerTier.Isolated, response.Tier);
+    }
+
     private static BillersController Controller()
     {
         var onboarding = new BillerOnboardingService(
