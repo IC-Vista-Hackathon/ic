@@ -152,6 +152,35 @@ public sealed class ComplianceReviewTests
     }
 
     [Fact]
+    public async Task FoundryReviewRejectsNonHttpsCitationsAsEvidence()
+    {
+        var output = """
+            {
+              "status":"completed",
+              "summary":"No finding.",
+              "findings":[],
+              "sources":[]
+            }
+            """;
+        var reviewer = new FoundryComplianceKnowledgeReviewer(
+            new RecordingFoundryGateway(new FoundryAgentOutput(
+                output,
+                [new FoundryCitation(new Uri("http://example.com/source"), "Insecure source")])),
+            Options(true),
+            NullLogger<FoundryComplianceKnowledgeReviewer>.Instance);
+
+        var review = await reviewer.ReviewAsync(
+            Biller(),
+            Definition(),
+            [],
+            ComplianceReviewStage.Publish,
+            CancellationToken.None);
+
+        Assert.Equal(ComplianceKnowledgeReviewStatus.Failed, review.Status);
+        Assert.Equal("compliance.foundry_invalid_output", review.ErrorCode);
+    }
+
+    [Fact]
     public async Task MissingJurisdictionRemainsAReviewableWarning()
     {
         var output = """

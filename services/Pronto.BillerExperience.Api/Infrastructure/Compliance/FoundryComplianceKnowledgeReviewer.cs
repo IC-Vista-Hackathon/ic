@@ -139,7 +139,12 @@ public sealed partial class FoundryComplianceKnowledgeReviewer(
         var declaredSources = (document.Sources ?? [])
             .Where(source => TryHttps(source.Url, out _))
             .Select(source => new Uri(source.Url!))
-            .Concat(output.Citations.Select(citation => citation.Url))
+            .Concat(output.Citations
+                .Where(citation => string.Equals(
+                    citation.Url.Scheme,
+                    Uri.UriSchemeHttps,
+                    StringComparison.OrdinalIgnoreCase))
+                .Select(citation => citation.Url))
             .Distinct()
             .ToArray();
         if (declaredSources.Length == 0)
