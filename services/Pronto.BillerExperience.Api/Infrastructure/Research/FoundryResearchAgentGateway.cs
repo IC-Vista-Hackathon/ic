@@ -221,8 +221,8 @@ public sealed partial class FoundryAgentServiceGateway : IFoundryAgentServiceGat
     [LoggerMessage(2675, LogLevel.Information, "Invoking Foundry agent {AgentId}; trace {TraceId}")]
     private static partial void LogInvocationStarted(ILogger logger, string agentId, string? traceId);
 
-    [LoggerMessage(2676, LogLevel.Information, "Foundry agent {AgentId} completed with {CitationCount} citations in {DurationMs} ms; trace {TraceId}")]
-    private static partial void LogInvocationCompleted(ILogger logger, string agentId, int citationCount, double durationMs, string? traceId);
+    [LoggerMessage(2676, LogLevel.Information, "Foundry agent {AgentId} completed with {SdkCitationCount} SDK-native citations in {DurationMs} ms; trace {TraceId}")]
+    private static partial void LogInvocationCompleted(ILogger logger, string agentId, int sdkCitationCount, double durationMs, string? traceId);
 
     [LoggerMessage(2677, LogLevel.Warning, "Foundry agent {AgentId} returned HTTP {StatusCode} on attempt {Attempt}/{MaximumAttempts}; retrying in {DelayMs} ms; trace {TraceId}")]
     private static partial void LogInvocationRetry(

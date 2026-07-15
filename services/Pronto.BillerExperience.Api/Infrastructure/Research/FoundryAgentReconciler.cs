@@ -64,6 +64,9 @@ public sealed partial class FoundryAgentReconciler(
         var root = Path.IsPathRooted(options.DefinitionsPath) ? options.DefinitionsPath : Path.Combine(contentRoot, options.DefinitionsPath);
         if (!Directory.Exists(root)) throw new DirectoryNotFoundException($"Agent definitions path '{root}' was not found.");
         var primary = new HashSet<string>(["onboarding", "financial-planning", "policy", "execution"], StringComparer.OrdinalIgnoreCase);
+        var billerResearchWorkers = new HashSet<string>(
+            ["biller-research", "biller-brand-research", "biller-payment-policy-research"],
+            StringComparer.OrdinalIgnoreCase);
         return Directory.GetDirectories(root)
             .Select(path => (Name: Path.GetFileName(path), Instructions: Path.Combine(path, "instructions.md")))
             // The grounded compliance agent is provisioned exclusively by the index workflow,
@@ -74,7 +77,11 @@ public sealed partial class FoundryAgentReconciler(
             {
                 var instructions = File.ReadAllText(item.Instructions);
                 var model = primary.Contains(item.Name) ? options.PrimaryModel : options.MiniModel;
-                var capability = item.Name == "biller-research" ? "biller_research" : item.Name == "research-coordinator" ? "research_consolidation" : item.Name.Replace('-', '_');
+                var capability = billerResearchWorkers.Contains(item.Name)
+                    ? "biller_research"
+                    : item.Name == "research-coordinator"
+                        ? "research_consolidation"
+                        : item.Name.Replace('-', '_');
                 var fingerprint = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes($"{model}\n{instructions}\n{options.McpConnectionId}"))).ToLowerInvariant();
                 return new DesiredFoundryAgent(item.Name, model, instructions, fingerprint, capability);
             }).ToArray();
@@ -121,7 +128,7 @@ public sealed class FoundryAgentAdministrationGateway(AIProjectClient project, I
                 require_approval = "never"
             }
         };
-        if (agent.Name == "biller-research") tools.Add(new { type = "web_search_preview" });
+        if (agent.Capability == "biller_research") tools.Add(new { type = "web_search_preview" });
         var payload = BinaryData.FromObjectAsJson(new
         {
             description = "Managed by Pronto agent reconciliation.",

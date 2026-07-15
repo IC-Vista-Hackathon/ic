@@ -181,6 +181,11 @@ compliance agents perform bounded domain work and return typed results. The
 fans independent reviews out in parallel, passes results, enforces timeouts, records state and
 activity, and decides whether the goal can continue or must fail.
 
+Biller research uses three approved, web-grounded workers: a general researcher, a brand-evidence
+specialist, and a payment-policy specialist. Orchestration filters the Foundry inventory by the
+`biller_research` capability, invokes up to the configured bounded concurrency, and asks the
+research coordinator to consolidate when more than one worker returns cited evidence.
+
 Every agent instruction imports [`agents/RESPONSIBLE_AI.md`](agents/RESPONSIBLE_AI.md). Runtime
 guardrails repeat the policy at provider boundaries and validate cited output. Shared learning,
 including accepted billing-profile artifacts and corrections, is biller- and run-scoped in Cosmos

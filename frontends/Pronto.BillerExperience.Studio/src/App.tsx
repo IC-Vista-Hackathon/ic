@@ -5,7 +5,8 @@ import { toBillerSlug } from './slug';
 import { trackEvent } from './insights';
 import { categorizeError } from './telemetryPolicy';
 import { logError, logEvent } from './telemetry';
-import { agentActivityMeta } from './agentActivityMeta';
+import { agentActivityMeta, partitionAgentActivity } from './agentActivityMeta';
+import { billingInterviewPending, billingInterviewPrompt } from './billingReadiness';
 import type { AgentActivity, Deployment, ExperienceDefinition, ExperienceRevision, Session } from './types';
 
 const PUBLISH_FAILURE_MESSAGE = 'We could not publish your payer site. Please try again. If the problem continues, contact support.';
@@ -46,12 +47,9 @@ const isTerminalStatus = (status: AgentActivity['status']) => TERMINAL_AGENT_STA
 function runOutcome(activity: AgentActivity[]): 'success' | 'warnings' | 'failed' {
   // Collapse the accumulated event history to the latest event per agent; the raw array keeps
   // superseded statuses (discovered -> running -> completed) that would otherwise read as in-flight.
-  const latest = [...activity]
-    .reverse()
-    .filter((item, index, all) => all.findIndex(candidate => candidate.agent_id === item.agent_id) === index)
-    .reverse();
-  if (latest.some(item => item.status === 'failed')) return 'failed';
-  if (latest.some(item => item.status === 'degraded' || !isTerminalStatus(item.status))) return 'warnings';
+  const { invoked } = partitionAgentActivity(activity);
+  if (invoked.some(item => item.status === 'failed')) return 'failed';
+  if (invoked.some(item => item.status === 'degraded' || !isTerminalStatus(item.status))) return 'warnings';
   return 'success';
 }
 
@@ -566,10 +564,7 @@ function AgentActivityPanel({
   connection: State['activityConnection'];
   complete?: boolean;
 }) {
-  const latest = [...activity]
-    .reverse()
-    .filter((item, index, all) => all.findIndex(candidate => candidate.agent_id === item.agent_id) === index)
-    .reverse();
+  const { invoked, inventory } = partitionAgentActivity(activity);
   const color = (status: AgentActivity['status']) =>
     status === 'completed' ? '#197d00' : status === 'failed' ? '#b42318' : status === 'degraded' ? '#b54708' : status === 'skipped' ? '#667085' : '#0b4f6c';
   const icon = (status: AgentActivity['status']) =>
@@ -584,14 +579,16 @@ function AgentActivityPanel({
   return (
     <section aria-live="polite" style={css('width:100%;max-width:720px;margin-top:20px;padding:16px;border:1px solid var(--invoicecloud-surface-default-border);border-radius:14px;background:#fff;box-shadow:var(--invoicecloud-elevation-1)')}>
       <div style={css('display:flex;justify-content:space-between;gap:12px;align-items:center;margin-bottom:12px')}>
-        <span><strong>Foundry agents at work</strong><small style={css('display:block;margin-top:3px;color:var(--invoicecloud-utility-neutral-70)')}>Pronto orchestration is delegating and tracking the agents below.</small></span>
+        <span><strong>Research orchestration</strong><small style={css('display:block;margin-top:3px;color:var(--invoicecloud-utility-neutral-70)')}>Invoked agents are tracked separately from the available Foundry inventory.</small></span>
         <small style={css(`color:${connection === 'disconnected' && !complete ? '#b42318' : 'var(--invoicecloud-utility-neutral-70)'}`)}>{connectionLabel}</small>
       </div>
-      {latest.length === 0 ? (
+      {invoked.length === 0 ? (
         <p style={css('margin:0;color:var(--invoicecloud-utility-neutral-70);font-size:14px')}>{complete ? 'Orchestration run finished; no eligible agents were engaged.' : 'Waiting for orchestration to discover eligible agents…'}</p>
       ) : (
+        <>
+        <small style={css('display:block;margin:0 0 8px;color:var(--invoicecloud-utility-neutral-70);font-weight:700')}>Invoked agents</small>
         <div style={css('display:grid;grid-template-columns:repeat(auto-fit,minmax(210px,1fr));gap:10px')}>
-          {latest.map(item => {
+          {invoked.map(item => {
             const status = displayStatus(item.status);
             const settled = status !== item.status;
             return (
@@ -604,6 +601,20 @@ function AgentActivityPanel({
             );
           })}
         </div>
+        </>
+      )}
+      {inventory.length > 0 && (
+        <details style={css('margin-top:12px;border-top:1px solid var(--invoicecloud-surface-default-border);padding-top:10px')}>
+          <summary style={css('cursor:pointer;color:var(--invoicecloud-utility-neutral-80);font-size:13px;font-weight:700')}>Foundry inventory ({inventory.length} not invoked)</summary>
+          <div style={css('display:grid;gap:8px;margin-top:8px')}>
+            {inventory.map(item => (
+              <div key={item.agent_id} style={css('padding:8px 10px;border-radius:8px;background:var(--invoicecloud-utility-neutral-10);font-size:12px')}>
+                <strong>{item.display_name}</strong> <code style={css('font-size:11px')}>{item.agent_id}</code>
+                <span style={css('display:block;margin-top:3px;color:var(--invoicecloud-utility-neutral-70)')}>{item.summary}</span>
+              </div>
+            ))}
+          </div>
+        </details>
       )}
     </section>
   );
@@ -615,6 +626,7 @@ export function App() {
   const saveBtnRef = useRef<HTMLButtonElement>(null);
   const signupDialogRef = useRef<HTMLFormElement>(null);
   const checkoutDialogRef = useRef<HTMLFormElement>(null);
+  const previewChatInputRef = useRef<HTMLInputElement>(null);
   const modalTriggerRef = useRef<HTMLElement | null>(null);
 
   useEffect(() => () => { timers.current.forEach(clearTimeout); }, []);
@@ -1040,8 +1052,29 @@ export function App() {
     modalTriggerRef.current = document.activeElement instanceof HTMLElement ? document.activeElement : null;
   };
   const openSignup = () => { rememberModalTrigger(); patch({ modal: 'signup', pendingLob: true, signupError: null }); };
-  const openCheckout = () => { rememberModalTrigger(); trackEvent('studio.purchase_started', { biller_id: s.backendBillerId ?? undefined }); patch({ modal: 'checkout' }); };
-  const publishFromPreview = () => { rememberModalTrigger(); trackEvent('studio.purchase_started', { biller_id: s.backendBillerId ?? undefined }); patch({ pendingLob: true, modal: 'checkout' }); };
+  const continueBillingInterview = () => {
+    patch({
+      screen: 'preview',
+      modal: null,
+      pendingLob: true,
+      publishError: null,
+      previewChatError: null,
+      previewChatReply: billingInterviewPrompt(s.backendSession),
+    });
+    window.setTimeout(() => previewChatInputRef.current?.focus(), 0);
+  };
+  const openCheckout = () => {
+    if (billingInterviewPending(s.backendSession)) { continueBillingInterview(); return; }
+    rememberModalTrigger();
+    trackEvent('studio.purchase_started', { biller_id: s.backendBillerId ?? undefined });
+    patch({ modal: 'checkout' });
+  };
+  const publishFromPreview = () => {
+    if (billingInterviewPending(s.backendSession)) { continueBillingInterview(); return; }
+    rememberModalTrigger();
+    trackEvent('studio.purchase_started', { biller_id: s.backendBillerId ?? undefined });
+    patch({ pendingLob: true, modal: 'checkout' });
+  };
   const closeModal = () => patch({ modal: null });
   const setSignupEmail = (e: React.ChangeEvent<HTMLInputElement>) => patch({ signupEmail: e.target.value, signupError: null });
   const setSignupPassword = (e: React.ChangeEvent<HTMLInputElement>) => patch({ signupPassword: e.target.value, signupError: null });
@@ -1074,6 +1107,11 @@ export function App() {
   const submitCheckout = async (e: FormEvent) => {
     e.preventDefault();
     if (s.publishing) return;
+    if (billingInterviewPending(s.backendSession)) {
+      logEvent('studio.publish_interview_incomplete', { biller_id: s.backendBillerId });
+      continueBillingInterview();
+      return;
+    }
     patch({ publishing: true, publishError: null });
     trackEvent('studio.publish_requested', { biller_id: s.backendBillerId ?? undefined });
     try {
@@ -2170,7 +2208,7 @@ export function App() {
               </div>
             )}
             <form onSubmit={submitPreviewChange} style={css('display:flex;gap:8px')}>
-              <input value={s.previewChatInput} onChange={event => patch({ previewChatInput: event.target.value })} disabled={s.previewChatBusy || !!s.previewProposal} placeholder={s.backendSession?.current_question ? 'Answer the required question…' : 'e.g. Make the heading friendlier and change the button to Pay later'} style={css('flex:1;padding:11px 12px;border:1px solid var(--invoicecloud-surface-default-border);border-radius:8px;font-size:14px')} />
+              <input ref={previewChatInputRef} value={s.previewChatInput} onChange={event => patch({ previewChatInput: event.target.value })} disabled={s.previewChatBusy || !!s.previewProposal} placeholder={s.backendSession?.current_question ? 'Answer the required question…' : 'e.g. Make the heading friendlier and change the button to Pay later'} style={css('flex:1;padding:11px 12px;border:1px solid var(--invoicecloud-surface-default-border);border-radius:8px;font-size:14px')} />
               <button type="submit" disabled={s.previewChatBusy || !!s.previewProposal || !s.previewChatInput.trim()} style={css('border:0;border-radius:8px;padding:10px 16px;background:var(--invoicecloud-primary);color:#fff;font-weight:700;cursor:pointer')}>{s.previewChatBusy ? 'Working...' : s.backendSession?.current_question ? 'Send answer' : 'Propose change'}</button>
             </form>
             {s.previewChatError && <div role="alert" style={css('margin-top:10px;padding:10px;border-radius:8px;background:var(--invoicecloud-intent-error-background);color:var(--invoicecloud-intent-error)')}>{s.previewChatError}</div>}
@@ -2544,12 +2582,12 @@ export function App() {
 
           <div style={css(`width:100%;max-width:${previewMaxWidth};background:var(--invoicecloud-utility-neutral-90);color:#fff;border-radius:14px;padding:var(--invoicecloud-spacing-m) var(--invoicecloud-spacing-l);margin-top:var(--invoicecloud-spacing-m);display:flex;align-items:center;justify-content:space-between;gap:var(--invoicecloud-spacing-m);flex-wrap:wrap;animation:fadeUp .4s ease-out`)}>
             <div>
-              <div style={css('font-weight:500;margin-bottom:2px')}>{s.payerStep === 2 ? "That's what your payers will see." : 'Ready to publish this experience?'}</div>
-              <div style={css('font-size:13px;opacity:.75')}>{s.payerStep === 2 ? 'The payment journey is verified. Launch it now, or save it for later.' : 'You can publish at any point; completing the sample payment is optional.'}</div>
+              <div style={css('font-weight:500;margin-bottom:2px')}>{billingInterviewPending(s.backendSession) ? 'Finish the billing interview before publishing.' : s.payerStep === 2 ? "That's what your payers will see." : 'Ready to publish this experience?'}</div>
+              <div style={css('font-size:13px;opacity:.75')}>{billingInterviewPending(s.backendSession) ? billingInterviewPrompt(s.backendSession) : s.payerStep === 2 ? 'The payment journey is verified. Launch it now, or save it for later.' : 'You can publish at any point; completing the sample payment is optional.'}</div>
             </div>
             <div style={css('display:flex;gap:var(--invoicecloud-spacing-s);flex-wrap:wrap')}>
               <button type="button" onClick={openSignup} style={css('background:none;border:1px solid rgba(255,255,255,.3);color:#fff;border-radius:10px;padding:12px 20px;font-size:14px;cursor:pointer')}>Save without publishing</button>
-              <button type="button" onClick={publishFromPreview} style={css('background:var(--invoicecloud-secondary);color:var(--invoicecloud-utility-neutral-100);border:none;border-radius:10px;padding:12px 24px;font-size:14px;font-weight:700;cursor:pointer')}>Publish &rarr;</button>
+              <button type="button" onClick={publishFromPreview} style={css('background:var(--invoicecloud-secondary);color:var(--invoicecloud-utility-neutral-100);border:none;border-radius:10px;padding:12px 24px;font-size:14px;font-weight:700;cursor:pointer')}>{billingInterviewPending(s.backendSession) ? 'Finish billing interview' : 'Publish →'}</button>
             </div>
           </div>
         </div>

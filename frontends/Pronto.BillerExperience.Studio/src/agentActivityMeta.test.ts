@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { agentActivityMeta } from './agentActivityMeta';
+import { agentActivityMeta, partitionAgentActivity } from './agentActivityMeta';
 import type { AgentActivity } from './types';
 
 const activity = (duration_ms: number | null | undefined): AgentActivity => ({
@@ -23,5 +23,29 @@ describe('agentActivityMeta', () => {
 
   it('renders measured durations', () => {
     expect(agentActivityMeta(activity(4854.26))).toBe('degraded · 4854 ms · research.foundry_invalid_output');
+  });
+
+  it('separates non-invoked Foundry inventory from agents that executed', () => {
+    const inventory: AgentActivity = {
+      ...activity(null),
+      event_id: 'event-inventory',
+      agent_id: 'policy',
+      display_name: 'Policy',
+      status: 'skipped',
+      summary: 'Available in the foundry inventory; not invoked (missing capability biller_research).',
+      error_code: 'research.agent_ineligible',
+    };
+    const completed: AgentActivity = {
+      ...activity(1200),
+      event_id: 'event-completed',
+      status: 'completed',
+      summary: 'Agent returned cited research.',
+      error_code: undefined,
+    };
+
+    const result = partitionAgentActivity([inventory, completed]);
+
+    expect(result.invoked.map(item => item.agent_id)).toEqual(['biller-research']);
+    expect(result.inventory.map(item => item.agent_id)).toEqual(['policy']);
   });
 });
