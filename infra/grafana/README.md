@@ -21,6 +21,7 @@ worker's `ic.biller.publication.*` meters.
 |---|---|
 | `dashboards/payer-funnel.json` | Payer funnel `session_started → bill_lookup(found) → payment_method_selected → review_opened → payment_submitted → payment_completed`; payment failure rate; AutoPay/Paperless opt-in rates; failures by `error_category`. |
 | `dashboards/service-health.json` | Per-API p95 latency and error rate (`requests` by `cloud_RoleName`); publish pipeline duration; publish outcomes (ready vs failed). |
+| `dashboards/foundry-orchestration.json` | Foundry calls by real agent ID and outcome; invocation latency; API-to-agent distributed trace evidence. |
 
 Both dashboards declare two template variables so they import cleanly into any Grafana:
 

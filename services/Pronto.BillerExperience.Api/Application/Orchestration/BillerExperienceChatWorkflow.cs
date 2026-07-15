@@ -38,7 +38,17 @@ internal sealed partial class BillerExperienceChatWorkflow(
             "biller-research", "Biller Research", "Reviewing the supplied biller profile and brand context",
             (biller, stepContext, token) => ResearchAsync(biller, input.EventSink, stepContext, token),
             input.EventSink,
-            logger);
+            logger,
+            research => research.Outcome switch
+            {
+                ResearchOutcome.Skipped => (OrchestrationEventStatus.Skipped,
+                    "Research was skipped because no research provider was available.", research.ErrorCode),
+                ResearchOutcome.Degraded => (OrchestrationEventStatus.Degraded,
+                    "Research completed with warnings.", research.ErrorCode),
+                ResearchOutcome.Failed => (OrchestrationEventStatus.Failed,
+                    "Research failed.", research.ErrorCode),
+                _ => (OrchestrationEventStatus.Completed, "Research completed successfully.", null)
+            });
         var research = await researchStep.ExecuteAsync(input.Biller, context, cancellationToken);
 
         if (research.Outcome == ResearchOutcome.Failed)
@@ -105,12 +115,6 @@ internal sealed partial class BillerExperienceChatWorkflow(
         OrchestrationContext context,
         CancellationToken cancellationToken)
     {
-        if (biller.Website is null)
-        {
-            return ValueTask.FromResult(new BillerResearchResponse(
-                ResearchOutcome.Skipped, [], [], ["research.website_missing"], "research.website_missing"));
-        }
-
         if (researchCoordinator is null)
         {
             return ValueTask.FromResult(new BillerResearchResponse(
@@ -118,7 +122,12 @@ internal sealed partial class BillerExperienceChatWorkflow(
         }
 
         return new ValueTask<BillerResearchResponse>(researchCoordinator.ResearchAsync(
-            new BillerResearchRequest(biller.Website, "Research the biller brand, services, and customer-facing payment context."),
+            new BillerResearchRequest(
+                biller.Website,
+                "Research the biller brand, services, and customer-facing payment context.",
+                BillerName: biller.Name,
+                BillType: biller.BillType,
+                PostalCode: biller.PostalCode),
             new ResearchExecutionContext(biller.Id, context.RunId, eventSink),
             cancellationToken));
     }
