@@ -1809,7 +1809,7 @@ export function App() {
               {s.reviewEditingSection === 'brand' && (
                 <div style={css('margin-top:var(--invoicecloud-spacing-m);border-top:1px solid var(--invoicecloud-surface-default-border);padding-top:var(--invoicecloud-spacing-m)')}>
                   <label style={css('display:block;font-size:13px;font-weight:500;margin-bottom:4px')}>Website</label>
-                  <input type="text" value={s.website} onChange={setWebsite} disabled={s.skipWebsite} placeholder="www.yourbusiness.com" style={css(`width:100%;padding:12px 14px;border-radius:4px;border:1px solid var(--invoicecloud-surface-default-border);font-size:16px;margin-bottom:var(--invoicecloud-spacing-s);opacity:${s.skipWebsite ? 0.5 : 1}`)} />
+                  <input type="text" value={s.website} onChange={setWebsite} placeholder="www.yourbusiness.com" style={css('width:100%;padding:12px 14px;border-radius:4px;border:1px solid var(--invoicecloud-surface-default-border);font-size:16px;margin-bottom:var(--invoicecloud-spacing-s)')} />
                   <label style={css('display:flex;align-items:center;gap:var(--invoicecloud-spacing-xs);font-size:14px;color:var(--invoicecloud-utility-neutral-70);cursor:pointer;margin-bottom:var(--invoicecloud-spacing-m)')}>
                     <input type="checkbox" checked={s.skipWebsite} onChange={toggleSkipWebsite} /> I don't have a website - use smart defaults
                   </label>
