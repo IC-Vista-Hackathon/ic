@@ -124,27 +124,11 @@ public sealed class CosmosInvoiceRepository : IInvoiceRepository
 
             var invoice = current.Resource;
 
-            // Idempotent replay: the same payment re-asserting the status it already produced.
-            if (invoice.Status == target
-                && string.Equals(invoice.LastPaymentId, paymentId, StringComparison.Ordinal))
+            var decision = InvoiceTransitionRules.Decide(
+                invoice.Status, invoice.LastPaymentId, target, paymentId);
+            if (decision != TransitionDecision.Apply)
             {
-                return new InvoiceTransitionResult(InvoiceTransitionOutcome.Updated, invoice);
-            }
-
-            var allowed = (invoice.Status, target) switch
-            {
-                (InvoiceStatus.Due, InvoiceStatus.Paid) => true,
-                (InvoiceStatus.Due, InvoiceStatus.Scheduled) => true,
-                (InvoiceStatus.Scheduled, InvoiceStatus.Paid) => true,
-                _ => false,
-            };
-
-            if (!allowed)
-            {
-                var outcome = invoice.Status == InvoiceStatus.Paid
-                    ? InvoiceTransitionOutcome.AlreadyPaid
-                    : InvoiceTransitionOutcome.InvalidTransition;
-                return new InvoiceTransitionResult(outcome, invoice);
+                return new InvoiceTransitionResult(decision.ToOutcome(), invoice);
             }
 
             var updated = new InvoiceDocument

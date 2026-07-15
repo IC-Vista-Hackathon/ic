@@ -2,11 +2,14 @@ using System.Security.Cryptography;
 using System.Diagnostics;
 using Pronto.Invoice.Contracts.V1.Invoices;
 using Pronto.Payment.Api.Clients;
+using Pronto.Payment.Api.Domain;
 using Pronto.Payment.Api.Fees;
 using Pronto.Payment.Api.Storage;
+using Pronto.Payment.Api.Workflow;
 using Pronto.Payment.Contracts.V1.Payments;
 using Pronto.ServiceDefaults.Errors;
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.Extensions.Options;
 
 namespace Pronto.Payment.Api.Controllers;
 
@@ -19,19 +22,37 @@ public sealed partial class PaymentsController : ControllerBase
     private readonly IPaymentStore store;
     private readonly IInvoiceClient invoices;
     private readonly IBillerConfigClient configs;
+    private readonly IPayerAccountValidator payerAccounts;
+    private readonly PaymentWorkflow workflow;
+    private readonly TimeProvider clock;
+    private readonly PaymentProcessingOptions options;
     private readonly ILogger<PaymentsController> logger;
 
-    public PaymentsController(IPaymentStore store, IInvoiceClient invoices, IBillerConfigClient configs, ILogger<PaymentsController> logger)
+    public PaymentsController(
+        IPaymentStore store,
+        IInvoiceClient invoices,
+        IBillerConfigClient configs,
+        IPayerAccountValidator payerAccounts,
+        PaymentWorkflow workflow,
+        TimeProvider clock,
+        IOptions<PaymentProcessingOptions> options,
+        ILogger<PaymentsController> logger)
     {
         this.store = store;
         this.invoices = invoices;
         this.configs = configs;
+        this.payerAccounts = payerAccounts;
+        this.workflow = workflow;
+        this.clock = clock;
+        this.options = options.Value;
         this.logger = logger;
     }
 
     [HttpPost]
     public async Task<ActionResult<PaymentResponse>> Create(
-        CreatePaymentRequest request, CancellationToken cancellationToken)
+        CreatePaymentRequest request,
+        [FromHeader(Name = "Idempotency-Key")] string? idempotencyHeader,
+        CancellationToken cancellationToken)
     {
         var config = await configs.GetAsync(request.BillerId, cancellationToken).ConfigureAwait(false);
 
@@ -39,6 +60,30 @@ public sealed partial class PaymentsController : ControllerBase
         {
             throw ServiceException.BadRequest(
                 "method_not_enabled", $"payment method '{request.Method}' is not enabled for this biller");
+        }
+
+        ValidateScheduleDate(request.ScheduledFor);
+        await payerAccounts.ValidateAsync(request.BillerId, request.PayerAccountId, cancellationToken)
+            .ConfigureAwait(false);
+
+        // The header wins over the body field; either provides durable client idempotency.
+        var idempotencyKey = Normalize(idempotencyHeader) ?? Normalize(request.IdempotencyKey);
+        var paymentId = PaymentRecord.DeriveId(request.BillerId, idempotencyKey);
+        var fingerprint = PaymentRecord.Fingerprint(
+            request.InvoiceId, request.Method, request.PayerAccountId, request.ScheduledFor);
+
+        // Fast path: a retried request with a known key replays the original outcome (finishing a
+        // still-pending record if the first attempt crashed mid-workflow) without re-reading state.
+        if (idempotencyKey is not null)
+        {
+            var existing = await store.FindAsync(request.BillerId, paymentId, cancellationToken)
+                .ConfigureAwait(false);
+            if (existing is not null)
+            {
+                EnsureSameRequest(existing, fingerprint);
+                var replayed = await workflow.DriveInitialAsync(existing, cancellationToken).ConfigureAwait(false);
+                return BuildResult(replayed, created: false);
+            }
         }
 
         var invoice = await invoices.GetAsync(request.BillerId, request.InvoiceId, cancellationToken)
@@ -50,38 +95,104 @@ public sealed partial class PaymentsController : ControllerBase
             throw ServiceException.Conflict("already_paid", $"invoice {request.InvoiceId} is already paid");
         }
 
+        // A second payment cannot target an invoice with an active scheduled payment; the Invoice
+        // Service's scheduled→paid binding is the authority, this is the fast, clear rejection.
+        if (invoice.Status == InvoiceStatus.Scheduled)
+        {
+            throw ServiceException.Conflict(
+                "invoice_scheduled", $"invoice {request.InvoiceId} already has an active scheduled payment");
+        }
+
         var (feeCents, totalCents) = FeeCalculator.Calculate(config, request.Method, invoice.AmountCents);
-        var paymentId = Guid.NewGuid().ToString();
-        var scheduled = request.ScheduledFor is not null;
+        var now = clock.GetUtcNow();
 
-        // The Invoice Service transition is the atomicity authority: a concurrent duplicate
-        // pay attempt loses here with 409 before any payment is persisted.
-        await invoices.UpdateStatusAsync(
-            request.BillerId,
-            request.InvoiceId,
-            new UpdateInvoiceStatusRequest(
-                scheduled ? InvoiceStatus.Scheduled : InvoiceStatus.Paid, paymentId),
-            cancellationToken).ConfigureAwait(false);
+        // Payment-first ordering: persist a durable pending record BEFORE the invoice transition,
+        // so a crash between the two never leaves a paid/scheduled invoice with no payment.
+        var pending = new PaymentRecord
+        {
+            PaymentId = paymentId,
+            BillerId = request.BillerId,
+            InvoiceId = request.InvoiceId,
+            PayerAccountId = request.PayerAccountId,
+            Method = request.Method,
+            AmountCents = invoice.AmountCents,
+            FeeCents = feeCents,
+            TotalCents = totalCents,
+            Confirmation = MintConfirmation(),
+            ScheduledFor = request.ScheduledFor,
+            ReceiptMessage = config.ReceiptMessage,
+            Lifecycle = PaymentLifecycle.Pending,
+            IdempotencyKey = idempotencyKey,
+            RequestFingerprint = fingerprint,
+            CreatedAt = now,
+            UpdatedAt = now,
+        };
 
-        var payment = new PaymentResponse(
-            PaymentId: paymentId,
-            BillerId: request.BillerId,
-            InvoiceId: request.InvoiceId,
-            PayerAccountId: request.PayerAccountId,
-            Method: request.Method,
-            AmountCents: invoice.AmountCents,
-            FeeCents: feeCents,
-            TotalCents: totalCents,
-            Confirmation: MintConfirmation(),
-            Status: scheduled ? PaymentStatus.Scheduled : PaymentStatus.Succeeded,
-            ScheduledFor: request.ScheduledFor,
-            ReceiptMessage: config.ReceiptMessage,
-            CreatedAt: DateTimeOffset.UtcNow);
-        await store.AddAsync(payment, cancellationToken).ConfigureAwait(false);
-        LogPaymentCreated(logger, payment.PaymentId, payment.BillerId, payment.InvoiceId, payment.Status, payment.TotalCents, Activity.Current?.TraceId.ToString());
+        var begin = await store.BeginAsync(pending, cancellationToken).ConfigureAwait(false);
+        if (!begin.Created)
+        {
+            // Lost the insert race to a concurrent request for the same key: it must be the same
+            // request, and we drive/return its record rather than creating a duplicate payment.
+            EnsureSameRequest(begin.Record, fingerprint);
+        }
 
-        return Created($"/payments/{payment.PaymentId}?biller_id={payment.BillerId}", payment);
+        var finalized = await workflow.DriveInitialAsync(begin.Record, cancellationToken).ConfigureAwait(false);
+        LogPaymentCreated(logger, finalized.PaymentId, finalized.BillerId, finalized.InvoiceId, finalized.WireStatus, finalized.TotalCents, Activity.Current?.TraceId.ToString());
+
+        return BuildResult(finalized, created: begin.Created);
     }
+
+    private ActionResult<PaymentResponse> BuildResult(PaymentRecord record, bool created)
+    {
+        if (record.Lifecycle == PaymentLifecycle.Failed)
+        {
+            // Replaying a request whose invoice transition was refused; surface the original 409.
+            throw ServiceException.Conflict(
+                record.FailureReason ?? "payment_failed",
+                $"payment {record.PaymentId} could not be completed: {record.FailureReason ?? "invoice refused the transition"}");
+        }
+
+        var response = record.ToResponse();
+        return created
+            ? Created($"/payments/{response.PaymentId}?biller_id={response.BillerId}", response)
+            : Ok(response);
+    }
+
+    private void ValidateScheduleDate(DateOnly? scheduledFor)
+    {
+        if (scheduledFor is not { } date)
+        {
+            return;
+        }
+
+        var today = DateOnly.FromDateTime(clock.GetUtcNow().UtcDateTime);
+        if (date < today)
+        {
+            throw ServiceException.BadRequest(
+                "invalid_schedule_date", "scheduled_for cannot be in the past.");
+        }
+
+        var maxDate = today.AddDays(options.MaxScheduleDays);
+        if (date > maxDate)
+        {
+            throw ServiceException.BadRequest(
+                "invalid_schedule_date", $"scheduled_for cannot be more than {options.MaxScheduleDays} days in the future.");
+        }
+    }
+
+    private static void EnsureSameRequest(PaymentRecord existing, string fingerprint)
+    {
+        if (existing.RequestFingerprint is not null
+            && !string.Equals(existing.RequestFingerprint, fingerprint, StringComparison.Ordinal))
+        {
+            throw ServiceException.Conflict(
+                "idempotency_key_conflict",
+                "the idempotency key was already used for a different payment request.");
+        }
+    }
+
+    private static string? Normalize(string? value)
+        => string.IsNullOrWhiteSpace(value) ? null : value.Trim();
 
     /// <summary>
     /// Pre-confirmation quote using the same config + FeeCalculator as payment creation,
@@ -120,8 +231,17 @@ public sealed partial class PaymentsController : ControllerBase
     [HttpGet("{paymentId}")]
     public async Task<ActionResult<PaymentResponse>> Get(
         string paymentId, [FromQuery(Name = "biller_id")] string billerId, CancellationToken cancellationToken)
-        => await store.FindAsync(billerId, paymentId, cancellationToken).ConfigureAwait(false)
-            ?? throw ServiceException.NotFound("not_found", $"payment {paymentId} not found");
+    {
+        var record = await store.FindAsync(billerId, paymentId, cancellationToken).ConfigureAwait(false);
+
+        // A payment is a receipt only once finalized; a transient pending record is not surfaced.
+        if (record is null || !record.IsFinalized)
+        {
+            throw ServiceException.NotFound("not_found", $"payment {paymentId} not found");
+        }
+
+        return record.ToResponse();
+    }
 
     [HttpGet]
     public async Task<ActionResult<IReadOnlyList<PaymentResponse>>> List(
@@ -132,7 +252,7 @@ public sealed partial class PaymentsController : ControllerBase
     {
         var results = await store.ListAsync(billerId, payerAccountId, invoiceId, cancellationToken).ConfigureAwait(false);
         LogPaymentsListed(logger, billerId, payerAccountId, invoiceId, results.Count, Activity.Current?.TraceId.ToString());
-        return Ok(results);
+        return Ok(results.Select(record => record.ToResponse()).ToArray());
     }
 
     private static string MintConfirmation()

@@ -158,6 +158,9 @@ public sealed partial class InvoicesController : ControllerBase
                 NotFound(ApiError.Of("not_found", $"invoice {invoiceId} not found.")),
             InvoiceTransitionOutcome.AlreadyPaid => Conflict(
                 ApiError.Of("already_paid", $"invoice {invoiceId} is already paid.")),
+            InvoiceTransitionOutcome.ScheduleLocked => Conflict(ApiError.Of(
+                "schedule_locked",
+                $"invoice {invoiceId} has an active scheduled payment and cannot be settled by another payment.")),
             _ => Conflict(ApiError.Of(
                 "invalid_transition",
                 $"invoice {invoiceId} cannot move to {request.Status}.")),
