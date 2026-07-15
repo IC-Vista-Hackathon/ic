@@ -1,5 +1,5 @@
 import { CSSProperties, FormEvent, useEffect, useRef, useState } from 'react';
-import { activityUrl, api } from './api';
+import { activityUrl, api, type BrandScanResult } from './api';
 import { errorMessage, UiRequestError, type ValidationFinding } from './http';
 import { toBillerSlug } from './slug';
 import { trackEvent } from './insights';
@@ -195,6 +195,10 @@ interface State {
   logoDataUrl: string | null;
   logoFetchOk: boolean;
   extractedColors: string[] | null;
+  scanStatus: 'idle' | 'scanning' | 'done' | 'error';
+  scannedWebsite: string | null;
+  scannedFont: string | null;
+  scannedLogoUrl: string | null;
   colorChoice: 'auto' | 'custom';
   customPrimary: string;
   customSecondary: string;
@@ -426,6 +430,8 @@ function initialsFrom(name: string): string { return (name || '').trim().split(/
 function initialsFromEmail(email: string): string { const local = (email || '').trim().split('@')[0] || ''; const parts = local.split(/[^a-zA-Z0-9]+/).filter(Boolean); const initials = parts.slice(0, 2).map((p) => p[0]?.toUpperCase() || '').join(''); return initials || 'YB'; }
 const MIN_PASSWORD_LENGTH = 8;
 function domainFromWebsite(url: string): string { if (!url) return ''; return url.trim().toLowerCase().replace(/^https?:\/\//, '').replace(/^www\./, '').split('/')[0]; }
+function normalizeWebsite(url: string): string { const t = (url || '').trim(); if (!t) return ''; return /^https?:\/\//i.test(t) ? t : `https://${t}`; }
+function faviconFor(domain: string): string { return `https://www.google.com/s2/favicons?domain=${encodeURIComponent(domain)}&sz=128`; }
 
 function extractColorsFromImage(img: HTMLImageElement): string[] {
   const size = 32;
@@ -581,6 +587,7 @@ function complianceCategories(vertical: VerticalId | null, state: string): Categ
 const WIZARD_RESET: Partial<State> = {
   wizardStep: 0, vertical: null, otherVerticalDescription: '', bizName: '', selectedStates: [], stateSearch: '', website: '', skipWebsite: false,
   editingLobId: null, brand: null, compliance: null, agreedToCompliance: false, docs: [], newDocName: '', logoDataUrl: null, logoFetchOk: false, extractedColors: null,
+  scanStatus: 'idle', scannedWebsite: null, scannedFont: null, scannedLogoUrl: null,
   colorChoice: 'auto', customPrimary: '#085368', customSecondary: '#18b4e9', customAccent: '#dffbfd', fontChoice: 'auto',
   guestCheckoutAllowed: true, offerAutopay: true, enrollDuringPayment: true, offerPaperless: true, reminderChannel: 'email', acceptedMethods: ['card', 'ach'],
   selfServiceHistory: true, selfServiceUpdate: true, feeHandling: 'absorb', aiApplied: false, aiRationale: {}, editingSection: null,
@@ -601,6 +608,7 @@ const INITIAL_STATE: State = {
   viewingStatementId: null,
   agreedToCompliance: false, docs: [], newDocName: '', expandedCompliance: [],
   logoDataUrl: null, logoFetchOk: false, extractedColors: null,
+  scanStatus: 'idle', scannedWebsite: null, scannedFont: null, scannedLogoUrl: null,
   colorChoice: 'auto', customPrimary: '#085368', customSecondary: '#18b4e9', customAccent: '#dffbfd', fontChoice: 'auto',
   guestCheckoutAllowed: true, offerAutopay: true, enrollDuringPayment: true, offerPaperless: true,
   reminderChannel: 'email', acceptedMethods: ['card', 'ach'],
@@ -788,23 +796,25 @@ export function App() {
   };
 
   const buildBrand = (st: State): Brand => {
-    const { vertical, website, skipWebsite, colorChoice, customPrimary, customSecondary, customAccent, fontChoice, extractedColors } = st;
+    const { vertical, website, skipWebsite, colorChoice, customPrimary, customSecondary, customAccent, fontChoice, extractedColors, scannedFont } = st;
+    const websiteMode = !!website && !skipWebsite;
     let palette: Palette;
     let colorsFromLogo = false;
-    if (website && !skipWebsite) {
-      if (extractedColors && extractedColors.length >= 2) {
-        palette = { primary: extractedColors[0], secondary: extractedColors[1], accent: extractedColors[2] || '#f5f5f7', font: paletteFromString(website).font };
-        colorsFromLogo = true;
-      } else {
-        palette = paletteFromString(website);
-      }
-    } else if (skipWebsite && colorChoice === 'custom') {
+    if (colorChoice === 'custom') {
+      // Manual color override always wins, whether or not a website was scanned.
       palette = { primary: customPrimary, secondary: customSecondary, accent: customAccent, font: paletteFromString(vertical || 'default').font };
+    } else if (websiteMode && extractedColors && extractedColors.length >= 2) {
+      palette = { primary: extractedColors[0], secondary: extractedColors[1], accent: extractedColors[2] || '#f5f5f7', font: paletteFromString(website).font };
+      colorsFromLogo = true;
+    } else if (websiteMode) {
+      palette = paletteFromString(website);
     } else {
       palette = paletteFromString(vertical || 'default');
     }
-    if (skipWebsite && fontChoice !== 'auto') palette = { ...palette, font: fontChoice };
-    else if (skipWebsite && fontChoice === 'auto') palette = { ...palette, font: 'Arial' };
+    // Font resolution: manual override wins, then the font scanned from the site, then defaults.
+    if (fontChoice !== 'auto') palette = { ...palette, font: fontChoice };
+    else if (websiteMode && scannedFont) palette = { ...palette, font: scannedFont };
+    else if (skipWebsite) palette = { ...palette, font: 'Arial' };
     return { ...palette, initials: initialsFrom(st.bizName), colorsFromLogo };
   };
 
@@ -814,20 +824,56 @@ export function App() {
     return { states, byState };
   };
 
-  const checkLogoFetch = (website: string, skip: boolean) => {
+  // Client-side fallback used only to fill gaps the server-side scan couldn't (e.g. backend egress
+  // blocked): pulls the site favicon and, when needed, samples brand colors from it.
+  const checkLogoFetch = (website: string, skip: boolean, fillColors = true, fillLogo = true) => {
     const domain = domainFromWebsite(website);
-    if (!domain || skip) { patch({ logoFetchOk: false, extractedColors: null }); return; }
+    if (!domain || skip) { patch({ logoFetchOk: false }); return; }
+    const faviconUrl = faviconFor(domain);
     const img = new Image();
     img.crossOrigin = 'anonymous';
     img.onload = () => {
-      patch({ logoFetchOk: true });
-      try {
-        const colors = extractColorsFromImage(img);
-        patch({ extractedColors: colors.length ? colors : null });
-      } catch { patch({ extractedColors: null }); }
+      patch((st) => {
+        const next: Partial<State> = { logoFetchOk: true };
+        if (fillLogo && !st.scannedLogoUrl) next.scannedLogoUrl = faviconUrl;
+        if (fillColors && (!st.extractedColors || st.extractedColors.length < 2)) {
+          try { const colors = extractColorsFromImage(img); if (colors.length >= 2) next.extractedColors = colors; } catch { /* ignore */ }
+        }
+        return next;
+      });
     };
-    img.onerror = () => patch({ logoFetchOk: false, extractedColors: null });
-    img.src = `https://logo.clearbit.com/${domain}`;
+    img.onerror = () => { /* keep whatever the server scan produced */ };
+    img.src = faviconUrl;
+  };
+
+  // Server-side brand scan: reads the site's HTML/CSS and pre-populates colors, font and logo.
+  const runBrandScan = async (rawWebsite: string) => {
+    const normalized = normalizeWebsite(rawWebsite);
+    if (!normalized) return;
+    patch({ scanStatus: 'scanning', scannedWebsite: normalized, scannedFont: null, scannedLogoUrl: null, extractedColors: null, logoFetchOk: false });
+    let result: BrandScanResult | null = null;
+    try { result = await api.scanBrand(normalized); } catch { result = null; }
+    patch((st) => {
+      if (st.scannedWebsite !== normalized) return null;
+      if (!result || result.outcome === 'failed') return { scanStatus: 'error' };
+      const palette = (result.palette || []).filter(Boolean);
+      return {
+        scanStatus: 'done',
+        extractedColors: palette.length >= 2 ? palette : st.extractedColors,
+        scannedFont: result.font_family ?? null,
+        scannedLogoUrl: result.logo_url ?? null,
+        logoFetchOk: result.logo_url ? true : st.logoFetchOk,
+      };
+    });
+    const gotColors = !!(result && result.palette && result.palette.length >= 2);
+    const gotLogo = !!(result && result.logo_url);
+    if (!gotColors || !gotLogo) checkLogoFetch(normalized, false, !gotColors, !gotLogo);
+  };
+
+  const maybeScanWebsite = () => {
+    if (s.skipWebsite) return;
+    const normalized = normalizeWebsite(s.website);
+    if (normalized && normalized !== s.scannedWebsite) runBrandScan(s.website);
   };
 
   // ---- handlers ----
@@ -844,8 +890,9 @@ export function App() {
   const setStateSearch = (e: React.ChangeEvent<HTMLInputElement>) => patch({ stateSearch: e.target.value });
   const toggleAcceptedMethod = (id: string) => patch((st) => ({ acceptedMethods: st.acceptedMethods.includes(id) ? st.acceptedMethods.filter((x) => x !== id) : [...st.acceptedMethods, id] }));
 
-  const setWebsite = (e: React.ChangeEvent<HTMLInputElement>) => { const website = e.target.value; const skip = !website.trim(); patch({ website, skipWebsite: skip, logoFetchOk: false, extractedColors: null }); checkLogoFetch(website, skip); };
-  const toggleSkipWebsite = () => { const skip = !s.skipWebsite; const website = skip ? '' : s.website; patch({ skipWebsite: skip, website, logoFetchOk: false }); checkLogoFetch(website, skip); };
+  const setWebsite = (e: React.ChangeEvent<HTMLInputElement>) => { const website = e.target.value; const skip = !website.trim(); patch({ website, skipWebsite: skip, logoFetchOk: false, extractedColors: null, scannedFont: null, scannedLogoUrl: null, scannedWebsite: null, scanStatus: 'idle' }); };
+  const scanWebsiteOnBlur = () => { maybeScanWebsite(); };
+  const toggleSkipWebsite = () => { const skip = !s.skipWebsite; const website = skip ? '' : s.website; patch({ skipWebsite: skip, website, logoFetchOk: false, extractedColors: skip ? null : s.extractedColors, scannedWebsite: skip ? null : s.scannedWebsite, scanStatus: skip ? 'idle' : s.scanStatus }); };
   const setLogoFile = (e: React.ChangeEvent<HTMLInputElement>) => { const file = e.target.files && e.target.files[0]; if (!file) return; const reader = new FileReader(); reader.onload = () => patch({ logoDataUrl: reader.result as string }); reader.readAsDataURL(file); };
   const clearLogo = () => patch({ logoDataUrl: null });
 
@@ -860,13 +907,14 @@ export function App() {
   const editBrandColorsClick = () => patch((st) => ({ editingSection: st.editingSection === 'brandcolors' ? null : 'brandcolors' }));
   const editBrandFontClick = () => patch((st) => ({ editingSection: st.editingSection === 'brandfont' ? null : 'brandfont' }));
   const colorChoiceAutoClick = () => setColorChoice('auto');
-  const colorChoiceCustomClick = () => setColorChoice('custom');
+  const colorChoiceCustomClick = () => patch((st) => ({ colorChoice: 'custom', customPrimary: st.extractedColors?.[0] ?? st.customPrimary, customSecondary: st.extractedColors?.[1] ?? st.customSecondary, customAccent: st.extractedColors?.[2] ?? st.customAccent }));
   const fontChoiceAutoClick = () => setFontChoice('auto');
   const fontChoiceCustomClick = () => setFontChoice(GOOGLE_FONTS[0]);
 
   const nextStep = () => {
     const completedStep = CHECKLIST_STEPS[s.wizardStep];
     if (completedStep) trackEvent('studio.checklist_step_completed', { step: completedStep, biller_id: s.backendBillerId ?? undefined });
+    if (s.wizardStep === 1) maybeScanWebsite();
     patch((st) => ({ wizardStep: Math.min(2, st.wizardStep + 1) }));
   };
   const prevStep = () => patch((st) => ({ wizardStep: Math.max(0, st.wizardStep - 1) }));
@@ -1355,9 +1403,9 @@ export function App() {
 
   const swatches = [brand.primary, brand.secondary, brand.accent, '#1c1c1c'];
   const domain = domainFromWebsite(s.website);
-  const logoFetchUrl = domain ? `https://logo.clearbit.com/${domain}` : '';
+  const logoFetchUrl = s.scannedLogoUrl || (domain ? faviconFor(domain) : '');
   const showUploadedLogo = !!s.logoDataUrl;
-  const showFetchedLogo = !showUploadedLogo && s.logoFetchOk === true && !s.skipWebsite;
+  const showFetchedLogo = !showUploadedLogo && !s.skipWebsite && !!logoFetchUrl;
   const showInitialsLogo = !showUploadedLogo && !showFetchedLogo;
   const isFlorida = (compliance.states || []).includes('Florida');
   const complianceByState = (compliance.states || []).map((name) => ({ state: name, categories: (compliance.byState || {})[name] || [], expanded: s.expandedCompliance.includes(name), onToggle: () => toggleComplianceState(name) }));
@@ -1632,7 +1680,7 @@ export function App() {
                 </div>
 
                 <label style={css('display:block;font-size:13px;font-weight:500;margin-top:var(--invoicecloud-spacing-l);margin-bottom:4px')}>Website <span style={css('font-weight:400;color:var(--invoicecloud-utility-neutral-60)')}>(optional)</span></label>
-                <input type="text" value={s.website} onChange={setWebsite} placeholder="www.yourbusiness.com" style={css('width:100%;padding:12px 14px;border-radius:4px;border:1px solid var(--invoicecloud-surface-default-border);font-size:16px;margin-bottom:var(--invoicecloud-spacing-xs)')} />
+                <input type="text" value={s.website} onChange={setWebsite} onBlur={scanWebsiteOnBlur} placeholder="www.yourbusiness.com" style={css('width:100%;padding:12px 14px;border-radius:4px;border:1px solid var(--invoicecloud-surface-default-border);font-size:16px;margin-bottom:var(--invoicecloud-spacing-xs)')} />
                 <div style={css('font-size:12px;color:var(--invoicecloud-utility-neutral-60);margin-bottom:var(--invoicecloud-spacing-m)')}>If you have one, we'll scan it to match your brand on the next steps.</div>
                 <label style={css('display:block;font-size:13px;font-weight:500;margin-bottom:var(--invoicecloud-spacing-xs)')}>How would you like to set up your payment experience?</label>
                 <div style={css('display:grid;grid-template-columns:1fr 1fr;gap:var(--invoicecloud-spacing-s);margin-bottom:var(--invoicecloud-spacing-m)')}>
@@ -1725,7 +1773,13 @@ export function App() {
 
                 {hasWebsiteForBrand ? (
                   <>
-                    <p style={css('font-size:14px;color:var(--invoicecloud-utility-neutral-70);margin-bottom:var(--invoicecloud-spacing-m)')}>Here's what we scanned from <strong>{s.website}</strong>. You can edit any of it.</p>
+                    {s.scanStatus === 'scanning' ? (
+                      <p style={css('font-size:14px;color:var(--invoicecloud-utility-neutral-70);margin-bottom:var(--invoicecloud-spacing-m)')}>Scanning <strong>{s.website}</strong> for your brand&hellip;</p>
+                    ) : s.scanStatus === 'error' ? (
+                      <p style={css('font-size:14px;color:var(--invoicecloud-utility-neutral-70);margin-bottom:var(--invoicecloud-spacing-m)')}>We couldn't fully read <strong>{s.website}</strong>, so we've used smart defaults. You can edit any of it.</p>
+                    ) : (
+                      <p style={css('font-size:14px;color:var(--invoicecloud-utility-neutral-70);margin-bottom:var(--invoicecloud-spacing-m)')}>Here's what we scanned from <strong>{s.website}</strong>. You can edit any of it.</p>
+                    )}
 
                     <div style={css('border:1px solid var(--invoicecloud-surface-default-border);border-radius:10px;padding:var(--invoicecloud-spacing-s);margin-bottom:var(--invoicecloud-spacing-s)')}>
                       <div style={css('display:flex;justify-content:space-between;align-items:center')}>
@@ -2042,7 +2096,7 @@ export function App() {
               {s.reviewEditingSection === 'brand' && (
                 <div style={css('margin-top:var(--invoicecloud-spacing-m);border-top:1px solid var(--invoicecloud-surface-default-border);padding-top:var(--invoicecloud-spacing-m)')}>
                   <label style={css('display:block;font-size:13px;font-weight:500;margin-bottom:4px')}>Website</label>
-                  <input type="text" value={s.website} onChange={setWebsite} placeholder="www.yourbusiness.com" style={css('width:100%;padding:12px 14px;border-radius:4px;border:1px solid var(--invoicecloud-surface-default-border);font-size:16px;margin-bottom:var(--invoicecloud-spacing-s)')} />
+                  <input type="text" value={s.website} onChange={setWebsite} onBlur={scanWebsiteOnBlur} placeholder="www.yourbusiness.com" style={css('width:100%;padding:12px 14px;border-radius:4px;border:1px solid var(--invoicecloud-surface-default-border);font-size:16px;margin-bottom:var(--invoicecloud-spacing-s)')} />
                   <label style={css('display:flex;align-items:center;gap:var(--invoicecloud-spacing-xs);font-size:14px;color:var(--invoicecloud-utility-neutral-70);cursor:pointer;margin-bottom:var(--invoicecloud-spacing-m)')}>
                     <input type="checkbox" checked={s.skipWebsite} onChange={toggleSkipWebsite} /> I don't have a website - use smart defaults
                   </label>

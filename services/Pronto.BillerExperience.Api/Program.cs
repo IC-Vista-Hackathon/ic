@@ -99,6 +99,9 @@ builder.Services.AddSingleton<IDestinationAddressResolver, SystemDestinationAddr
 builder.Services.AddHttpClient<IBillerWebsiteResearcher, HttpBillerWebsiteResearcher>(client =>
     client.Timeout = Timeout.InfiniteTimeSpan)
     .ConfigurePrimaryHttpMessageHandler(ResearchHttpHandler.Create);
+builder.Services.AddHttpClient<IBrandScanner, HttpBrandScanner>(client =>
+    client.Timeout = Timeout.InfiniteTimeSpan)
+    .ConfigurePrimaryHttpMessageHandler(ResearchHttpHandler.Create);
 if (!string.IsNullOrWhiteSpace(options.Research.FoundryProjectEndpoint))
 {
     builder.Services.AddSingleton<TokenCredential>(_ => new DefaultAzureCredential());

@@ -25,9 +25,23 @@ async function request<T>(path: string, init?: RequestInit, billerId?: string): 
   }
 }
 
+export interface BrandScanResult {
+  outcome: 'completed' | 'degraded' | 'failed';
+  primary_color: string | null;
+  secondary_color: string | null;
+  accent_color: string | null;
+  font_family: string | null;
+  logo_url: string | null;
+  palette: string[];
+  warnings: string[];
+  error_code?: string | null;
+}
+
 export const api = {
   create: (input: { display_name: string; slug: string; bill_type: string; postal_code: string; website?: string }) =>
     request<Bootstrap>('/billers', { method: 'POST', body: JSON.stringify(input) }),
+  scanBrand: (website: string) =>
+    request<BrandScanResult>('/public/brand-scan', { method: 'POST', body: JSON.stringify({ website }) }),
   chat: (billerId: string, message: string, billingAnswers?: Array<{ dimension: 'categories'|'cadence'|'state_rules'|'payment_terms'; answer: string }>) =>
     request<ChatResponse>(`/billers/${billerId}/chat`, { method: 'POST', body: JSON.stringify({ message, billing_answers: billingAnswers }) }, billerId),
   reopenBillingQuestion: (billerId: string, questionId: string) =>
