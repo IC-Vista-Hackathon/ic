@@ -21,6 +21,7 @@ namespace Pronto.Payment.Api.Controllers;
 public sealed partial class PaymentsController : ControllerBase
 {
     private const string ConfirmationAlphabet = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
+    private const int MaxIdempotencyKeyLength = 200;
 
     private readonly IPaymentStore store;
     private readonly IInvoiceClient invoices;
@@ -72,7 +73,6 @@ public sealed partial class PaymentsController : ControllerBase
         await payerAccounts.ValidateAsync(request.BillerId, request.PayerAccountId, cancellationToken)
             .ConfigureAwait(false);
 
-        // The header wins over the body field; either provides durable client idempotency.
         var idempotencyKey = Normalize(idempotencyHeader) ?? Normalize(request.IdempotencyKey);
         if (idempotencyKey is null)
         {
@@ -81,22 +81,24 @@ public sealed partial class PaymentsController : ControllerBase
                 "Idempotency-Key header or idempotency_key body field is required.");
         }
 
+        if (idempotencyKey.Length > MaxIdempotencyKeyLength)
+        {
+            throw ServiceException.BadRequest(
+                "idempotency_key_too_long",
+                $"Idempotency-Key header or idempotency_key body field must be at most {MaxIdempotencyKeyLength} characters.");
+        }
+
         var paymentId = PaymentRecord.DeriveId(request.BillerId, idempotencyKey);
         var fingerprint = PaymentRecord.Fingerprint(
             request.InvoiceId, request.Method, request.PayerAccountId, request.ScheduledFor);
 
-        // Fast path: a retried request with a known key replays the original outcome (finishing a
-        // still-pending record if the first attempt crashed mid-workflow) without re-reading state.
-        if (idempotencyKey is not null)
+        var existing = await store.FindAsync(request.BillerId, paymentId, cancellationToken)
+            .ConfigureAwait(false);
+        if (existing is not null)
         {
-            var existing = await store.FindAsync(request.BillerId, paymentId, cancellationToken)
-                .ConfigureAwait(false);
-            if (existing is not null)
-            {
-                EnsureSameRequest(existing, fingerprint);
-                var replayed = await workflow.DriveInitialAsync(existing, cancellationToken).ConfigureAwait(false);
-                return BuildResult(replayed, created: false);
-            }
+            EnsureSameRequest(existing, fingerprint);
+            var replayed = await workflow.DriveInitialAsync(existing, cancellationToken).ConfigureAwait(false);
+            return BuildResult(replayed, created: false);
         }
 
         var invoice = await invoices.GetAsync(request.BillerId, request.InvoiceId, cancellationToken)
@@ -108,8 +110,6 @@ public sealed partial class PaymentsController : ControllerBase
             throw ServiceException.Conflict("already_paid", $"invoice {request.InvoiceId} is already paid");
         }
 
-        // A second payment cannot target an invoice with an active scheduled payment; the Invoice
-        // Service's scheduled→paid binding is the authority, this is the fast, clear rejection.
         if (invoice.Status == InvoiceStatus.Scheduled)
         {
             throw ServiceException.Conflict(
@@ -119,8 +119,6 @@ public sealed partial class PaymentsController : ControllerBase
         var (feeCents, totalCents) = FeeCalculator.Calculate(config, request.Method, invoice.AmountCents);
         var now = clock.GetUtcNow();
 
-        // Payment-first ordering: persist a durable pending record BEFORE the invoice transition,
-        // so a crash between the two never leaves a paid/scheduled invoice with no payment.
         var pending = new PaymentRecord
         {
             PaymentId = paymentId,
@@ -144,8 +142,6 @@ public sealed partial class PaymentsController : ControllerBase
         var begin = await store.BeginAsync(pending, cancellationToken).ConfigureAwait(false);
         if (!begin.Created)
         {
-            // Lost the insert race to a concurrent request for the same key: it must be the same
-            // request, and we drive/return its record rather than creating a duplicate payment.
             EnsureSameRequest(begin.Record, fingerprint);
         }
 
@@ -159,7 +155,6 @@ public sealed partial class PaymentsController : ControllerBase
     {
         if (record.Lifecycle == PaymentLifecycle.Failed)
         {
-            // Replaying a request whose invoice transition was refused; surface the original 409.
             throw ServiceException.Conflict(
                 record.FailureReason ?? "payment_failed",
                 $"payment {record.PaymentId} could not be completed: {record.FailureReason ?? "invoice refused the transition"}");
@@ -207,10 +202,6 @@ public sealed partial class PaymentsController : ControllerBase
     private static string? Normalize(string? value)
         => string.IsNullOrWhiteSpace(value) ? null : value.Trim();
 
-    /// <summary>
-    /// Pre-confirmation quote using the same config + FeeCalculator as payment creation,
-    /// so the displayed total always matches the charged total.
-    /// </summary>
     [HttpGet("quote")]
     public async Task<ActionResult<PaymentQuoteResponse>> Quote(
         [FromQuery(Name = "biller_id")] string? billerId,

@@ -146,6 +146,59 @@ public sealed class BillerOnboardingServiceTests
     }
 
     [Fact]
+    public async Task FailedPublicationIsRequeuedWhenPublishIsRepeated()
+    {
+        var repository = new InMemoryBillerExperienceRepository();
+        var service = new BillerOnboardingService(
+            repository,
+            new DeterministicExperienceDraftGenerator(NullLogger<DeterministicExperienceDraftGenerator>.Instance),
+            new OrchestrationRunner(),
+            NullLogger<BillerOnboardingService>.Instance);
+        var created = await service.CreateAsync(CreateRequest(), CancellationToken.None);
+        var chat = await service.SendMessageAsync(created.Biller.BillerId, new("Ready for review"), CancellationToken.None);
+        var approved = await service.ApproveAsync(created.Biller.BillerId, new(chat.Draft!.Revision, "test-user"), CancellationToken.None);
+        var request = new PublishExperienceRequest(created.Biller.BillerId, approved.Revision);
+        var first = await service.PublishAsync(created.Biller.BillerId, request, CancellationToken.None);
+        var existing = await repository.GetDeploymentAsync(created.Biller.BillerId, first.DeploymentId, CancellationToken.None);
+        Assert.NotNull(existing);
+        await repository.SaveDeploymentAsync(
+            existing! with
+            {
+                Status = "failed",
+                FailureCode = "BUNDLE_BUILD_FAILED",
+                FailureMessage = "transient builder failure"
+            },
+            existing.ETag,
+            CancellationToken.None);
+        var failedExperience = await repository.GetLatestExperienceAsync(created.Biller.BillerId, CancellationToken.None);
+        var failedRun = await repository.GetRunAsync(created.Biller.BillerId, "onboarding", CancellationToken.None);
+        Assert.NotNull(failedExperience);
+        Assert.NotNull(failedRun);
+        await repository.SaveExperienceAsync(
+            failedExperience! with { State = ExperienceRevisionState.Failed },
+            failedExperience.ETag,
+            CancellationToken.None);
+        await repository.SaveRunAsync(
+            failedRun! with { State = OnboardingSessionState.Failed },
+            failedRun.ETag,
+            CancellationToken.None);
+
+        var retry = await service.PublishAsync(created.Biller.BillerId, request, CancellationToken.None);
+        var record = await repository.GetDeploymentAsync(created.Biller.BillerId, retry.DeploymentId, CancellationToken.None);
+        var retriedExperience = await repository.GetLatestExperienceAsync(created.Biller.BillerId, CancellationToken.None);
+        var retriedRun = await repository.GetRunAsync(created.Biller.BillerId, "onboarding", CancellationToken.None);
+
+        Assert.Equal(first.DeploymentId, retry.DeploymentId);
+        Assert.Equal(DeploymentState.Requested, retry.State);
+        Assert.NotNull(record);
+        Assert.Equal("requested", record!.Status);
+        Assert.Null(record.FailureCode);
+        Assert.Null(record.FailureMessage);
+        Assert.Equal(ExperienceRevisionState.Publishing, retriedExperience?.State);
+        Assert.Equal(OnboardingSessionState.Publishing, retriedRun?.State);
+    }
+
+    [Fact]
     public async Task ApprovalFailureReturnsTheBlockingFindings()
     {
         var service = CreateService();
@@ -292,6 +345,40 @@ public sealed class BillerOnboardingServiceTests
     }
 
     [Fact]
+    public async Task DeterministicDesignerHonorsHeadingRequestAlongsideColor()
+    {
+        var service = CreateService();
+        var created = await service.CreateAsync(CreateRequest(), CancellationToken.None);
+
+        var response = await service.SendMessageAsync(
+            created.Biller.BillerId,
+            new("Change the primary color to purple and make the heading say Welcome back"),
+            CancellationToken.None);
+
+        // Both clearly-expressed requests are honored: the color and the heading text.
+        Assert.Equal("#6d28d9", response.Draft?.Definition.Brand.PrimaryColor);
+        Assert.Equal("Welcome back", response.Draft?.Definition.Content.Heading);
+    }
+
+    [Fact]
+    public async Task DeterministicDesignerLeavesHeadingUnchangedWhenNotRequested()
+    {
+        var service = CreateService();
+        var created = await service.CreateAsync(CreateRequest(), CancellationToken.None);
+        var original = created.Draft.Definition.Content.Heading;
+
+        var response = await service.SendMessageAsync(
+            created.Biller.BillerId,
+            new("change the primary color to green"),
+            CancellationToken.None);
+
+        // A request that never mentions the heading must not fabricate a heading change — otherwise
+        // the Studio's proposed-revision summary would describe an edit the biller never asked for.
+        Assert.Equal("#197d00", response.Draft?.Definition.Brand.PrimaryColor);
+        Assert.Equal(original, response.Draft?.Definition.Content.Heading);
+    }
+
+    [Fact]
     public async Task MissingWebsitePassesExplicitSkippedResearchToDesigner()
     {
         var generator = new CapturingDraftGenerator();
@@ -301,7 +388,28 @@ public sealed class BillerOnboardingServiceTests
         await service.SendMessageAsync(created.Biller.BillerId, new("Ready for review"), CancellationToken.None);
 
         Assert.Equal(ResearchOutcome.Skipped, generator.Research?.Outcome);
-        Assert.Equal("research.website_missing", generator.Research?.ErrorCode);
+        Assert.Equal("research.not_configured", generator.Research?.ErrorCode);
+        var (_, activity) = await service.GetSessionActivityAsync(created.Biller.BillerId, CancellationToken.None);
+        Assert.Contains(activity, item => item.AgentId == "biller-research" && item.Status == AgentActivityStatus.Skipped);
+    }
+
+    [Fact]
+    public async Task MissingWebsiteStillInvokesConfiguredResearchCoordinatorWithBillerContext()
+    {
+        var generator = new CapturingDraftGenerator();
+        var coordinator = new StubResearchCoordinator(new BillerResearchResponse(
+            ResearchOutcome.Completed, [], [], []));
+        var service = CreateService(generator: generator, researchCoordinator: coordinator);
+        var created = await service.CreateAsync(CreateRequest() with { Website = null }, CancellationToken.None);
+
+        await service.SendMessageAsync(created.Biller.BillerId, new("Ready for review"), CancellationToken.None);
+
+        Assert.NotNull(coordinator.Request);
+        Assert.Null(coordinator.Request.Website);
+        Assert.Equal(CreateRequest().DisplayName, coordinator.Request.BillerName);
+        Assert.Equal(CreateRequest().BillType, coordinator.Request.BillType);
+        Assert.Equal(CreateRequest().PostalCode, coordinator.Request.PostalCode);
+        Assert.Equal(ResearchOutcome.Completed, generator.Research?.Outcome);
     }
 
     [Fact]
@@ -464,10 +572,16 @@ public sealed class BillerOnboardingServiceTests
 
     private sealed class StubResearchCoordinator(BillerResearchResponse response) : IBillerResearchCoordinator
     {
+        public BillerResearchRequest? Request { get; private set; }
+
         public Task<BillerResearchResponse> ResearchAsync(
             BillerResearchRequest request,
             ResearchExecutionContext? executionContext = null,
-            CancellationToken cancellationToken = default) => Task.FromResult(response);
+            CancellationToken cancellationToken = default)
+        {
+            Request = request;
+            return Task.FromResult(response);
+        }
     }
 
     private sealed class RecordingLogger<T> : ILogger<T>

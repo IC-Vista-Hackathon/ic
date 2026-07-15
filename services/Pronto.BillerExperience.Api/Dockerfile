@@ -4,12 +4,16 @@ WORKDIR /src
 COPY global.json NuGet.config Directory.Build.props Directory.Packages.props ./
 COPY contracts/Pronto.BillerExperience.Contracts/Pronto.BillerExperience.Contracts.csproj contracts/Pronto.BillerExperience.Contracts/
 COPY contracts/Pronto.Invoice.Contracts/Pronto.Invoice.Contracts.csproj contracts/Pronto.Invoice.Contracts/
+COPY contracts/Pronto.Payment.Contracts/Pronto.Payment.Contracts.csproj contracts/Pronto.Payment.Contracts/
+COPY contracts/Pronto.PayerAccount.Contracts/Pronto.PayerAccount.Contracts.csproj contracts/Pronto.PayerAccount.Contracts/
 COPY libraries/Pronto.Agentic.Orchestration/Pronto.Agentic.Orchestration.csproj libraries/Pronto.Agentic.Orchestration/
 COPY libraries/Pronto.ServiceDefaults/Pronto.ServiceDefaults.csproj libraries/Pronto.ServiceDefaults/
 COPY services/Pronto.BillerExperience.Api/Pronto.BillerExperience.Api.csproj services/Pronto.BillerExperience.Api/
 RUN dotnet restore services/Pronto.BillerExperience.Api/Pronto.BillerExperience.Api.csproj
 COPY contracts/Pronto.BillerExperience.Contracts/ contracts/Pronto.BillerExperience.Contracts/
 COPY contracts/Pronto.Invoice.Contracts/ contracts/Pronto.Invoice.Contracts/
+COPY contracts/Pronto.Payment.Contracts/ contracts/Pronto.Payment.Contracts/
+COPY contracts/Pronto.PayerAccount.Contracts/ contracts/Pronto.PayerAccount.Contracts/
 COPY libraries/Pronto.Agentic.Orchestration/ libraries/Pronto.Agentic.Orchestration/
 COPY libraries/Pronto.ServiceDefaults/ libraries/Pronto.ServiceDefaults/
 COPY agents/ agents/

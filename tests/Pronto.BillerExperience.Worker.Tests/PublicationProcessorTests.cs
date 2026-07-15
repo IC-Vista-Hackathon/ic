@@ -111,11 +111,13 @@ public sealed class PublicationProcessorTests
         Assert.False(publisher.WasCalled);
         Assert.Equal(PublicationStates.Failed, repository.Saved?.Status);
         Assert.Equal("BUNDLE_BUILD_FAILED", repository.Saved?.FailureCode);
+        Assert.Equal("The payer site could not be built. Please try publishing again.", repository.Saved?.FailureMessage);
+        Assert.DoesNotContain("vite build failed", repository.Saved?.FailureMessage, StringComparison.Ordinal);
         Assert.False(repository.WorkflowPublished);
     }
 
     [Fact]
-    public async Task DisabledBuilderSkipsBundleAndStillPublishesConfig()
+    public async Task DisabledBuilderFailsPublicationBeforeActivePointer()
     {
         var repository = new FakeRepository();
         var publisher = new FakePublisher();
@@ -123,8 +125,27 @@ public sealed class PublicationProcessorTests
 
         await processor.ProcessAsync(repository.Deployment, CancellationToken.None);
 
-        Assert.True(publisher.WasCalled);
-        Assert.Equal(PublicationStates.Ready, repository.Saved?.Status);
+        Assert.False(publisher.WasCalled);
+        Assert.Equal(PublicationStates.Failed, repository.Saved?.Status);
+        Assert.Equal("INVALID_PUBLICATION", repository.Saved?.FailureCode);
+    }
+
+    [Fact]
+    public async Task InfrastructureFailureDoesNotPersistRawExceptionDetails()
+    {
+        const string rawMessage = "jobs.batch \"ic-payer-build-city\" is forbidden: service account cannot get jobs/status";
+        var repository = new FakeRepository();
+        var publisher = new FakePublisher();
+        var builder = new FakeBundleBuilder { Failure = new UnauthorizedAccessException(rawMessage) };
+        var processor = Processor(repository, publisher, builder);
+
+        await processor.ProcessAsync(repository.Deployment, CancellationToken.None);
+
+        Assert.False(publisher.WasCalled);
+        Assert.Equal(PublicationStates.Failed, repository.Saved?.Status);
+        Assert.Equal("PUBLICATION_FAILED", repository.Saved?.FailureCode);
+        Assert.Equal("The payer site could not be published. Please try again.", repository.Saved?.FailureMessage);
+        Assert.DoesNotContain(rawMessage, repository.Saved?.FailureMessage, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -138,15 +159,76 @@ public sealed class PublicationProcessorTests
 
         Assert.Equal(PublicationStates.Failed, repository.Saved?.Status);
         Assert.Equal("INVALID_PUBLICATION", repository.Saved?.FailureCode);
+        Assert.Equal(
+            "The payer site configuration could not be published. Please review it and try again.",
+            repository.Saved?.FailureMessage);
+        Assert.DoesNotContain("invalid artifact", repository.Saved?.FailureMessage, StringComparison.Ordinal);
         Assert.False(repository.WorkflowPublished);
     }
 
+    [Fact]
+    public async Task CancellationReleasesClaimForImmediateRetry()
+    {
+        using var cancellation = new CancellationTokenSource();
+        cancellation.Cancel();
+        var repository = new FakeRepository();
+        var processor = Processor(repository, new FakePublisher(), new FakeBundleBuilder());
+
+        await Assert.ThrowsAsync<OperationCanceledException>(async () =>
+            await processor.ProcessAsync(repository.Deployment, cancellation.Token));
+
+        Assert.Equal(PublicationStates.Requested, repository.Saved?.Status);
+        Assert.Null(repository.Saved?.LeaseExpiresAt);
+    }
+
+    [Fact]
+    public async Task ActivatedPublicationFinalizationFailureDoesNotMarkLiveRevisionFailed()
+    {
+        var repository = new FakeRepository { WorkflowFailure = new InvalidOperationException("cosmos unavailable") };
+        var publisher = new FakePublisher();
+        var processor = Processor(repository, publisher, new FakeBundleBuilder());
+
+        await processor.ProcessAsync(repository.Deployment, CancellationToken.None);
+
+        Assert.True(publisher.WasCalled);
+        Assert.Contains(repository.SavedRecords, deployment => deployment.Status == PublicationStates.Verifying);
+        Assert.DoesNotContain(repository.SavedRecords, deployment => deployment.Status == PublicationStates.Failed);
+    }
+
+    [Fact]
+    public async Task ReclaimedVerifyingPublicationDoesNotRebuildImmutableSite()
+    {
+        var repository = new FakeRepository(status: PublicationStates.Verifying);
+        var publisher = new FakePublisher();
+        var builder = new FakeBundleBuilder();
+
+        await Processor(repository, publisher, builder).ProcessAsync(repository.Deployment, CancellationToken.None);
+
+        Assert.True(publisher.WasCalled);
+        Assert.Null(builder.Request);
+        Assert.Equal(PublicationStates.Ready, repository.Saved?.Status);
+    }
+
+    [Fact]
+    public async Task UncertainActiveWriteIsVerifiedByIdempotentRepublish()
+    {
+        var repository = new FakeRepository();
+        var publisher = new UncertainThenSuccessfulPublisher();
+
+        await Processor(repository, publisher, new FakeBundleBuilder())
+            .ProcessAsync(repository.Deployment, CancellationToken.None);
+
+        Assert.Equal(2, publisher.Calls);
+        Assert.Equal(PublicationStates.Ready, repository.Saved?.Status);
+        Assert.DoesNotContain(repository.SavedRecords, deployment => deployment.Status == PublicationStates.Failed);
+    }
+
     private static PublicationProcessor Processor(FakeRepository repository, FakePublisher publisher) =>
-        Processor(repository, publisher, new NoOpBundleBuilder());
+        Processor(repository, publisher, new FakeBundleBuilder());
 
     private static PublicationProcessor Processor(
         FakeRepository repository,
-        FakePublisher publisher,
+        IExperienceArtifactPublisher publisher,
         IExperienceBundleBuilder bundleBuilder)
     {
         var options = Options.Create(new PublicationOptions
@@ -189,17 +271,35 @@ public sealed class PublicationProcessorTests
         {
             Request = request;
             BuiltAt = Stopwatch.GetTimestamp();
+            cancellationToken.ThrowIfCancellationRequested();
             return Failure is null ? ValueTask.CompletedTask : ValueTask.FromException(Failure);
         }
     }
 
-    private sealed class FakeRepository(string? traceparent = null) : IPublicationRepository
+    private sealed class UncertainThenSuccessfulPublisher : IExperienceArtifactPublisher
+    {
+        public int Calls { get; private set; }
+
+        public ValueTask PublishAsync(PublicationArtifactPlan plan, CancellationToken cancellationToken)
+        {
+            Calls++;
+            return Calls == 1
+                ? ValueTask.FromException(new ArtifactActivationException(
+                    "response lost after active write",
+                    new IOException("connection reset")))
+                : ValueTask.CompletedTask;
+        }
+    }
+
+    private sealed class FakeRepository(string? traceparent = null, string status = PublicationStates.Applying) : IPublicationRepository
     {
         public PublicationDeployment Deployment { get; } = new(
-            "deployment-1", "biller-1", 1, PublicationStates.Applying, DateTimeOffset.UtcNow,
+            "deployment-1", "biller-1", 1, status, DateTimeOffset.UtcNow,
             Traceparent: traceparent, ETag: "etag");
         public PublicationDeployment? Saved { get; private set; }
+        public List<PublicationDeployment> SavedRecords { get; } = [];
         public bool? WorkflowPublished { get; private set; }
+        public Exception? WorkflowFailure { get; init; }
 
         public ValueTask<PublicationDeployment?> ClaimNextAsync(CancellationToken cancellationToken) =>
             ValueTask.FromResult<PublicationDeployment?>(Deployment);
@@ -213,11 +313,17 @@ public sealed class PublicationProcessorTests
         public ValueTask<PublicationDeployment> SaveAsync(PublicationDeployment deployment, CancellationToken cancellationToken)
         {
             Saved = deployment;
+            SavedRecords.Add(deployment);
             return ValueTask.FromResult(deployment);
         }
 
         public ValueTask MarkWorkflowAsync(string billerId, int version, bool published, CancellationToken cancellationToken)
         {
+            if (WorkflowFailure is not null)
+            {
+                return ValueTask.FromException(WorkflowFailure);
+            }
+
             WorkflowPublished = published;
             return ValueTask.CompletedTask;
         }

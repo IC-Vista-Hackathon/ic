@@ -12,6 +12,10 @@ on:
         description: Immutable tag to push (e.g. the git SHA).
         required: true
         type: string
+      source_ref:
+        description: Git ref to check out and build.
+        required: true
+        type: string
       registry:
         description: ACR login server.
         required: false
@@ -57,6 +61,8 @@ jobs:
             dockerfile: services/Pronto.PayerAccount.Api/Dockerfile
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.source_ref }}
 
       - name: Azure login
         uses: azure/login@v2

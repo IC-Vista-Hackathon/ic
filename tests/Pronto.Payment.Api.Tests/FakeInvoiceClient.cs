@@ -4,22 +4,19 @@ using Pronto.ServiceDefaults.Errors;
 
 namespace Pronto.Payment.Api.Tests;
 
-/// <summary>
-/// In-process stand-in for the Invoice Service that mirrors the real repository's transition
-/// rules — including the scheduled→paid binding to the originating payment — plus failure/latency
-/// hooks so the durable-workflow and recovery paths can be exercised deterministically.
-/// </summary>
 public sealed class FakeInvoiceClient : IInvoiceClient
 {
     private readonly object gate = new();
     private readonly Dictionary<(string BillerId, string InvoiceId), Entry> invoices = new();
+    private int updateStatusCalls;
 
-    /// <summary>When set, invoked on every <see cref="UpdateStatusAsync"/> before applying it —
-    /// throw from here to simulate an Invoice Service failure.</summary>
     public Action<string, string, UpdateInvoiceStatusRequest>? OnUpdateStatus { get; set; }
 
-    /// <summary>Count of applied (successful) status transitions, for asserting idempotency.</summary>
+    public Exception? UpdateStatusFault { get; set; }
+
     public int AppliedTransitions { get; private set; }
+
+    public int UpdateStatusCalls => Volatile.Read(ref updateStatusCalls);
 
     public InvoiceResponse AddDueInvoice(string billerId, int amountCents)
     {
@@ -73,9 +70,15 @@ public sealed class FakeInvoiceClient : IInvoiceClient
         UpdateInvoiceStatusRequest request,
         CancellationToken cancellationToken)
     {
+        Interlocked.Increment(ref updateStatusCalls);
+        if (UpdateStatusFault is { } fault)
+        {
+            UpdateStatusFault = null;
+            throw fault;
+        }
+
         OnUpdateStatus?.Invoke(billerId, invoiceId, request);
 
-        // Check-and-set under one lock, matching the real repository's atomicity guarantee.
         lock (gate)
         {
             var key = (billerId, invoiceId);
@@ -90,7 +93,7 @@ public sealed class FakeInvoiceClient : IInvoiceClient
 
             if (invoice.Status == request.Status && ownsCurrent)
             {
-                return Task.FromResult(invoice); // idempotent replay
+                return Task.FromResult(invoice);
             }
 
             if (invoice.Status == InvoiceStatus.Paid)

@@ -7,6 +7,9 @@ param workloadIdentityPrincipalId string
 param appInsightsId string
 @secure()
 param appInsightsConnectionString string
+@allowed([
+  false
+])
 param mcpConnectionEnabled bool = false
 param mcpServerUrl string = ''
 @secure()
@@ -84,7 +87,7 @@ resource sharedContextMcpConnection 'Microsoft.CognitiveServices/accounts/projec
   parent: project
   name: 'ic-shared-context-mcp'
   properties: {
-    category: 'CustomKeys'
+    category: 'RemoteTool'
     target: mcpServerUrl
     authType: 'CustomKeys'
     isSharedToAll: false

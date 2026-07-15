@@ -5,8 +5,8 @@
 #     (all non-secret sandbox endpoints, same values documented in .env.example)
 #   * the workload-identity pod label so the AKS webhook injects a federated token
 #     for the ic-workload service account
-#   * the Application Insights connection string, resolved from Azure and substituted
-#     by the deploy workflow (envsubst); empty otherwise, which just disables export.
+# Application Insights is injected after apply by the deploy workflow so this checked-in
+# overlay remains directly renderable and safe to apply without secret substitution.
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -36,8 +36,11 @@ spec:
             - { name: BillerExperience__Model__Endpoint, value: "https://aif-ic-hack-jk4zmntatjem4.cognitiveservices.azure.com/" }
             - { name: BillerExperience__Model__Deployment, value: gpt-5.4-mini }
             - { name: BillerExperience__Research__FoundryProjectEndpoint, value: "https://aif-ic-hack-jk4zmntatjem4.services.ai.azure.com/api/projects/ic" }
+            - { name: BillerExperience__Research__CoordinatorAgentId, value: research-coordinator }
+            - { name: BillerExperience__AgentProvisioning__Enabled, value: "true" }
             - { name: BillerExperience__AgentProvisioning__McpConnectionId, value: ic-shared-context-mcp }
+            # The public Gateway is HTTP-only; authenticated MCP remains disabled until TLS exists.
+            - { name: BillerExperience__Mcp__Enabled, value: "false" }
             - { name: BillerExperience__PublishedExperience__StorageEndpoint, value: "https://stichackjk4zmntatjem4.blob.core.windows.net/" }
             - { name: BillerExperience__PublishedExperience__ContainerName, value: payer-experiences }
             - { name: BillerExperience__SupportingServices__InvoiceBaseUrl, value: "http://ic-invoice-api.ic.svc.cluster.local:8080/" }
-            - { name: APPLICATIONINSIGHTS_CONNECTION_STRING, value: "${APPLICATIONINSIGHTS_CONNECTION_STRING}" }

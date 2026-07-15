@@ -16,6 +16,14 @@ public sealed partial class AgentContextCapabilityService(
     private readonly McpOptions _options = options.Value.Mcp;
 
     public string Issue(string billerId, string runId, string agentId, bool canWrite)
+        => Issue(billerId, runId, agentId, canWrite, payerId: null);
+
+    /// <summary>
+    /// Issues a capability bound to the given scope. <paramref name="payerId"/> is set only
+    /// after a successful payer-verification handshake (account-number match); it can never be
+    /// supplied as a tool argument, so payer-scoped tools trust the bound id, not the caller.
+    /// </summary>
+    public string Issue(string billerId, string runId, string agentId, bool canWrite, string? payerId)
     {
         try
         {
@@ -25,7 +33,8 @@ public sealed partial class AgentContextCapabilityService(
                 runId,
                 agentId,
                 canWrite,
-                timeProvider.GetUtcNow().AddMinutes(Math.Clamp(_options.CapabilityLifetimeMinutes, 1, 120)));
+                timeProvider.GetUtcNow().AddMinutes(Math.Clamp(_options.CapabilityLifetimeMinutes, 1, 120)),
+                payerId);
             var payload = Base64UrlEncode(JsonSerializer.SerializeToUtf8Bytes(claims, JsonOptions));
             var signature = Sign(payload);
             LogIssued(logger, billerId, runId, agentId, canWrite, claims.ExpiresAt);
@@ -39,6 +48,13 @@ public sealed partial class AgentContextCapabilityService(
     }
 
     public AgentContextCapability Validate(string token, bool writeRequired)
+        => Validate(token, writeRequired, payerRequired: false);
+
+    /// <summary>
+    /// Validates a capability. When <paramref name="payerRequired"/> is true the token must carry
+    /// a payer id bound by the verification handshake; otherwise payer-scoped tools are refused.
+    /// </summary>
+    public AgentContextCapability Validate(string token, bool writeRequired, bool payerRequired)
     {
         try
         {
@@ -57,6 +73,8 @@ public sealed partial class AgentContextCapabilityService(
                 throw new UnauthorizedAccessException("The MCP context capability is read-only.");
             if (string.IsNullOrWhiteSpace(claims.BillerId) || string.IsNullOrWhiteSpace(claims.RunId) || string.IsNullOrWhiteSpace(claims.AgentId))
                 throw new UnauthorizedAccessException("The MCP context capability scope is invalid.");
+            if (payerRequired && string.IsNullOrWhiteSpace(claims.PayerId))
+                throw new UnauthorizedAccessException("The MCP context capability is not bound to a verified payer.");
             return claims;
         }
         catch (Exception exception) when (exception is not UnauthorizedAccessException)
@@ -106,4 +124,5 @@ public sealed record AgentContextCapability(
     string RunId,
     string AgentId,
     bool CanWrite,
-    DateTimeOffset ExpiresAt);
+    DateTimeOffset ExpiresAt,
+    string? PayerId = null);

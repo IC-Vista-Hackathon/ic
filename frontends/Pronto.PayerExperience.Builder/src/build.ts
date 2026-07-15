@@ -3,6 +3,7 @@ import { cp, mkdir, rm, symlink, writeFile } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { promisify } from 'node:util';
+import { resolveUnderRoot, validateSlug } from './paths';
 import type { GeneratedSkin } from './types';
 
 const run = promisify(execFile);
@@ -25,10 +26,11 @@ export interface BuildResult {
 // breaks types or the build never reaches publish.
 export async function buildBundle({ pwaDir, workRoot, slug, skin }: BuildInputs): Promise<BuildResult> {
   const pwa = resolve(pwaDir);
+  const safeSlug = validateSlug(slug);
   if (!existsSync(join(pwa, 'node_modules'))) {
     throw new Error(`PWA dependencies not installed at ${pwa}/node_modules (run npm ci there first).`);
   }
-  const workDir = resolve(workRoot, slug);
+  const workDir = resolveUnderRoot(workRoot, safeSlug);
   await rm(workDir, { recursive: true, force: true });
   await mkdir(workDir, { recursive: true });
 
@@ -41,7 +43,7 @@ export async function buildBundle({ pwaDir, workRoot, slug, skin }: BuildInputs)
 
   await overlaySkin(workDir, skin);
 
-  const base = `/pay/${slug}/`;
+  const base = `/pay/${safeSlug}/`;
   const bin = (name: string) => join(workDir, 'node_modules', '.bin', name);
   await run(bin('tsc'), ['-b'], { cwd: workDir });
   await run(bin('vite'), ['build', '--base', base], { cwd: workDir });

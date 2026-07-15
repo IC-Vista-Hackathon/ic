@@ -10,11 +10,16 @@ param workloadNamespace string = 'ic'
 param nonprodWorkloadNamespace string = 'ic-nonprod'
 param workloadServiceAccountName string = 'ic-workload'
 param publisherServiceAccountName string = 'biller-publisher'
+@description('Service-principal object IDs allowed to deploy Kubernetes workloads through Azure RBAC. These receive AKS Cluster User + AKS RBAC Writer, never cluster-admin.')
+param aksDeploymentPrincipalIds array = []
 param aksNodeCountMin int = 2
 param aksNodeCountMax int = 4
 param aksVmSize string = 'Standard_D2s_v3'
+@allowed([
+  false
+])
 param mcpConnectionEnabled bool = false
-param mcpServerUrl string = 'http://pronto.eastus2.cloudapp.azure.com/api/mcp'
+param mcpServerUrl string = ''
 @secure()
 param mcpApiKey string = ''
 
@@ -167,6 +172,7 @@ module aks 'modules/aks.bicep' = {
     publisherUamiName: publisherIdentity.outputs.name
     publisherNamespace: workloadNamespace
     publisherServiceAccountName: publisherServiceAccountName
+    deploymentPrincipalIds: aksDeploymentPrincipalIds
     monitorWorkspaceId: monitorWorkspace.outputs.id
     monitorWorkspaceLocation: location
   }
