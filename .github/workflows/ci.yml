@@ -47,11 +47,19 @@ jobs:
           if-no-files-found: warn
 
   frontend-build-test:
-    name: Frontend build & test (payer PWA)
+    name: Frontend build & test (${{ matrix.name }})
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: Studio
+            path: frontends/Pronto.BillerExperience.Studio
+          - name: payer PWA
+            path: frontends/Pronto.BillerPayments.Pwa
     defaults:
       run:
-        working-directory: frontends/Pronto.BillerPayments.Pwa
+        working-directory: ${{ matrix.path }}
     steps:
       - uses: actions/checkout@v4
 
@@ -60,7 +68,7 @@ jobs:
         with:
           node-version: 24
           cache: npm
-          cache-dependency-path: frontends/Pronto.BillerPayments.Pwa/package-lock.json
+          cache-dependency-path: ${{ matrix.path }}/package-lock.json
 
       - name: Install
         run: npm ci

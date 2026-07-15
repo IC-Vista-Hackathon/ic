@@ -1,6 +1,7 @@
 import { CSSProperties, FormEvent, useEffect, useRef, useState } from 'react';
 import { activityUrl, api } from './api';
 import { errorMessage, UiRequestError, type ValidationFinding } from './http';
+import { toBillerSlug } from './slug';
 import { logError, logEvent } from './telemetry';
 import type { AgentActivity, Deployment, ExperienceDefinition, ExperienceRevision } from './types';
 
@@ -543,13 +544,13 @@ export function App() {
       let billerId = s.backendBillerId;
       if (!billerId) {
         const vertical = VERTICALS.find((item) => item.id === s.vertical)?.label ?? 'Other';
-        const slugBase = s.bizName.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '').slice(0, 48) || 'demo-biller';
+        const slug = toBillerSlug(s.bizName);
         const website = s.website.trim()
           ? (/^https?:\/\//i.test(s.website.trim()) ? s.website.trim() : `https://${s.website.trim()}`)
           : undefined;
         const created = await api.create({
           display_name: s.bizName,
-          slug: `${slugBase}-${Date.now().toString(36).slice(-6)}`,
+          slug,
           bill_type: vertical,
           postal_code: '10001',
           website,
