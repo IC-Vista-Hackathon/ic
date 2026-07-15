@@ -40,7 +40,8 @@ Biller opens onboarding webapp
 | [entities.md](entities.md) | Core data objects |
 | [services.md](services.md) | Services and agents, who owns what |
 | [contracts.md](contracts.md) | API + agent tool contracts |
-| high-level-architecture.drawio | Source diagram |
+| [Current runtime architecture](../README.md#architecture) | Canonical Mermaid diagram: AKS, Foundry, MCP service routing, publication, storage, identity, and observability |
+| high-level-architecture.drawio | Original concept diagram (legacy; not the current runtime source of truth) |
 
 ## Principles
 
