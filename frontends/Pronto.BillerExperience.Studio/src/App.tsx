@@ -1308,13 +1308,27 @@ export function App() {
             ))}
           </div>
           <AgentActivityPanel activity={s.agentActivity} connection={s.activityConnection} complete={s.analysisComplete || !!s.orchestrationError} />
-          {s.analysisComplete && !s.orchestrationError && (
-            <div role="status" style={css('width:100%;max-width:720px;margin-top:16px;padding:16px;border:1px solid #197d00;border-radius:10px;background:#f0f9ed;color:#145c00;text-align:center')}>
-              <strong>{s.agentActivity.filter(item => item.status === 'completed').length} agent tasks completed.</strong>
-              <p style={css('margin:6px 0 12px')}>The orchestration run finished and its results are ready for review.</p>
-              <button type="button" onClick={() => patch({ screen: 'results' })} style={css('border:0;border-radius:8px;padding:10px 18px;background:#197d00;color:#fff;font-weight:700;cursor:pointer')}>Review agent findings</button>
-            </div>
-          )}
+          {s.analysisComplete && !s.orchestrationError && (() => {
+            const outcome = runOutcome(s.agentActivity);
+            const palette = outcome === 'failed'
+              ? { border: '#b42318', bg: '#fff1f0', text: '#7a271a', button: '#b42318' }
+              : outcome === 'warnings'
+                ? { border: '#b54708', bg: '#fffaeb', text: '#7a4100', button: '#b54708' }
+                : { border: '#197d00', bg: '#f0f9ed', text: '#145c00', button: '#197d00' };
+            const completedCount = s.agentActivity.filter(item => item.status === 'completed').length;
+            const heading = outcome === 'failed'
+              ? 'Some agent tasks failed — review findings before proceeding.'
+              : outcome === 'warnings'
+                ? `${completedCount} agent tasks completed; some steps returned warnings.`
+                : `${completedCount} agent tasks completed.`;
+            return (
+              <div role="status" style={css(`width:100%;max-width:720px;margin-top:16px;padding:16px;border:1px solid ${palette.border};border-radius:10px;background:${palette.bg};color:${palette.text};text-align:center`)}>
+                <strong>{heading}</strong>
+                <p style={css('margin:6px 0 12px')}>The orchestration run finished and its results are ready for review.</p>
+                <button type="button" onClick={() => patch({ screen: 'results' })} style={css(`border:0;border-radius:8px;padding:10px 18px;background:${palette.button};color:#fff;font-weight:700;cursor:pointer`)}>Review agent findings</button>
+              </div>
+            );
+          })()}
           {s.orchestrationError && (
             <div role="alert" style={css('width:100%;max-width:720px;margin-top:16px;padding:16px;border:1px solid #b42318;border-radius:10px;background:#fff1f0;color:#7a271a')}>
               <strong>We could not finish building this preview.</strong>
