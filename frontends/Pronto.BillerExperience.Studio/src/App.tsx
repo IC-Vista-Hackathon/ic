@@ -32,6 +32,44 @@ function validationOutcome(revision: ExperienceRevision | null): 'passed' | 'war
   return findings.some(f => f.requires_review || isBlocking(f.severity)) ? 'failed' : 'warnings';
 }
 
+interface ProposedChange { field: string; detail: string }
+
+// Derives the "proposed revision" summary strictly from the diff between the current definition and
+// the one the agent proposes, so the card lists exactly what "Accept and update preview" will apply
+// — never a field that didn't change. If it returns [], nothing the preview can honor changed.
+function proposedChanges(current: ExperienceDefinition | null | undefined, proposed: ExperienceDefinition): ProposedChange[] {
+  if (!current) return [];
+  const changes: ProposedChange[] = [];
+  if (current.brand.primary_color.toLowerCase() !== proposed.brand.primary_color.toLowerCase()) {
+    changes.push({ field: 'Primary color', detail: `${current.brand.primary_color} → ${proposed.brand.primary_color}` });
+  }
+  if (current.content.heading !== proposed.content.heading) {
+    changes.push({ field: 'Heading', detail: `“${proposed.content.heading}”` });
+  }
+  const currentLabel = current.ui?.actions?.[0]?.label;
+  const proposedLabel = proposed.ui?.actions?.[0]?.label;
+  if (proposedLabel && currentLabel !== proposedLabel) {
+    changes.push({ field: 'Primary action', detail: `“${proposedLabel}”` });
+  }
+  const currentMethods = [...(current.preferences?.accepted_methods ?? [])].sort();
+  const proposedMethods = [...(proposed.preferences?.accepted_methods ?? [])].sort();
+  if (currentMethods.join(',') !== proposedMethods.join(',')) {
+    changes.push({ field: 'Payment methods', detail: proposedMethods.join(', ') || 'none' });
+  }
+  const toggles = [
+    ['offer_autopay', 'AutoPay'],
+    ['offer_paperless', 'Paperless billing'],
+    ['guest_checkout_allowed', 'Guest checkout'],
+  ] as const;
+  for (const [key, label] of toggles) {
+    const after = proposed.preferences?.[key];
+    if (typeof after === 'boolean' && current.preferences?.[key] !== after) {
+      changes.push({ field: label, detail: after ? 'enabled' : 'disabled' });
+    }
+  }
+  return changes;
+}
+
 /** Parse a CSS declaration string into a React style object so the
  *  design's inline styles can be transcribed verbatim. */
 function css(text: string): CSSProperties {
@@ -912,6 +950,10 @@ export function App() {
   const previewMaxWidth = s.previewDevice === 'mobile' ? '390px' : '1000px';
   const scenarioGridCols = s.previewDevice === 'mobile' ? 'repeat(2,1fr)' : 'repeat(4,1fr)';
   const siteSlug = (s.bizName || 'yourbusiness').toLowerCase().replace(/[^a-z0-9]+/g, '') || 'yourbusiness';
+  // Rendered from the accepted draft so a proposed heading / primary-action label change is actually
+  // reflected in the preview once accepted — keeping the preview and the proposal summary in agreement.
+  const previewHeading = s.backendDraft?.definition.content.heading?.trim() ?? '';
+  const primaryActionLabel = s.backendDraft?.definition.ui?.actions?.[0]?.label?.trim() || 'Pay Now';
 
   const guestCheckoutAllowedLabel = s.guestCheckoutAllowed ? 'Allowed' : 'Not allowed';
   const offerAutopayLabel = s.offerAutopay ? 'Yes' : 'No';
@@ -1570,11 +1612,16 @@ export function App() {
             {s.previewProposal && (
               <div style={css('margin-top:12px;padding:12px;border:1px solid var(--invoicecloud-primary);border-radius:10px;background:var(--invoicecloud-primary-tint)')}>
                 <strong>Proposed revision {s.previewProposal.revision}</strong>
-                <ul style={css('margin:8px 0 10px;padding-left:20px;font-size:13px')}>
-                  <li>Heading: {s.previewProposal.definition.content.heading}</li>
-                  <li>Primary action: {s.previewProposal.definition.ui?.actions[0]?.label ?? 'unchanged'}</li>
-                  <li>Payment methods: {s.previewProposal.definition.preferences?.accepted_methods.join(', ') ?? 'unchanged'}</li>
-                </ul>
+                {(() => {
+                  const changes = proposedChanges(s.backendDraft?.definition, s.previewProposal.definition);
+                  return changes.length ? (
+                    <ul style={css('margin:8px 0 10px;padding-left:20px;font-size:13px')}>
+                      {changes.map(change => <li key={change.field}>{change.field}: {change.detail}</li>)}
+                    </ul>
+                  ) : (
+                    <p style={css('margin:8px 0 10px;font-size:13px')}>No changes the preview can apply were detected in your request. The offline designer supports primary color and heading/button-label edits — try rephrasing, e.g. "change the primary color to purple".</p>
+                  );
+                })()}
                 {(s.previewProposal.findings ?? []).map(finding => <div key={finding.code} style={css('font-size:12px;color:#b54708')}>{finding.message}</div>)}
                 <div style={css('display:flex;gap:8px;margin-top:10px')}>
                   <button type="button" onClick={acceptPreviewChange} style={css('border:0;border-radius:8px;padding:9px 14px;background:#197d00;color:#fff;font-weight:700;cursor:pointer')}>Accept and update preview</button>
@@ -1621,6 +1668,10 @@ export function App() {
                 </div>
               </div>
 
+              {s.payerStep === 0 && previewHeading && (
+                <h2 style={css('font-size:22px;font-weight:700;margin-bottom:var(--invoicecloud-spacing-m)')}>{previewHeading}</h2>
+              )}
+
               {s.payerStep === 0 && (
                 <>
                   {s.previewScenario === 'payment' && (
@@ -1628,7 +1679,7 @@ export function App() {
                       <div style={css(`border-radius:14px;padding:var(--invoicecloud-spacing-l);color:#fff;margin-bottom:var(--invoicecloud-spacing-l);background:${brand.primary}`)}>
                         <div style={css('font-size:13px;opacity:.85;margin-bottom:4px')}>Amount due - Due Aug 4</div>
                         <div style={css('font-size:36px;font-weight:700;font-family:var(--invoicecloud-font-family-mono);margin-bottom:var(--invoicecloud-spacing-s)')}>${amount.toFixed(2)}</div>
-                        <button type="button" onClick={payerGoPay} style={css(`background:#fff;border:none;border-radius:10px;padding:12px 28px;font-size:15px;font-weight:700;cursor:pointer;color:${brand.primary}`)}>Pay Now</button>
+                        <button type="button" onClick={payerGoPay} style={css(`background:#fff;border:none;border-radius:10px;padding:12px 28px;font-size:15px;font-weight:700;cursor:pointer;color:${brand.primary}`)}>{primaryActionLabel}</button>
                       </div>
                       <div style={css('display:flex;justify-content:space-between;align-items:center;margin-bottom:var(--invoicecloud-spacing-s)')}>
                         <h3 style={css('font-size:16px')}>Recent statements</h3>
