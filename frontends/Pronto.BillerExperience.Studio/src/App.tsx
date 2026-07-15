@@ -49,6 +49,7 @@ function css(text: string): CSSProperties {
 }
 
 type VerticalId = 'insurance' | 'utilities' | 'tax' | 'other';
+type MethodType = 'card' | 'bank' | 'applepay' | 'googlepay' | 'paypal';
 
 interface Vertical { id: VerticalId; label: string; icon: string; desc: string; }
 interface Palette { primary: string; secondary: string; accent: string; font: string; }
@@ -100,7 +101,7 @@ interface State {
   compliance: Compliance | null;
   payerStep: number;
   amount: number;
-  methodType: 'card' | 'bank';
+  methodType: MethodType;
   autopayOptIn: boolean;
   paperlessOptIn: boolean;
   processing: boolean;
@@ -147,6 +148,14 @@ interface State {
   complexScenarioResult: ScenarioResult | null;
   scenarioLoading: boolean;
   previewDevice: 'desktop' | 'mobile';
+  statementTab: 'current' | 'past';
+  accountEmail: string;
+  accountPassword: string;
+  previewAutopayEnrolled: boolean;
+  previewAutopayEnrolling: boolean;
+  previewAutopaySource: 'existing' | 'new';
+  previewAutopayMethodType: 'card' | 'bank';
+  previewPaperlessEnrolled: boolean;
   backendBillerId: string | null;
   backendDraft: ExperienceRevision | null;
   deployment: Deployment | null;
@@ -201,7 +210,25 @@ const STATEMENTS: Statement[] = [
   { id: '239022', period: 'May 4 - Jun 3', date: 'Posted Jun 1', due: 'Paid Jun 3', status: 'Paid', amount: 112.15, breakdown: [{ key: 'base', amount: 96.0 }, { key: 'usage', amount: 16.15 }] },
 ];
 
-const STATE_OPTIONS = ['California', 'Colorado', 'Connecticut', 'Florida', 'Illinois', 'Michigan', 'Minnesota', 'New York', 'Texas', 'Virginia'];
+const STATE_OPTIONS = ['Alabama', 'Alaska', 'Arizona', 'Arkansas', 'California', 'Colorado', 'Connecticut', 'Delaware', 'Florida', 'Georgia', 'Hawaii', 'Idaho', 'Illinois', 'Indiana', 'Iowa', 'Kansas', 'Kentucky', 'Louisiana', 'Maine', 'Maryland', 'Massachusetts', 'Michigan', 'Minnesota', 'Mississippi', 'Missouri', 'Montana', 'Nebraska', 'Nevada', 'New Hampshire', 'New Jersey', 'New Mexico', 'New York', 'North Carolina', 'North Dakota', 'Ohio', 'Oklahoma', 'Oregon', 'Pennsylvania', 'Rhode Island', 'South Carolina', 'South Dakota', 'Tennessee', 'Texas', 'Utah', 'Vermont', 'Virginia', 'Washington', 'West Virginia', 'Wisconsin', 'Wyoming'];
+
+/** Lazily load a Google font for the biller's chosen brand font so the
+ *  payer preview renders in that typeface. */
+function ensureFontLoaded(fontName: string): void {
+  if (typeof document === 'undefined') return;
+  if (!fontName || fontName === 'Arial' || fontName === 'Inter') return;
+  const id = 'dynamic-brand-font';
+  const href = `https://fonts.googleapis.com/css2?family=${encodeURIComponent(fontName).replace(/%20/g, '+')}:wght@300;400;500;700&display=swap`;
+  let link = document.getElementById(id) as HTMLLinkElement | null;
+  if (link) { if (link.getAttribute('href') !== href) link.setAttribute('href', href); return; }
+  link = document.createElement('link');
+  link.id = id; link.rel = 'stylesheet'; link.href = href;
+  document.head.appendChild(link);
+}
+
+/** Strip CSS metacharacters so an untrusted font name (e.g. from an AI proposal)
+ *  can't inject extra declarations when interpolated into a style string. */
+function safeFontName(fontName: string): string { return (fontName || '').replace(/[^a-zA-Z0-9 -]/g, '').trim(); }
 
 function hashString(str: string): number { let h = 0; for (let i = 0; i < str.length; i++) { h = (h * 31 + str.charCodeAt(i)) >>> 0; } return h; }
 function paletteFromString(str: string): Palette { return PALETTES[hashString(str || 'default') % PALETTES.length]; }
@@ -336,6 +363,9 @@ const INITIAL_STATE: State = {
   csvFileName: null, importedFields: [], csvOverriddenFields: [], accountNumber: null,
   previewScenario: 'payment', complexScenarioText: '', complexScenarioResult: null, scenarioLoading: false,
   previewDevice: 'desktop',
+  statementTab: 'current', accountEmail: '', accountPassword: '',
+  previewAutopayEnrolled: false, previewAutopayEnrolling: false, previewAutopaySource: 'existing', previewAutopayMethodType: 'card',
+  previewPaperlessEnrolled: false,
   backendBillerId: null, backendDraft: null, deployment: null, publishing: false, publishError: null,
   agentActivity: [], activityConnection: 'idle', orchestrationError: null, analysisComplete: false,
   previewChatInput: '', previewChatBusy: false, previewChatError: null, previewProposal: null, previewChatReply: null, previewGenerationMode: null,
@@ -456,6 +486,7 @@ export function App() {
       palette = paletteFromString(vertical || 'default');
     }
     if (skipWebsite && fontChoice !== 'auto') palette = { ...palette, font: fontChoice };
+    else if (skipWebsite && fontChoice === 'auto') palette = { ...palette, font: 'Arial' };
     return { ...palette, initials: initialsFrom(st.bizName), colorsFromLogo };
   };
 
@@ -638,7 +669,7 @@ export function App() {
   const saveLocationSection = () => patch((st) => ({ reviewEditingSection: null, compliance: recomputeCompliance(st) }));
   const closeSaveErrorModal = () => { patch({ reviewSaveError: false }); setTimeout(() => { saveBtnRef.current?.focus(); }, 0); };
 
-  const confirmPreview = () => { if (s.reviewEditingSection) { patch({ reviewSaveError: true }); return; } trackEvent('studio.preview_opened', { device: s.previewDevice, biller_id: s.backendBillerId ?? undefined }); patch({ screen: 'preview', payerStep: 0, methodType: 'card', autopayOptIn: false, paperlessOptIn: false, processing: false }); };
+  const confirmPreview = () => { if (s.reviewEditingSection) { patch({ reviewSaveError: true }); return; } trackEvent('studio.preview_opened', { device: s.previewDevice, biller_id: s.backendBillerId ?? undefined }); patch({ screen: 'preview', payerStep: 0, methodType: 'card', autopayOptIn: false, paperlessOptIn: false, processing: false, statementTab: 'current', accountEmail: '', accountPassword: '', previewAutopayEnrolled: false, previewAutopayEnrolling: false, previewAutopaySource: 'existing', previewAutopayMethodType: 'card', previewPaperlessEnrolled: false }); };
   const redoWizard = () => patch({ screen: 'wizard', wizardStep: 0 });
   const reviewCompletedResearch = () => patch({ screen: 'analyzing' });
   const backToResults = () => patch({ screen: 'results', payerStep: 0, processing: false });
@@ -705,12 +736,23 @@ export function App() {
 
   const payerGoPay = () => patch({ payerStep: 1 });
   const payerBack = () => patch((st) => ({ payerStep: Math.max(0, st.payerStep - 1) }));
-  const selectMethodType = (t: 'card' | 'bank') => patch({ methodType: t });
+  const selectMethodType = (t: MethodType) => patch({ methodType: t });
   const toggleAutopay = () => patch((st) => { const turningOn = !st.autopayOptIn; const isFL = !!st.compliance?.states.includes('Florida'); return { autopayOptIn: turningOn, methodType: turningOn && isFL ? 'bank' : st.methodType }; });
   const togglePaperless = () => patch((st) => ({ paperlessOptIn: !st.paperlessOptIn }));
   const submitPayment = () => { patch({ processing: true }); later(() => patch({ processing: false, payerStep: 2 }), 900); };
-  const payerRestart = () => patch({ payerStep: 0, methodType: 'card', autopayOptIn: false, paperlessOptIn: false, processing: false, viewingStatementId: null });
-  const selectScenario = (name: string) => patch({ previewScenario: name });
+  const payerRestart = () => patch({ payerStep: 0, methodType: 'card', autopayOptIn: false, paperlessOptIn: false, processing: false, viewingStatementId: null, statementTab: 'current', accountEmail: '', accountPassword: '', previewAutopayEnrolled: false, previewAutopayEnrolling: false, previewAutopaySource: 'existing', previewAutopayMethodType: 'card', previewPaperlessEnrolled: false });
+  const selectScenario = (name: string) => patch({ previewScenario: name, payerStep: 0 });
+  const setStatementTab = (tab: 'current' | 'past') => patch({ statementTab: tab });
+  const setAccountEmail = (e: React.ChangeEvent<HTMLInputElement>) => patch({ accountEmail: e.target.value });
+  const setAccountPassword = (e: React.ChangeEvent<HTMLInputElement>) => patch({ accountPassword: e.target.value });
+  const togglePreviewAutopayEnrolling = () => patch((st) => ({ previewAutopayEnrolling: !st.previewAutopayEnrolling }));
+  const choosePreviewAutopayExisting = () => patch({ previewAutopaySource: 'existing' });
+  const choosePreviewAutopayNew = () => patch({ previewAutopaySource: 'new' });
+  const previewAutopaySetCard = () => patch({ previewAutopayMethodType: 'card' });
+  const previewAutopaySetBank = () => patch({ previewAutopayMethodType: 'bank' });
+  const confirmPreviewAutopayEnroll = () => patch({ previewAutopayEnrolled: true, previewAutopayEnrolling: false });
+  const unenrollPreviewAutopay = () => patch({ previewAutopayEnrolled: false });
+  const togglePreviewPaperless = () => patch((st) => ({ previewPaperlessEnrolled: !st.previewPaperlessEnrolled }));
   const setPreviewDevice = (d: 'desktop' | 'mobile') => patch({ previewDevice: d });
   const setComplexScenarioText = (e: React.ChangeEvent<HTMLTextAreaElement>) => patch({ complexScenarioText: e.target.value });
   const previewScenarioClick = () => { patch({ scenarioLoading: true }); const text = s.complexScenarioText; later(() => patch({ scenarioLoading: false, complexScenarioResult: matchScenario(text) }), 700); };
@@ -833,7 +875,8 @@ export function App() {
   };
 
   // ---- derived values ----
-  const brand: Brand = s.brand || { primary: '#085368', secondary: '#18b4e9', accent: '#dffbfd', font: 'Inter', initials: initialsFrom(s.bizName) };
+  const brand: Brand = s.brand || { primary: '#085368', secondary: '#18b4e9', accent: '#dffbfd', font: 'Arial', initials: initialsFrom(s.bizName) };
+  useEffect(() => { ensureFontLoaded(brand.font); }, [brand.font]);
   const compliance: Compliance = s.compliance || { states: [], byState: {} };
   const docLabels = VERTICAL_DOC_LABELS[s.vertical ?? 'insurance'];
   const lineLabels = LINEITEM_LABELS[s.vertical ?? 'insurance'];
@@ -877,21 +920,31 @@ export function App() {
   const total = amount + 2.5;
   const cardDisabledForAutopay = isFlorida && s.autopayOptIn;
   const acceptedMethodTypes = s.acceptedMethods.length ? s.acceptedMethods : ['card', 'ach'];
-  const ALL_METHOD_TYPES: { id: 'card' | 'bank'; label: string; iconSrc: string }[] = [
-    { id: 'card', label: 'Card', iconSrc: asset('assets/icons/Card.svg') },
-    { id: 'bank', label: 'Bank account', iconSrc: asset('assets/icons/Bank.svg') },
+  const ALL_METHOD_TYPES: { id: MethodType; label: string }[] = [
+    { id: 'card', label: 'Card' },
+    { id: 'bank', label: 'Bank account' },
+    { id: 'applepay', label: 'Apple Pay' },
+    { id: 'googlepay', label: 'Google Pay' },
+    { id: 'paypal', label: 'PayPal' },
   ];
-  let methodTypesBase = ALL_METHOD_TYPES.filter((mt) => acceptedMethodTypes.includes(mt.id === 'bank' ? 'ach' : 'card'));
-  if (!methodTypesBase.length) methodTypesBase = [{ id: 'card', label: 'Card', iconSrc: asset('assets/icons/Card.svg') }, { id: 'bank', label: 'Bank account', iconSrc: asset('assets/icons/Bank.svg') }];
+  let methodTypesBase = ALL_METHOD_TYPES.filter((mt) => acceptedMethodTypes.includes(mt.id === 'bank' ? 'ach' : mt.id));
+  if (!methodTypesBase.length) methodTypesBase = [{ id: 'card', label: 'Card' }, { id: 'bank', label: 'Bank account' }];
   const methodTypes = methodTypesBase.map((mt) => { const disabled = mt.id === 'card' && cardDisabledForAutopay; return { ...mt, disabled, opacity: disabled ? 0.5 : 1, onSelect: disabled ? () => {} : () => selectMethodType(mt.id) }; });
+  const methodTypeIsWallet = (['applepay', 'googlepay', 'paypal'] as MethodType[]).includes(s.methodType);
+  const methodTypeWalletLabel = ({ applepay: 'Apple Pay', googlepay: 'Google Pay', paypal: 'PayPal' } as Record<string, string>)[s.methodType] || '';
 
   const labelOf = (map: Record<string, string>, key: string) => map[key] || key;
   const reminderChannelLabel = labelOf({ email: 'Email', text: 'Text (SMS)', both: 'Both', none: 'None' }, s.reminderChannel);
   const feeHandlingLabel = labelOf({ absorb: 'We absorb all fees', charge: 'Convenience fee charged to customers', mixed: 'Different rules per payment type', unsure: 'Not decided yet' }, s.feeHandling);
   const acceptedMethodsLabel = s.acceptedMethods.map((id) => labelOf({ ach: 'ACH', card: 'Cards', applepay: 'Apple Pay', googlepay: 'Google Pay', paypal: 'PayPal', other: 'Other' }, id)).join(', ') || 'None selected';
-  const acceptedMethodChips = [{ id: 'applepay', label: 'Apple Pay' }, { id: 'googlepay', label: 'Google Pay' }, { id: 'paypal', label: 'PayPal' }, { id: 'other', label: 'Other' }].filter((c) => s.acceptedMethods.includes(c.id));
+  const shownMethodTypeIds = new Set(methodTypesBase.map((mt) => mt.id));
+  const acceptedMethodChips = [{ id: 'applepay', label: 'Apple Pay' }, { id: 'googlepay', label: 'Google Pay' }, { id: 'paypal', label: 'PayPal' }, { id: 'other', label: 'Other' }].filter((c) => s.acceptedMethods.includes(c.id) && !shownMethodTypeIds.has(c.id as MethodType));
 
   const statements = STATEMENTS.map((st) => ({ ...st, label: `${docLabels.numberLabel} ${docLabels.numberPrefix}${st.id}`, onClick: () => viewStatement(st.id), badgeBg: st.status === 'Due' ? 'var(--invoicecloud-intent-warning-background)' : 'var(--invoicecloud-intent-success-background)', badgeColor: st.status === 'Due' ? 'var(--invoicecloud-intent-warning)' : 'var(--invoicecloud-intent-success)' }));
+  const currentStatements = statements.filter((st) => st.status === 'Due');
+  const pastStatements = statements.filter((st) => st.status !== 'Due');
+  const shownStatements = s.statementTab === 'current' ? currentStatements : pastStatements;
+  const statementTabs = [{ id: 'current' as const, label: 'Current', count: currentStatements.length }, { id: 'past' as const, label: 'Past', count: pastStatements.length }].map((t) => ({ ...t, selected: s.statementTab === t.id, onSelect: () => setStatementTab(t.id) }));
   const viewingStatement = (() => {
     const st = STATEMENTS.find((x) => x.id === s.viewingStatementId);
     if (!st) return null;
@@ -910,7 +963,10 @@ export function App() {
     { date: 'Mar 1', desc: 'Payment received', amount: '$104.90', status: 'Completed' },
   ];
   const previewMaxWidth = s.previewDevice === 'mobile' ? '390px' : '1000px';
-  const scenarioGridCols = s.previewDevice === 'mobile' ? 'repeat(2,1fr)' : 'repeat(4,1fr)';
+  const previewShellMaxWidth = '1000px';
+  const scenarioGridCols = 'repeat(4,1fr)';
+  const previewAutopayStatusLabel = s.previewAutopayEnrolled ? `Enrolled \u2014 next charge $${amount.toFixed(2)} on Aug 4, 2026` : 'Not enrolled';
+  const previewPaperlessStatusLabel = s.previewPaperlessEnrolled ? 'Enrolled \u2014 e-statements only' : 'Not enrolled \u2014 save paper, get bills faster';
   const siteSlug = (s.bizName || 'yourbusiness').toLowerCase().replace(/[^a-z0-9]+/g, '') || 'yourbusiness';
 
   const guestCheckoutAllowedLabel = s.guestCheckoutAllowed ? 'Allowed' : 'Not allowed';
@@ -1538,7 +1594,7 @@ export function App() {
       {/* ================= PREVIEW ================= */}
       {s.screen === 'preview' && (
         <div style={css('min-height:100vh;background:var(--invoicecloud-utility-neutral-10);display:flex;flex-direction:column;align-items:center;padding:var(--invoicecloud-spacing-l)')}>
-          <div style={css(`width:100%;max-width:${previewMaxWidth};display:flex;align-items:center;justify-content:space-between;margin-bottom:var(--invoicecloud-spacing-s)`)}>
+          <div style={css(`width:100%;max-width:${previewShellMaxWidth};display:flex;align-items:center;justify-content:space-between;margin-bottom:var(--invoicecloud-spacing-s)`)}>
             <div style={css('font-size:13px;color:var(--invoicecloud-utility-neutral-70)')}>You're viewing this as one of <strong>{s.bizName}</strong>'s payers</div>
             <div style={css('display:flex;gap:var(--invoicecloud-spacing-xs)')}>
               <button type="button" onClick={payerRestart} aria-label="Restart preview" title="Restart preview" style={css('background:#fff;border:1px solid var(--invoicecloud-surface-default-border);border-radius:10px;width:40px;height:40px;display:flex;align-items:center;justify-content:center;cursor:pointer')}>
@@ -1586,12 +1642,12 @@ export function App() {
 
           {s.payerStep === 0 && (
             <>
-              <h3 style={css(`width:100%;max-width:${previewMaxWidth};font-size:16px;margin-bottom:var(--invoicecloud-spacing-s)`)}>Preview Scenarios</h3>
-              <div style={css(`width:100%;max-width:${previewMaxWidth};display:grid;grid-template-columns:${scenarioGridCols};gap:var(--invoicecloud-spacing-s);margin-bottom:var(--invoicecloud-spacing-s)`)}>
+              <h3 style={css(`width:100%;max-width:${previewShellMaxWidth};font-size:16px;margin-bottom:var(--invoicecloud-spacing-s)`)}>Preview Scenarios</h3>
+              <div style={css(`width:100%;max-width:${previewShellMaxWidth};display:grid;grid-template-columns:${scenarioGridCols};gap:var(--invoicecloud-spacing-s);margin-bottom:var(--invoicecloud-spacing-s)`)}>
                 {scenarioCards.map((sc) => <button key={sc.id} type="button" onClick={sc.onSelect} style={css(`padding:var(--invoicecloud-spacing-s);border-radius:10px;font-size:13px;font-weight:500;cursor:pointer;text-align:center;background:${selBg(sc.selected)};border:1.5px solid ${selBorder(sc.selected)}`)}>{sc.label}</button>)}
               </div>
               {s.previewScenario === 'complex' && (
-                <div style={css(`width:100%;max-width:${previewMaxWidth};background:#fff;border-radius:14px;padding:var(--invoicecloud-spacing-m);margin-bottom:var(--invoicecloud-spacing-s);box-shadow:var(--invoicecloud-elevation-2)`)}>
+                <div style={css(`width:100%;max-width:${previewShellMaxWidth};background:#fff;border-radius:14px;padding:var(--invoicecloud-spacing-m);margin-bottom:var(--invoicecloud-spacing-s);box-shadow:var(--invoicecloud-elevation-2)`)}>
                   <label style={css('display:block;font-size:13px;font-weight:500;margin-bottom:4px')}>Describe a scenario</label>
                   <textarea value={s.complexScenarioText} onChange={setComplexScenarioText} placeholder="e.g. show me what a delinquent payment will look like" style={css('width:100%;min-height:70px;padding:12px 14px;border-radius:4px;border:1px solid var(--invoicecloud-surface-default-border);font-size:14px;font-family:var(--invoicecloud-font-family-primary);margin-bottom:var(--invoicecloud-spacing-s)')}></textarea>
                   <button type="button" onClick={previewScenarioClick} disabled={s.scenarioLoading} style={css('background:var(--invoicecloud-primary);color:#fff;border:none;border-radius:8px;padding:10px 20px;font-size:14px;font-weight:700;cursor:pointer')}>Preview Scenario</button>
@@ -1600,7 +1656,7 @@ export function App() {
             </>
           )}
 
-          <div style={css(`width:100%;max-width:${previewMaxWidth};background:#fff;border-radius:14px;overflow:hidden;box-shadow:var(--invoicecloud-elevation-3)`)}>
+          <div data-preview-root style={css(`width:100%;max-width:${previewMaxWidth};background:#fff;border-radius:14px;overflow:hidden;box-shadow:var(--invoicecloud-elevation-3);font-family:'${safeFontName(brand.font)}'`)}>
             <div style={css('display:flex;align-items:center;gap:var(--invoicecloud-spacing-xs);padding:var(--invoicecloud-spacing-s);background:var(--invoicecloud-utility-neutral-05);border-bottom:1px solid var(--invoicecloud-surface-default-border)')}>
               <span style={css('width:10px;height:10px;border-radius:50%;background:#e35b4f')}></span>
               <span style={css('width:10px;height:10px;border-radius:50%;background:#e8c34a')}></span>
@@ -1631,10 +1687,15 @@ export function App() {
                         <button type="button" onClick={payerGoPay} style={css(`background:#fff;border:none;border-radius:10px;padding:12px 28px;font-size:15px;font-weight:700;cursor:pointer;color:${brand.primary}`)}>Pay Now</button>
                       </div>
                       <div style={css('display:flex;justify-content:space-between;align-items:center;margin-bottom:var(--invoicecloud-spacing-s)')}>
-                        <h3 style={css('font-size:16px')}>Recent statements</h3>
+                        <div style={css('display:flex;background:var(--invoicecloud-slate-10);border-radius:10px;padding:3px')}>
+                          {statementTabs.map((t) => (
+                            <button key={t.id} type="button" onClick={t.onSelect} style={css(`padding:6px 16px;border-radius:8px;font-size:13px;font-weight:500;cursor:pointer;background:${selBg(t.selected)};border:1.5px solid ${selBorder(t.selected)}`)}>{t.label} ({t.count})</button>
+                          ))}
+                        </div>
                         <span style={css(`font-size:11px;font-weight:700;padding:4px 10px;border-radius:4px;background:${dataBadgeBg};color:${dataBadgeColor}`)}>{dataBadgeLabel}</span>
                       </div>
-                      {statements.map((st) => (
+                      {shownStatements.length === 0 && <div style={css('font-size:13px;color:var(--invoicecloud-utility-neutral-60);padding:var(--invoicecloud-spacing-s) 0')}>No {s.statementTab} statements.</div>}
+                      {shownStatements.map((st) => (
                         <div key={st.id} style={css('display:flex;justify-content:space-between;align-items:center;padding:var(--invoicecloud-spacing-s) 0;border-bottom:1px solid var(--invoicecloud-surface-default-border)')}>
                           <div>
                             <button type="button" onClick={st.onClick} style={css(`background:none;border:none;padding:0;cursor:pointer;text-align:left;font-weight:500;font-size:14px;text-decoration:underline;color:${brand.primary}`)}>{st.label}</button>
@@ -1646,6 +1707,60 @@ export function App() {
                           </div>
                         </div>
                       ))}
+
+                      {(s.offerAutopay || s.offerPaperless) && (
+                        <div style={css('margin-top:var(--invoicecloud-spacing-l);display:flex;flex-direction:column;gap:var(--invoicecloud-spacing-s)')}>
+                          {s.offerAutopay && (
+                            <div style={css('border:1px solid var(--invoicecloud-surface-default-border);border-radius:12px;padding:var(--invoicecloud-spacing-m)')}>
+                              <div style={css('display:flex;justify-content:space-between;align-items:flex-start;gap:var(--invoicecloud-spacing-s)')}>
+                                <div>
+                                  <div style={css('font-weight:500;font-size:15px;display:flex;align-items:center;gap:6px')}><img src={asset('assets/icons/AutoPay.svg')} alt="" style={css('width:18px;height:18px')} />AutoPay</div>
+                                  <div style={css(`font-size:12px;margin-top:2px;color:${s.previewAutopayEnrolled ? 'var(--invoicecloud-intent-success)' : 'var(--invoicecloud-utility-neutral-60)'}`)}>{previewAutopayStatusLabel}</div>
+                                </div>
+                                {s.previewAutopayEnrolled
+                                  ? <button type="button" onClick={unenrollPreviewAutopay} style={css('background:none;border:1px solid var(--invoicecloud-surface-default-border);border-radius:8px;padding:8px 16px;font-size:13px;font-weight:500;cursor:pointer')}>Unenroll</button>
+                                  : <button type="button" onClick={togglePreviewAutopayEnrolling} style={css('background:var(--invoicecloud-primary);color:#fff;border:none;border-radius:8px;padding:8px 16px;font-size:13px;font-weight:700;cursor:pointer')}>{s.previewAutopayEnrolling ? 'Cancel' : 'Enroll'}</button>}
+                              </div>
+                              {!s.previewAutopayEnrolled && s.previewAutopayEnrolling && (
+                                <div style={css('margin-top:var(--invoicecloud-spacing-s);border-top:1px solid var(--invoicecloud-surface-default-border);padding-top:var(--invoicecloud-spacing-s)')}>
+                                  <div style={css('font-size:13px;color:var(--invoicecloud-utility-neutral-70);margin-bottom:6px')}>Next AutoPay charge: <strong>${amount.toFixed(2)} on Aug 4, 2026</strong></div>
+                                  <div style={css('font-size:13px;font-weight:500;margin-bottom:6px')}>Choose a payment method</div>
+                                  <label style={css('display:flex;align-items:center;gap:8px;font-size:14px;padding:8px 0;cursor:pointer')}>
+                                    <input type="radio" name="preview-autopay-source" checked={s.previewAutopaySource === 'existing'} onChange={choosePreviewAutopayExisting} /> Use card on file ····4242
+                                  </label>
+                                  <label style={css('display:flex;align-items:center;gap:8px;font-size:14px;padding:8px 0;cursor:pointer')}>
+                                    <input type="radio" name="preview-autopay-source" checked={s.previewAutopaySource === 'new'} onChange={choosePreviewAutopayNew} /> Add a new payment method
+                                  </label>
+                                  {s.previewAutopaySource === 'new' && (
+                                    <div style={css('margin:6px 0 var(--invoicecloud-spacing-s)')}>
+                                      {isFlorida && <div style={css('background:var(--invoicecloud-intent-info-background);border:1px solid var(--invoicecloud-intent-info-border);border-radius:10px;padding:var(--invoicecloud-spacing-s);margin-bottom:var(--invoicecloud-spacing-s);font-size:12px;color:var(--invoicecloud-intent-info)')}>Florida requires AutoPay to be funded by a bank account.</div>}
+                                      <div style={css('display:flex;gap:var(--invoicecloud-spacing-xs);margin-bottom:var(--invoicecloud-spacing-s)')}>
+                                        <button type="button" onClick={previewAutopaySetCard} disabled={isFlorida} style={css(`flex:1;padding:8px;border-radius:8px;font-size:13px;cursor:${isFlorida ? 'not-allowed' : 'pointer'};background:${selBg(!isFlorida && s.previewAutopayMethodType === 'card')};border:1.5px solid ${selBorder(!isFlorida && s.previewAutopayMethodType === 'card')};opacity:${isFlorida ? 0.5 : 1}`)}>Card</button>
+                                        <button type="button" onClick={previewAutopaySetBank} style={css(`flex:1;padding:8px;border-radius:8px;font-size:13px;cursor:pointer;background:${selBg(isFlorida || s.previewAutopayMethodType === 'bank')};border:1.5px solid ${selBorder(isFlorida || s.previewAutopayMethodType === 'bank')}`)}>Bank account</button>
+                                      </div>
+                                      {(isFlorida || s.previewAutopayMethodType === 'bank')
+                                        ? <><input type="text" placeholder="Routing number" style={css('width:100%;padding:10px 12px;border-radius:4px;border:1px solid var(--invoicecloud-surface-default-border);font-family:var(--invoicecloud-font-family-mono);margin-bottom:var(--invoicecloud-spacing-xs)')} /><input type="text" placeholder="Account number" style={css('width:100%;padding:10px 12px;border-radius:4px;border:1px solid var(--invoicecloud-surface-default-border);font-family:var(--invoicecloud-font-family-mono)')} /></>
+                                        : <input type="text" placeholder="Card number" style={css('width:100%;padding:10px 12px;border-radius:4px;border:1px solid var(--invoicecloud-surface-default-border);font-family:var(--invoicecloud-font-family-mono)')} />}
+                                    </div>
+                                  )}
+                                  <button type="button" onClick={confirmPreviewAutopayEnroll} style={css('margin-top:6px;background:var(--invoicecloud-intent-success-hover);color:#fff;border:none;border-radius:8px;padding:10px 20px;font-size:13px;font-weight:700;cursor:pointer')}>Confirm enrollment</button>
+                                </div>
+                              )}
+                            </div>
+                          )}
+                          {s.offerPaperless && (
+                            <div style={css('border:1px solid var(--invoicecloud-surface-default-border);border-radius:12px;padding:var(--invoicecloud-spacing-m);display:flex;justify-content:space-between;align-items:center;gap:var(--invoicecloud-spacing-s)')}>
+                              <div>
+                                <div style={css('font-weight:500;font-size:15px;display:flex;align-items:center;gap:6px')}><img src={asset('assets/icons/Paperless.svg')} alt="" style={css('width:18px;height:18px')} />Paperless billing</div>
+                                <div style={css(`font-size:12px;margin-top:2px;color:${s.previewPaperlessEnrolled ? 'var(--invoicecloud-intent-success)' : 'var(--invoicecloud-utility-neutral-60)'}`)}>{previewPaperlessStatusLabel}</div>
+                              </div>
+                              <button type="button" role="switch" aria-checked={s.previewPaperlessEnrolled} onClick={togglePreviewPaperless} aria-label="Toggle paperless billing" style={css(`width:46px;height:26px;border-radius:13px;border:none;cursor:pointer;position:relative;transition:background .2s;background:${s.previewPaperlessEnrolled ? 'var(--invoicecloud-intent-success)' : 'var(--invoicecloud-slate-30)'}`)}>
+                                <span style={css(`position:absolute;top:3px;left:${s.previewPaperlessEnrolled ? '23px' : '3px'};width:20px;height:20px;border-radius:50%;background:#fff;transition:left .2s`)}></span>
+                              </button>
+                            </div>
+                          )}
+                        </div>
+                      )}
                     </>
                   )}
 
@@ -1743,12 +1858,12 @@ export function App() {
                   <h3 style={css('margin-bottom:var(--invoicecloud-spacing-m)')}>Checkout</h3>
                   <div style={css('display:grid;grid-template-columns:1.5fr 1fr;gap:var(--invoicecloud-spacing-l);align-items:start')}>
                     <div>
-                      <h4 style={css('font-size:15px;margin-bottom:var(--invoicecloud-spacing-s)')}>Payment method</h4>
+                      <h4 style={css('font-size:15px;margin-bottom:var(--invoicecloud-spacing-s)')}>1. Payment method</h4>
                       <p style={css('font-size:13px;color:var(--invoicecloud-utility-neutral-70);margin-bottom:var(--invoicecloud-spacing-s)')}>No payment methods on file yet - add one to pay this bill.</p>
-                      <div style={css('display:flex;gap:var(--invoicecloud-spacing-xs);margin-bottom:var(--invoicecloud-spacing-m)')}>
+                      <div style={css('display:flex;flex-wrap:wrap;gap:var(--invoicecloud-spacing-xs);margin-bottom:var(--invoicecloud-spacing-m)')}>
                         {methodTypes.map((mt) => (
-                          <button key={mt.id} type="button" onClick={mt.onSelect} disabled={mt.disabled} style={css(`flex:1;display:flex;align-items:center;justify-content:center;gap:8px;padding:var(--invoicecloud-spacing-s);border-radius:10px;cursor:pointer;background:${mt.id === s.methodType ? TINT : mt.disabled ? 'var(--invoicecloud-utility-neutral-05)' : '#fff'};border:1.5px solid ${mt.id === s.methodType ? PRIMARY : BORDER};font-size:14px;font-weight:500;opacity:${mt.opacity}`)}>
-                            <img src={mt.iconSrc} alt="" style={css('width:20px;height:20px')} />{mt.label}
+                          <button key={mt.id} type="button" onClick={mt.onSelect} disabled={mt.disabled} style={css(`flex:1 1 30%;min-width:100px;display:flex;align-items:center;justify-content:center;gap:8px;padding:var(--invoicecloud-spacing-s);border-radius:10px;cursor:pointer;background:${mt.id === s.methodType ? TINT : mt.disabled ? 'var(--invoicecloud-utility-neutral-05)' : '#fff'};border:1.5px solid ${mt.id === s.methodType ? PRIMARY : BORDER};font-size:14px;font-weight:500;opacity:${mt.opacity}`)}>
+                            {mt.label}
                           </button>
                         ))}
                       </div>
@@ -1756,6 +1871,9 @@ export function App() {
                         <div style={css('display:flex;flex-wrap:wrap;gap:6px;margin-bottom:var(--invoicecloud-spacing-m)')}>
                           {acceptedMethodChips.map((c) => <span key={c.id} style={css('font-size:12px;padding:4px 10px;border-radius:6px;background:var(--invoicecloud-slate-10);color:var(--invoicecloud-utility-neutral-70)')}>Also accepts {c.label}</span>)}
                         </div>
+                      )}
+                      {methodTypeIsWallet && (
+                        <div style={css('background:var(--invoicecloud-slate-10);border-radius:10px;padding:var(--invoicecloud-spacing-m);margin-bottom:var(--invoicecloud-spacing-m);font-size:13px;color:var(--invoicecloud-utility-neutral-80)')}>You'll be redirected to {methodTypeWalletLabel} to complete this payment.</div>
                       )}
                       {s.methodType === 'card' && (
                         <>
@@ -1775,7 +1893,7 @@ export function App() {
                           <input type="text" placeholder="000123456789" style={css('width:100%;padding:12px 14px;border-radius:4px;border:1px solid var(--invoicecloud-surface-default-border);font-family:var(--invoicecloud-font-family-mono);margin-bottom:var(--invoicecloud-spacing-m)')} />
                         </>
                       )}
-                      <h4 style={css('font-size:15px;margin-bottom:var(--invoicecloud-spacing-s);margin-top:var(--invoicecloud-spacing-m)')}>AutoPay &amp; Paperless</h4>
+                      <h4 style={css('font-size:15px;margin-bottom:var(--invoicecloud-spacing-s);margin-top:var(--invoicecloud-spacing-m)')}>2. AutoPay &amp; Paperless enrollment</h4>
                       {s.offerAutopay && s.enrollDuringPayment && (
                         <>
                           <div style={css('background:var(--invoicecloud-intent-warning-background);border:1px solid var(--invoicecloud-intent-warning-border);border-radius:10px;padding:var(--invoicecloud-spacing-s);margin-bottom:var(--invoicecloud-spacing-m);font-size:13px;color:var(--invoicecloud-intent-warning)')}>Note: signing up for AutoPay will automatically enroll you in Paperless Billing as well.</div>
@@ -1793,6 +1911,10 @@ export function App() {
                           <div style={css('font-size:12px;color:var(--invoicecloud-intent-success);margin-bottom:var(--invoicecloud-spacing-m)')}>Save an estimated 6 lbs of paper a year and get your bill up to 2 days faster.</div>
                         </>
                       )}
+                      <h4 style={css('font-size:15px;margin-bottom:4px;margin-top:var(--invoicecloud-spacing-m)')}>3. Optional: Create an account</h4>
+                      <p style={css('font-size:12px;color:var(--invoicecloud-utility-neutral-70);margin-bottom:var(--invoicecloud-spacing-s)')}>Save a password to view your history and manage payments online. You can skip this and pay as a guest.</p>
+                      <input type="email" value={s.accountEmail} onChange={setAccountEmail} placeholder="Email address" style={css('width:100%;padding:12px 14px;border-radius:4px;border:1px solid var(--invoicecloud-surface-default-border);margin-bottom:var(--invoicecloud-spacing-s)')} />
+                      <input type="password" value={s.accountPassword} onChange={setAccountPassword} placeholder="Create a password (optional)" style={css('width:100%;padding:12px 14px;border-radius:4px;border:1px solid var(--invoicecloud-surface-default-border);margin-bottom:var(--invoicecloud-spacing-m)')} />
                       <div style={css('font-size:12px;color:var(--invoicecloud-utility-neutral-60);margin:var(--invoicecloud-spacing-m) 0')}>By selecting the button below, you agree to the <a href="#" style={css('color:var(--invoicecloud-primary)')}>InvoiceCloud Terms and Conditions</a> and <a href="#" style={css('color:var(--invoicecloud-primary)')}>Fee Disclosure</a>.</div>
                       <div style={css('display:flex;justify-content:space-between;align-items:center')}>
                         <button type="button" onClick={payerBack} style={css('background:none;border:none;color:var(--invoicecloud-primary);font-weight:700;cursor:pointer')}>&larr; Back</button>
