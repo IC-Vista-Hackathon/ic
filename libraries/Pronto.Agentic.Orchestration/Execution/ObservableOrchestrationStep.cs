@@ -11,7 +11,9 @@ public sealed class ObservableOrchestrationStep<TInput, TOutput>(
     string summary,
     Func<TInput, OrchestrationContext, CancellationToken, ValueTask<TOutput>> execute,
     IOrchestrationEventSink eventSink,
-    ILogger? logger = null) : IOrchestrationStep<TInput, TOutput>
+    ILogger? logger = null,
+    Func<TOutput, (OrchestrationEventStatus Status, string Summary, string? ErrorCode)>? completion = null)
+    : IOrchestrationStep<TInput, TOutput>
 {
     private static readonly Action<ILogger, string, string, string?, string, string?, Exception> LogStepFailure =
         LoggerMessage.Define<string, string, string?, string, string?>(
@@ -23,8 +25,8 @@ public sealed class ObservableOrchestrationStep<TInput, TOutput>(
             LogLevel.Error,
             new EventId(9102, nameof(LogFailureEventError)),
             "Publishing failure activity for agent {AgentId}, run {RunId}, biller {BillerId} failed; preserving the original error");
-    private static readonly Action<ILogger, string, string, string?, string, Exception> LogActivityEventError =
-        LoggerMessage.Define<string, string, string?, string>(
+    private static readonly Action<ILogger, string, string, string, string?, Exception> LogActivityEventError =
+        LoggerMessage.Define<string, string, string, string?>(
             LogLevel.Error,
             new EventId(9103, nameof(LogActivityEventError)),
             "Publishing {Status} activity for agent {AgentId}, run {RunId}, biller {BillerId} failed");
@@ -52,12 +54,14 @@ public sealed class ObservableOrchestrationStep<TInput, TOutput>(
             activity?.SetStatus(ActivityStatusCode.Ok);
             OrchestrationTelemetry.StepCompleted.Add(1, tags);
             OrchestrationTelemetry.StepDuration.Record(durationMs, tags);
+            var outcome = completion?.Invoke(result) ?? (OrchestrationEventStatus.Completed, "Completed", null);
             await PublishBestEffortAsync(
                 Event(
-                    OrchestrationEventStatus.Completed,
-                    "Completed",
+                    outcome.Item1,
+                    outcome.Item2,
                     sequence + 1,
                     activity,
+                    errorCode: outcome.Item3,
                     durationMs: durationMs),
                 cancellationToken);
             return result;
@@ -97,20 +101,29 @@ public sealed class ObservableOrchestrationStep<TInput, TOutput>(
             {
                 await eventSink.PublishAsync(orchestrationEvent, eventCancellationToken);
             }
-            catch (Exception exception)
+            catch (Exception exception) when (!IsCriticalException(exception))
             {
                 if (logger is not null)
                 {
                     LogActivityEventError(
                         logger,
+                        orchestrationEvent.Status.ToString(),
                         name,
                         context.RunId,
                         context.BillerId,
-                        orchestrationEvent.Status.ToString(),
                         exception);
                 }
             }
         }
+
+        static bool IsCriticalException(Exception exception) =>
+            exception is OutOfMemoryException
+                or StackOverflowException
+                or AccessViolationException
+                or AppDomainUnloadedException
+                or BadImageFormatException
+                or CannotUnloadAppDomainException
+                or InvalidProgramException;
 
         OrchestrationEvent Event(
             OrchestrationEventStatus status,

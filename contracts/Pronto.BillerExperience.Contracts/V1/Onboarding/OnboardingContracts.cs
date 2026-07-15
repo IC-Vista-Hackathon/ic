@@ -39,7 +39,8 @@ public enum AgentActivityStatus
     NeedsInput,
     Failed,
     Retrying,
-    Degraded
+    Degraded,
+    Skipped
 }
 
 public sealed record OnboardingSessionResponse(

@@ -370,14 +370,14 @@ public sealed partial class BillerOnboardingService(
             await repository.PurgeByBillerAsync(billerId, CancellationToken.None);
             releaseSlug = true;
         }
-        catch (Exception exception)
+        catch (Exception exception) when (!IsCriticalException(exception))
         {
             LogCreationCleanupFailed(logger, billerId, "purge", exception);
             try
             {
                 releaseSlug = await repository.GetBillerAsync(billerId, CancellationToken.None) is null;
             }
-            catch (Exception verificationException)
+            catch (Exception verificationException) when (!IsCriticalException(verificationException))
             {
                 LogCreationCleanupFailed(logger, billerId, "verify_purge", verificationException);
             }
@@ -392,7 +392,7 @@ public sealed partial class BillerOnboardingService(
         {
             await repository.ReleaseSlugAsync(slug, billerId, CancellationToken.None);
         }
-        catch (Exception exception)
+        catch (Exception exception) when (!IsCriticalException(exception))
         {
             LogCreationCleanupFailed(logger, billerId, "release_slug", exception);
         }
@@ -400,6 +400,15 @@ public sealed partial class BillerOnboardingService(
 
     private static bool IsActiveDeployment(string status) =>
         status is "requested" or "applying" or "waiting_for_readiness" or "verifying";
+
+    private static bool IsCriticalException(Exception exception) =>
+        exception is OutOfMemoryException
+            or StackOverflowException
+            or AccessViolationException
+            or AppDomainUnloadedException
+            or BadImageFormatException
+            or CannotUnloadAppDomainException
+            or InvalidProgramException;
 
     private async ValueTask EnsurePublishingStateAsync(
         ExperienceRecord experience,

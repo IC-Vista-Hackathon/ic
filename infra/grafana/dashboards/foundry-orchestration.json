@@ -1,0 +1,92 @@
+{
+  "annotations": { "list": [] },
+  "description": "Proof that Biller Experience requests discover and invoke Microsoft Foundry agents under the same distributed trace.",
+  "editable": true,
+  "graphTooltip": 0,
+  "schemaVersion": 39,
+  "tags": ["ic", "foundry", "agents", "orchestration"],
+  "templating": {
+    "list": [
+      { "name": "datasource", "label": "Azure Monitor datasource", "type": "datasource", "query": "grafana-azure-monitor-datasource", "current": {}, "hide": 0 },
+      {
+        "name": "appInsights",
+        "label": "App Insights resource id",
+        "type": "textbox",
+        "query": "/subscriptions/ca64adec-b195-49fd-a782-15553708c07c/resourceGroups/rg-ic-hack/providers/microsoft.insights/components/appi-ic-hack",
+        "current": { "text": "/subscriptions/ca64adec-b195-49fd-a782-15553708c07c/resourceGroups/rg-ic-hack/providers/microsoft.insights/components/appi-ic-hack", "value": "/subscriptions/ca64adec-b195-49fd-a782-15553708c07c/resourceGroups/rg-ic-hack/providers/microsoft.insights/components/appi-ic-hack" },
+        "hide": 0
+      }
+    ]
+  },
+  "time": { "from": "now-6h", "to": "now" },
+  "timepicker": {},
+  "title": "IC — Foundry agent orchestration",
+  "uid": "ic-foundry-orchestration",
+  "version": 1,
+  "panels": [
+    {
+      "id": 1,
+      "title": "Foundry invocations by agent and outcome",
+      "type": "timeseries",
+      "datasource": { "type": "grafana-azure-monitor-datasource", "uid": "${datasource}" },
+      "gridPos": { "h": 9, "w": 12, "x": 0, "y": 0 },
+      "fieldConfig": { "defaults": { "custom": { "drawStyle": "bars", "stacking": { "mode": "normal" }, "fillOpacity": 55 } }, "overrides": [] },
+      "options": { "legend": { "displayMode": "table", "placement": "bottom", "showLegend": true }, "tooltip": { "mode": "multi" } },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": { "type": "grafana-azure-monitor-datasource", "uid": "${datasource}" },
+          "queryType": "Azure Log Analytics",
+          "azureLogAnalytics": {
+            "resources": ["${appInsights}"],
+            "resultFormat": "time_series",
+            "query": "dependencies\n| where $__timeFilter(timestamp)\n| where name == \"foundry.agent.invoke\"\n| extend agent_id = tostring(customDimensions[\"gen_ai.agent.id\"]), outcome = iff(success, \"succeeded\", \"failed\")\n| summarize invocations = count() by agent_id, outcome, bin(timestamp, 5m)\n| order by timestamp asc"
+          }
+        }
+      ]
+    },
+    {
+      "id": 2,
+      "title": "Foundry invocation latency (p50 / p95)",
+      "type": "timeseries",
+      "datasource": { "type": "grafana-azure-monitor-datasource", "uid": "${datasource}" },
+      "gridPos": { "h": 9, "w": 12, "x": 12, "y": 0 },
+      "fieldConfig": { "defaults": { "unit": "ms", "custom": { "drawStyle": "line", "fillOpacity": 10 } }, "overrides": [] },
+      "options": { "legend": { "displayMode": "table", "placement": "bottom", "showLegend": true }, "tooltip": { "mode": "multi" } },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": { "type": "grafana-azure-monitor-datasource", "uid": "${datasource}" },
+          "queryType": "Azure Log Analytics",
+          "azureLogAnalytics": {
+            "resources": ["${appInsights}"],
+            "resultFormat": "time_series",
+            "query": "dependencies\n| where $__timeFilter(timestamp)\n| where name == \"foundry.agent.invoke\"\n| summarize p50_ms = percentile(duration, 50), p95_ms = percentile(duration, 95) by bin(timestamp, 5m)\n| order by timestamp asc"
+          }
+        }
+      ]
+    },
+    {
+      "id": 3,
+      "title": "Recent API-to-Foundry traces",
+      "description": "Each row is an API-correlated Foundry call. Open operation_Id in Application Insights transaction search to inspect the request, orchestration, inventory, and agent spans together.",
+      "type": "table",
+      "datasource": { "type": "grafana-azure-monitor-datasource", "uid": "${datasource}" },
+      "gridPos": { "h": 10, "w": 24, "x": 0, "y": 9 },
+      "fieldConfig": { "defaults": {}, "overrides": [] },
+      "options": { "showHeader": true },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": { "type": "grafana-azure-monitor-datasource", "uid": "${datasource}" },
+          "queryType": "Azure Log Analytics",
+          "azureLogAnalytics": {
+            "resources": ["${appInsights}"],
+            "resultFormat": "table",
+            "query": "let apiOperations = requests\n| where $__timeFilter(timestamp)\n| where name has \"/chat\"\n| project operation_Id, api_request = name;\ndependencies\n| where $__timeFilter(timestamp)\n| where name in (\"foundry.agents.list\", \"foundry.agent.invoke\", \"foundry.research.dispatch\")\n| join kind=inner apiOperations on operation_Id\n| extend agent_id = tostring(customDimensions[\"gen_ai.agent.id\"])\n| project timestamp, operation_Id, api_request, span = name, agent_id, success, duration, resultCode\n| order by timestamp desc\n| take 100"
+          }
+        }
+      ]
+    }
+  ]
+}

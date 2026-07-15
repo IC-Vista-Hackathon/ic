@@ -73,14 +73,15 @@ public sealed partial class CosmosBillerExperienceRepository(
             {
                 return false;
             }
-            catch
+            catch (Exception exception) when (!IsCriticalException(exception))
             {
                 try
                 {
                     await ReleaseSlugCoreAsync(slug, billerId, CancellationToken.None);
                 }
-                catch
+                catch (Exception cleanupException) when (!IsCriticalException(cleanupException))
                 {
+                    LogSlugReservationCleanupFailed(logger, slug, billerId, cleanupException);
                 }
 
                 throw;
@@ -289,6 +290,7 @@ public sealed partial class CosmosBillerExperienceRepository(
         }
         catch (CosmosException exception) when (exception.StatusCode == HttpStatusCode.NotFound)
         {
+            LogIdempotentDeleteNotFound(logger, "billers", billerId);
         }
         if (biller is not null)
         {
@@ -296,7 +298,7 @@ public sealed partial class CosmosBillerExperienceRepository(
         }
     }
 
-    private static async Task DeletePartitionAsync(
+    private async Task DeletePartitionAsync(
         Container container, PartitionKey partition, CancellationToken cancellationToken)
     {
         using var iterator = container.GetItemQueryIterator<IdOnly>(
@@ -317,6 +319,7 @@ public sealed partial class CosmosBillerExperienceRepository(
                 }
                 catch (CosmosException exception) when (exception.StatusCode == HttpStatusCode.NotFound)
                 {
+                    LogIdempotentDeleteNotFound(logger, container.Id, item.Id);
                 }
             }
         }
@@ -349,8 +352,18 @@ public sealed partial class CosmosBillerExperienceRepository(
         }
         catch (CosmosException exception) when (exception.StatusCode == HttpStatusCode.NotFound)
         {
+            LogSlugReservationNotFound(logger, slug, billerId);
         }
     }
+
+    private static bool IsCriticalException(Exception exception) =>
+        exception is OutOfMemoryException
+            or StackOverflowException
+            or AccessViolationException
+            or AppDomainUnloadedException
+            or BadImageFormatException
+            or CannotUnloadAppDomainException
+            or InvalidProgramException;
 
     private async ValueTask<bool> SlugExistsOnBillerAsync(
         string slug,
@@ -414,6 +427,28 @@ public sealed partial class CosmosBillerExperienceRepository(
         string container,
         string billerId,
         string? traceId,
+        Exception exception);
+
+    [LoggerMessage(2101, LogLevel.Debug,
+        "Cosmos item {ItemId} in container {Container} was already absent during idempotent deletion")]
+    private static partial void LogIdempotentDeleteNotFound(
+        ILogger logger,
+        string container,
+        string itemId);
+
+    [LoggerMessage(2102, LogLevel.Debug,
+        "Slug reservation {Slug} for biller {BillerId} was already absent")]
+    private static partial void LogSlugReservationNotFound(
+        ILogger logger,
+        string slug,
+        string billerId);
+
+    [LoggerMessage(2103, LogLevel.Warning,
+        "Failed to clean up slug reservation {Slug} for biller {BillerId} after reservation error")]
+    private static partial void LogSlugReservationCleanupFailed(
+        ILogger logger,
+        string slug,
+        string billerId,
         Exception exception);
 
     private sealed record AgentActivityDocument(

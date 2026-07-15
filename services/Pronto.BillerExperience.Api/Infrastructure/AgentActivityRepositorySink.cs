@@ -51,6 +51,7 @@ public sealed partial class AgentActivityRepositorySink(
         OrchestrationEventStatus.Failed => AgentActivityStatus.Failed,
         OrchestrationEventStatus.Retrying => AgentActivityStatus.Retrying,
         OrchestrationEventStatus.Degraded => AgentActivityStatus.Degraded,
+        OrchestrationEventStatus.Skipped => AgentActivityStatus.Skipped,
         _ => AgentActivityStatus.Failed
     };
 

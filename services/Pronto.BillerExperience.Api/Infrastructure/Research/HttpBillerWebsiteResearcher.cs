@@ -23,16 +23,23 @@ public sealed partial class HttpBillerWebsiteResearcher(
         BillerResearchRequest request,
         CancellationToken cancellationToken = default)
     {
+        if (request.Website is null)
+        {
+            return new BillerResearchResponse(
+                ResearchOutcome.Skipped, [], [], ["research.website_missing"], "research.website_missing");
+        }
+
+        var website = request.Website;
         var started = Stopwatch.GetTimestamp();
         ResearchTelemetry.Requests.Add(1);
-        using var activity = ResearchTelemetry.Start(request.Website.Host);
+        using var activity = ResearchTelemetry.Start(website.Host);
 
         try
         {
-            var validation = await ValidateTargetAsync(request.Website, request.Website.Host, cancellationToken);
+            var validation = await ValidateTargetAsync(website, website.Host, cancellationToken);
             if (validation is not null)
             {
-                LogRejectedTarget(logger, validation, request.Website.Host, Activity.Current?.TraceId.ToString());
+                LogRejectedTarget(logger, validation, website.Host, Activity.Current?.TraceId.ToString());
                 return Fail(validation, retryable: false, activity);
             }
 
@@ -42,7 +49,7 @@ public sealed partial class HttpBillerWebsiteResearcher(
             var facts = new List<ResearchFact>();
             var sources = new List<ResearchSource>();
             var warnings = new List<string>();
-            pending.Enqueue(request.Website);
+            pending.Enqueue(website);
 
             while (pending.Count > 0 && visited.Count < pageLimit)
             {
@@ -53,7 +60,7 @@ public sealed partial class HttpBillerWebsiteResearcher(
                     continue;
                 }
 
-                var page = await FetchPageAsync(pageUri, request.Website.Host, cancellationToken);
+                var page = await FetchPageAsync(pageUri, website.Host, cancellationToken);
                 if (page.ErrorCode is not null)
                 {
                     if (sources.Count == 0)
@@ -73,7 +80,7 @@ public sealed partial class HttpBillerWebsiteResearcher(
                 AddFact(facts, "page_description", description, page.FinalUri!);
                 ResearchTelemetry.Pages.Add(1);
 
-                foreach (var link in ExtractLinks(page.Html!, page.FinalUri!, request.Website.Host)
+                foreach (var link in ExtractLinks(page.Html!, page.FinalUri!, website.Host)
                              .Take(Math.Max(0, _options.MaxLinksPerPage)))
                 {
                     if (!visited.Contains(Canonical(link)))
@@ -94,27 +101,27 @@ public sealed partial class HttpBillerWebsiteResearcher(
         }
         catch (OperationCanceledException exception) when (!cancellationToken.IsCancellationRequested)
         {
-            LogResearchFailure(logger, "research.timeout", request.Website.Host, exception);
+            LogResearchFailure(logger, "research.timeout", website.Host, exception);
             return Fail("research.timeout", retryable: true, activity);
         }
         catch (OperationCanceledException exception)
         {
-            LogResearchFailure(logger, "research.cancelled", request.Website.Host, exception);
+            LogResearchFailure(logger, "research.cancelled", website.Host, exception);
             return Fail("research.cancelled", retryable: false, activity);
         }
         catch (HttpRequestException exception)
         {
-            LogResearchFailure(logger, "research.request_failed", request.Website.Host, exception);
+            LogResearchFailure(logger, "research.request_failed", website.Host, exception);
             return Fail("research.request_failed", retryable: true, activity);
         }
         catch (SocketException exception)
         {
-            LogResearchFailure(logger, "research.dns_failed", request.Website.Host, exception);
+            LogResearchFailure(logger, "research.dns_failed", website.Host, exception);
             return Fail("research.dns_failed", retryable: true, activity);
         }
         catch (Exception exception)
         {
-            LogResearchFailure(logger, "research.unexpected_failure", request.Website.Host, exception);
+            LogResearchFailure(logger, "research.unexpected_failure", website.Host, exception);
             return Fail("research.unexpected_failure", retryable: false, activity);
         }
         finally
