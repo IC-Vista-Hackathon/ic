@@ -1479,7 +1479,7 @@ export function App() {
             </>
           )}
 
-          <div data-preview-root style={css(`width:100%;max-width:${previewMaxWidth};background:#fff;border-radius:14px;overflow:hidden;box-shadow:var(--invoicecloud-elevation-3);font-family:${brand.font}`)}>
+          <div data-preview-root style={css(`width:100%;max-width:${previewMaxWidth};background:#fff;border-radius:14px;overflow:hidden;box-shadow:var(--invoicecloud-elevation-3);font-family:'${brand.font}'`)}>
             <div style={css('display:flex;align-items:center;gap:var(--invoicecloud-spacing-xs);padding:var(--invoicecloud-spacing-s);background:var(--invoicecloud-utility-neutral-05);border-bottom:1px solid var(--invoicecloud-surface-default-border)')}>
               <span style={css('width:10px;height:10px;border-radius:50%;background:#e35b4f')}></span>
               <span style={css('width:10px;height:10px;border-radius:50%;background:#e8c34a')}></span>
