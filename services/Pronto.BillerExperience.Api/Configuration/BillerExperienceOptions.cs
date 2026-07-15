@@ -56,7 +56,7 @@ public sealed class ResearchOptions
     public int MaxFactLength { get; set; } = 500;
     public int MaxAgentCount { get; set; } = 4;
     public int MaxParallelAgents { get; set; } = 2;
-    public int AgentTimeoutSeconds { get; set; } = 30;
+    public int AgentTimeoutSeconds { get; set; } = 300;
     public int FoundryMaxAttempts { get; set; } = 3;
     public int FoundryRetryBaseDelayMilliseconds { get; set; } = 750;
     public string[] AllowedAgentIds { get; set; } = [];
