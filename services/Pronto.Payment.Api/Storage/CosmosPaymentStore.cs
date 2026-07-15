@@ -144,6 +144,7 @@ public sealed class CosmosPaymentStore : IPaymentStore
         for (var attempt = 0; attempt < MaxClaimRetries; attempt++)
         {
             var query = new QueryDefinition(
+                // hackathon-scan-ok: "+" joins literal SQL text across lines; all variable input (now, asOf, staleBefore, etc.) is bound via WithParameter, not concatenated
                 "SELECT TOP 1 * FROM c WHERE IS_DEFINED(c.payment) AND "
                 + "(NOT IS_DEFINED(c.payment.lease_until) OR c.payment.lease_until = null OR c.payment.lease_until <= @now) AND ("
                 + "(c.payment.lifecycle = @scheduled AND IS_DEFINED(c.payment.scheduled_for) AND c.payment.scheduled_for <= @asOf) "

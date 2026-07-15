@@ -1,3 +1,4 @@
+// hackathon-scan-ok: execFile with an argv array, no shell — not shell-injectable
 import { execFile } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { dirname, resolve } from 'node:path';

@@ -283,6 +283,7 @@ public sealed class CosmosPayerStore : IPayerStore
         CancellationToken cancellationToken)
     {
         var query = new QueryDefinition(
+                // hackathon-scan-ok: "+" joins literal SQL text across lines; the only variable input (email) is bound via WithParameter, not concatenated
                 "SELECT TOP 1 VALUE c.payer FROM c "
                 + "WHERE IS_DEFINED(c.payer) AND UPPER(c.payer.email) = @email")
             .WithParameter("@email", NormalizeEmail(email));

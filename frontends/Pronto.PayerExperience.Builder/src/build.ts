@@ -1,3 +1,4 @@
+// hackathon-scan-ok: execFile with an argv array, no shell — not shell-injectable
 import { execFile } from 'node:child_process';
 import { cp, mkdir, rm, symlink, writeFile } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
