@@ -89,6 +89,7 @@ public sealed class FoundryAgentAdministrationGateway(AIProjectClient project, I
 {
     private static readonly string[] AllowedMcpTools = ["get_goal_context", "append_context"];
     private readonly AgentProvisioningOptions configuration = options.Value.AgentProvisioning;
+    private readonly Uri mcpEndpoint = CreateMcpEndpoint(options.Value.Mcp.PublicEndpoint);
 
     public async Task<IReadOnlyList<ExistingFoundryAgent>> ListAsync(CancellationToken cancellationToken)
     {
@@ -107,7 +108,15 @@ public sealed class FoundryAgentAdministrationGateway(AIProjectClient project, I
     {
         var tools = new List<object>
         {
-            new { type = "mcp", server_label = "ic_shared_context", project_connection_id = configuration.McpConnectionId, allowed_tools = AllowedMcpTools, require_approval = "never" }
+            new
+            {
+                type = "mcp",
+                server_label = "ic_shared_context",
+                server_url = mcpEndpoint.AbsoluteUri,
+                project_connection_id = configuration.McpConnectionId,
+                allowed_tools = AllowedMcpTools,
+                require_approval = "never"
+            }
         };
         if (agent.Name == "biller-research") tools.Add(new { type = "web_search_preview" });
         var payload = BinaryData.FromObjectAsJson(new
@@ -140,7 +149,9 @@ public sealed class FoundryAgentAdministrationGateway(AIProjectClient project, I
     {
         var connection = tool.GetType().GetProperty("ProjectConnectionId")?.GetValue(tool) as string;
         var label = tool.GetType().GetProperty("ServerLabel")?.GetValue(tool) as string;
-        if (IsExpectedConnection(connection) && string.Equals(label, "ic_shared_context", StringComparison.OrdinalIgnoreCase))
+        var serverUri = tool.GetType().GetProperty("ServerUri")?.GetValue(tool) as Uri;
+        if (IsExpectedConnection(connection) && IsExpectedServer(serverUri?.AbsoluteUri) &&
+            string.Equals(label, "ic_shared_context", StringComparison.OrdinalIgnoreCase))
             return true;
 
         try
@@ -153,7 +164,10 @@ public sealed class FoundryAgentAdministrationGateway(AIProjectClient project, I
             var serializedLabel = root.TryGetProperty("server_label", out var labelProperty)
                 ? labelProperty.GetString()
                 : null;
-            return IsExpectedConnection(serializedConnection) &&
+            var serializedServer = root.TryGetProperty("server_url", out var serverProperty)
+                ? serverProperty.GetString()
+                : null;
+            return IsExpectedConnection(serializedConnection) && IsExpectedServer(serializedServer) &&
                    string.Equals(serializedLabel, "ic_shared_context", StringComparison.OrdinalIgnoreCase);
         }
         catch (Exception)
@@ -165,4 +179,16 @@ public sealed class FoundryAgentAdministrationGateway(AIProjectClient project, I
     private bool IsExpectedConnection(string? connection) =>
         string.Equals(connection, configuration.McpConnectionId, StringComparison.OrdinalIgnoreCase) ||
         connection?.EndsWith($"/{configuration.McpConnectionId}", StringComparison.OrdinalIgnoreCase) == true;
+
+    private bool IsExpectedServer(string? server) =>
+        Uri.TryCreate(server, UriKind.Absolute, out var uri) &&
+        Uri.Compare(uri, mcpEndpoint, UriComponents.HttpRequestUrl, UriFormat.SafeUnescaped,
+            StringComparison.OrdinalIgnoreCase) == 0;
+
+    private static Uri CreateMcpEndpoint(string endpoint) =>
+        Uri.TryCreate(endpoint, UriKind.Absolute, out var uri) &&
+        (uri.Scheme == Uri.UriSchemeHttp || uri.Scheme == Uri.UriSchemeHttps)
+            ? uri
+            : throw new InvalidOperationException(
+                "BillerExperience:Mcp:PublicEndpoint must be an absolute HTTP or HTTPS endpoint when Foundry agent provisioning is enabled.");
 }
