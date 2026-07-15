@@ -5,6 +5,7 @@ public interface IOrchestrationStateStore
     ValueTask<OrchestrationCheckpoint?> ReadAsync(
         string partitionKey,
         string runId,
+        int stepNumber,
         CancellationToken cancellationToken = default);
 
     ValueTask<OrchestrationCheckpoint> SaveAsync(

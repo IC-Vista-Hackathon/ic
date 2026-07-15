@@ -15,10 +15,9 @@ public static class CheckpointedExecution
         JsonSerializerOptions? jsonOptions = null,
         CancellationToken cancellationToken = default)
     {
-        var current = await store.ReadAsync(partitionKey, runId, cancellationToken);
-        if (current is { State: "completed" } && current.Step >= step)
-            return JsonSerializer.Deserialize<TOutput>(current.Payload, jsonOptions)
-                ?? throw new InvalidOperationException("Completed orchestration checkpoint had no output.");
+        var current = await store.ReadAsync(partitionKey, runId, step, cancellationToken);
+        if (current is { State: "completed" })
+            return JsonSerializer.Deserialize<TOutput>(current.Payload, jsonOptions)!;
 
         var running = await store.SaveAsync(new(runId, partitionKey, workflow, "running", step,
             current?.Payload ?? "null", DateTimeOffset.UtcNow), current?.ETag, cancellationToken);

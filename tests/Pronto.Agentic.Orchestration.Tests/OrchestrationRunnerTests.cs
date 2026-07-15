@@ -77,6 +77,29 @@ public sealed class OrchestrationRunnerTests
         Assert.Equal("root failure", exception.Message);
     }
 
+    [Theory]
+    [InlineData(OrchestrationEventStatus.Running)]
+    [InlineData(OrchestrationEventStatus.Completed)]
+    public async Task ActivitySinkErrorDoesNotFailSuccessfulStep(OrchestrationEventStatus failingStatus)
+    {
+        var calls = 0;
+        var step = new ObservableOrchestrationStep<string, string>(
+            "designer",
+            "Designer",
+            "Designing",
+            (input, _, _) =>
+            {
+                calls++;
+                return ValueTask.FromResult(input.ToUpperInvariant());
+            },
+            new StatusThrowingSink(failingStatus));
+
+        var result = await step.ExecuteAsync("pay later", OrchestrationContext.Create());
+
+        Assert.Equal("PAY LATER", result);
+        Assert.Equal(1, calls);
+    }
+
     [Fact]
     public async Task ResilientExecutionRetriesTransientFailureWithinBudget()
     {
@@ -129,6 +152,69 @@ public sealed class OrchestrationRunnerTests
     }
 
     [Fact]
+    public async Task CheckpointedExecutionKeepsOutputForEachStep()
+    {
+        var store = new MemoryStateStore();
+        await CheckpointedExecution.ExecuteAsync(
+            store,
+            "biller-1",
+            "run-3",
+            "test",
+            1,
+            _ => ValueTask.FromResult(111));
+        await CheckpointedExecution.ExecuteAsync(
+            store,
+            "biller-1",
+            "run-3",
+            "test",
+            2,
+            _ => ValueTask.FromResult("step-two"));
+
+        var resumed = await CheckpointedExecution.ExecuteAsync(
+            store,
+            "biller-1",
+            "run-3",
+            "test",
+            1,
+            _ => ValueTask.FromResult(222));
+
+        Assert.Equal(111, resumed);
+    }
+
+    [Fact]
+    public async Task CheckpointedExecutionCanResumeNullOutput()
+    {
+        var store = new MemoryStateStore();
+        var calls = 0;
+        await CheckpointedExecution.ExecuteAsync<string?>(
+            store,
+            "biller-1",
+            "run-4",
+            "test",
+            1,
+            _ =>
+            {
+                calls++;
+                return ValueTask.FromResult<string?>(null);
+            });
+
+        var resumed = await CheckpointedExecution.ExecuteAsync<string?>(
+            store,
+            "biller-1",
+            "run-4",
+            "test",
+            1,
+            _ =>
+            {
+                calls++;
+                return ValueTask.FromResult<string?>("unexpected");
+            });
+
+        Assert.Null(resumed);
+        Assert.Equal(1, calls);
+    }
+
+    [Fact]
     public async Task AttemptTimeoutRetriesAndEventuallyCompletes()
     {
         var attempts = 0;
@@ -160,13 +246,34 @@ public sealed class OrchestrationRunnerTests
                 : ValueTask.CompletedTask;
     }
 
+    private sealed class StatusThrowingSink(OrchestrationEventStatus failingStatus) : IOrchestrationEventSink
+    {
+        public ValueTask PublishAsync(
+            OrchestrationEvent activity,
+            CancellationToken cancellationToken = default) =>
+            activity.Status == failingStatus
+                ? ValueTask.FromException(new IOException("sink failure"))
+                : ValueTask.CompletedTask;
+    }
+
     private sealed class MemoryStateStore : IOrchestrationStateStore
     {
-        private OrchestrationCheckpoint? checkpoint;
-        public ValueTask<OrchestrationCheckpoint?> ReadAsync(string partitionKey, string runId, CancellationToken cancellationToken = default) => ValueTask.FromResult(checkpoint);
+        private readonly Dictionary<(string PartitionKey, string RunId, int Step), OrchestrationCheckpoint> checkpoints = [];
+
+        public ValueTask<OrchestrationCheckpoint?> ReadAsync(
+            string partitionKey,
+            string runId,
+            int stepNumber,
+            CancellationToken cancellationToken = default)
+        {
+            checkpoints.TryGetValue((partitionKey, runId, stepNumber), out var checkpoint);
+            return ValueTask.FromResult(checkpoint);
+        }
+
         public ValueTask<OrchestrationCheckpoint> SaveAsync(OrchestrationCheckpoint value, string? expectedETag = null, CancellationToken cancellationToken = default)
         {
-            checkpoint = value with { ETag = Guid.NewGuid().ToString("N") };
+            var checkpoint = value with { ETag = Guid.NewGuid().ToString("N") };
+            checkpoints[(value.PartitionKey, value.RunId, value.Step)] = checkpoint;
             return ValueTask.FromResult(checkpoint);
         }
     }

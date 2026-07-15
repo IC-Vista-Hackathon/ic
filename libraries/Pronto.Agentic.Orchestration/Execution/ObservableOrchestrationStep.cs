@@ -23,11 +23,17 @@ public sealed class ObservableOrchestrationStep<TInput, TOutput>(
             LogLevel.Error,
             new EventId(9102, nameof(LogFailureEventError)),
             "Publishing failure activity for agent {AgentId}, run {RunId}, biller {BillerId} failed; preserving the original error");
+    private static readonly Action<ILogger, string, string, string?, string, Exception> LogActivityEventError =
+        LoggerMessage.Define<string, string, string?, string>(
+            LogLevel.Error,
+            new EventId(9103, nameof(LogActivityEventError)),
+            "Publishing {Status} activity for agent {AgentId}, run {RunId}, biller {BillerId} failed");
 
     public string Name => name;
 
     public async ValueTask<TOutput> ExecuteAsync(TInput input, OrchestrationContext context, CancellationToken cancellationToken = default)
     {
+        cancellationToken.ThrowIfCancellationRequested();
         var startedAt = Stopwatch.GetTimestamp();
         using var activity = OrchestrationTelemetry.ActivitySource.StartActivity($"agent:{name}");
         activity?.SetTag("ic.orchestration.agent_id", name);
@@ -35,7 +41,10 @@ public sealed class ObservableOrchestrationStep<TInput, TOutput>(
         var sequence = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
         var tags = new TagList { { "agent", name } };
         OrchestrationTelemetry.StepStarted.Add(1, tags);
-        await eventSink.PublishAsync(Event(OrchestrationEventStatus.Running, summary, sequence, activity), cancellationToken);
+        await PublishBestEffortAsync(
+            Event(OrchestrationEventStatus.Running, summary, sequence, activity),
+            cancellationToken);
+        cancellationToken.ThrowIfCancellationRequested();
         try
         {
             var result = await execute(input, context, cancellationToken);
@@ -43,7 +52,14 @@ public sealed class ObservableOrchestrationStep<TInput, TOutput>(
             activity?.SetStatus(ActivityStatusCode.Ok);
             OrchestrationTelemetry.StepCompleted.Add(1, tags);
             OrchestrationTelemetry.StepDuration.Record(durationMs, tags);
-            await eventSink.PublishAsync(Event(OrchestrationEventStatus.Completed, "Completed", sequence + 1, activity, durationMs: durationMs), cancellationToken);
+            await PublishBestEffortAsync(
+                Event(
+                    OrchestrationEventStatus.Completed,
+                    "Completed",
+                    sequence + 1,
+                    activity,
+                    durationMs: durationMs),
+                cancellationToken);
             return result;
         }
         catch (Exception exception)
@@ -71,6 +87,29 @@ public sealed class ObservableOrchestrationStep<TInput, TOutput>(
                 }
             }
             throw;
+        }
+
+        async ValueTask PublishBestEffortAsync(
+            OrchestrationEvent orchestrationEvent,
+            CancellationToken eventCancellationToken)
+        {
+            try
+            {
+                await eventSink.PublishAsync(orchestrationEvent, eventCancellationToken);
+            }
+            catch (Exception exception)
+            {
+                if (logger is not null)
+                {
+                    LogActivityEventError(
+                        logger,
+                        name,
+                        context.RunId,
+                        context.BillerId,
+                        orchestrationEvent.Status.ToString(),
+                        exception);
+                }
+            }
         }
 
         OrchestrationEvent Event(

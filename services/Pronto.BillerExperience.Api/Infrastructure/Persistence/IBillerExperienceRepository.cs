@@ -8,11 +8,8 @@ public interface IBillerExperienceRepository
     ValueTask<BillerRecord> CreateBillerAsync(BillerRecord biller, CancellationToken cancellationToken);
     ValueTask<BillerRecord?> GetBillerAsync(string billerId, CancellationToken cancellationToken);
 
-    /// <summary>
-    /// True when any biller already uses this (normalized) slug. Published artifacts and
-    /// public reads are keyed by slug, so creation must not reuse one.
-    /// </summary>
-    ValueTask<bool> SlugExistsAsync(string slug, CancellationToken cancellationToken);
+    ValueTask<bool> TryReserveSlugAsync(string slug, string billerId, CancellationToken cancellationToken);
+    ValueTask ReleaseSlugAsync(string slug, string billerId, CancellationToken cancellationToken);
     ValueTask<BillerRecord> SaveBillerAsync(BillerRecord biller, CancellationToken cancellationToken);
     ValueTask<ExperienceRecord?> GetLatestExperienceAsync(string billerId, CancellationToken cancellationToken);
     ValueTask<ExperienceRecord> SaveExperienceAsync(ExperienceRecord experience, string? expectedETag, CancellationToken cancellationToken);
