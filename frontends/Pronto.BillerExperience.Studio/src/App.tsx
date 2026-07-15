@@ -32,6 +32,20 @@ function validationOutcome(revision: ExperienceRevision | null): 'passed' | 'war
   return findings.some(f => f.requires_review || isBlocking(f.severity)) ? 'failed' : 'warnings';
 }
 
+// Agent statuses a run can legitimately settle into. Anything else (running, queued, discovered,
+// needs_input, retrying) is still in-flight and must not persist once the run has finished.
+const TERMINAL_AGENT_STATUSES: AgentActivity['status'][] = ['completed', 'failed', 'degraded', 'skipped'];
+const isTerminalStatus = (status: AgentActivity['status']) => TERMINAL_AGENT_STATUSES.includes(status);
+
+// Worst-case outcome of a finished run, used to keep the completion header honest. A run is only
+// "success" when nothing failed, nothing degraded, and no agent was left stranded in a
+// non-terminal state; otherwise it is reported as warnings/failed rather than success.
+function runOutcome(activity: AgentActivity[]): 'success' | 'warnings' | 'failed' {
+  if (activity.some(item => item.status === 'failed')) return 'failed';
+  if (activity.some(item => item.status === 'degraded' || !isTerminalStatus(item.status))) return 'warnings';
+  return 'success';
+}
+
 /** Parse a CSS declaration string into a React style object so the
  *  design's inline styles can be transcribed verbatim. */
 function css(text: string): CSSProperties {
@@ -350,9 +364,11 @@ const selBorder = (on: boolean) => (on ? PRIMARY : BORDER);
 function AgentActivityPanel({
   activity,
   connection,
+  complete = false,
 }: {
   activity: AgentActivity[];
   connection: State['activityConnection'];
+  complete?: boolean;
 }) {
   const latest = [...activity]
     .reverse()
@@ -361,26 +377,36 @@ function AgentActivityPanel({
   const color = (status: AgentActivity['status']) =>
     status === 'completed' ? '#197d00' : status === 'failed' ? '#b42318' : status === 'degraded' ? '#b54708' : status === 'skipped' ? '#667085' : '#0b4f6c';
   const icon = (status: AgentActivity['status']) =>
-    status === 'completed' ? '✓' : status === 'failed' || status === 'degraded' ? '!' : status === 'discovered' ? '⌕' : '•';
+    status === 'completed' ? '✓' : status === 'failed' || status === 'degraded' ? '!' : status === 'skipped' ? '–' : status === 'discovered' ? '⌕' : '•';
+  // Once the run has finished, an agent still reporting a non-terminal status was never delivered
+  // an outcome (e.g. the model was unavailable). Settle it to a terminal "skipped" state so no card
+  // spins on "running" forever; leave already-terminal statuses untouched.
+  const displayStatus = (status: AgentActivity['status']) =>
+    complete && !isTerminalStatus(status) ? 'skipped' : status;
+  const connectionLabel = complete ? 'Completed' : connection === 'idle' ? 'Waiting' : connection;
 
   return (
     <section aria-live="polite" style={css('width:100%;max-width:720px;margin-top:20px;padding:16px;border:1px solid var(--invoicecloud-surface-default-border);border-radius:14px;background:#fff;box-shadow:var(--invoicecloud-elevation-1)')}>
       <div style={css('display:flex;justify-content:space-between;gap:12px;align-items:center;margin-bottom:12px')}>
         <span><strong>Foundry agents at work</strong><small style={css('display:block;margin-top:3px;color:var(--invoicecloud-utility-neutral-70)')}>Pronto orchestration is delegating and tracking the agents below.</small></span>
-        <small style={css(`color:${connection === 'disconnected' ? '#b42318' : 'var(--invoicecloud-utility-neutral-70)'}`)}>{connection === 'idle' ? 'Waiting' : connection}</small>
+        <small style={css(`color:${connection === 'disconnected' && !complete ? '#b42318' : 'var(--invoicecloud-utility-neutral-70)'}`)}>{connectionLabel}</small>
       </div>
       {latest.length === 0 ? (
-        <p style={css('margin:0;color:var(--invoicecloud-utility-neutral-70);font-size:14px')}>Waiting for orchestration to discover eligible agents…</p>
+        <p style={css('margin:0;color:var(--invoicecloud-utility-neutral-70);font-size:14px')}>{complete ? 'Orchestration run finished; no eligible agents were engaged.' : 'Waiting for orchestration to discover eligible agents…'}</p>
       ) : (
         <div style={css('display:grid;grid-template-columns:repeat(auto-fit,minmax(210px,1fr));gap:10px')}>
-          {latest.map(item => (
-            <article key={item.agent_id} style={css(`border:1px solid ${color(item.status)}33;border-radius:10px;padding:10px;background:${color(item.status)}0d`)}>
-              <div style={css('display:flex;align-items:center;gap:8px')}><b style={css(`color:${color(item.status)}`)}>{icon(item.status)}</b><strong>{item.display_name}</strong></div>
-              <code title={item.agent_id} style={css('display:block;margin:5px 0;font-size:11px;overflow:hidden;text-overflow:ellipsis')}>{item.agent_id}</code>
-              <small>{item.summary}</small>
-              <small style={css('display:block;margin-top:5px;color:var(--invoicecloud-utility-neutral-70)')}>{item.status}{item.duration_ms !== undefined ? ` · ${Math.round(item.duration_ms)} ms` : ''}{item.error_code ? ` · ${item.error_code}` : ''}</small>
-            </article>
-          ))}
+          {latest.map(item => {
+            const status = displayStatus(item.status);
+            const settled = status !== item.status;
+            return (
+              <article key={item.agent_id} style={css(`border:1px solid ${color(status)}33;border-radius:10px;padding:10px;background:${color(status)}0d`)}>
+                <div style={css('display:flex;align-items:center;gap:8px')}><b style={css(`color:${color(status)}`)}>{icon(status)}</b><strong>{item.display_name}</strong></div>
+                <code title={item.agent_id} style={css('display:block;margin:5px 0;font-size:11px;overflow:hidden;text-overflow:ellipsis')}>{item.agent_id}</code>
+                <small>{settled ? 'Agent did not report a result before the run finished.' : item.summary}</small>
+                <small style={css('display:block;margin-top:5px;color:var(--invoicecloud-utility-neutral-70)')}>{status}{!settled && item.duration_ms !== undefined ? ` · ${Math.round(item.duration_ms)} ms` : ''}{item.error_code ? ` · ${item.error_code}` : ''}</small>
+              </article>
+            );
+          })}
         </div>
       )}
     </section>
@@ -860,8 +886,18 @@ export function App() {
     s.skipWebsite || !s.website ? 'Applying smart brand defaults' : `Scanning ${s.website} for brand assets`,
   ];
   const analyzeStages = analyzeLabels.map((lbl, i) => {
-    const done = s.analyzeStage > i, active = s.analyzeStage === i;
-    return { label: lbl, bg: done ? 'var(--invoicecloud-intent-success-background)' : active ? TINT : 'var(--invoicecloud-utility-neutral-05)', opacity: done || active ? 1 : 0.5, iconSrc: done ? asset('assets/icons/Checkmark.svg') : asset('assets/icons/Spinner.svg'), spin: done ? 'none' : 'spin 1s linear infinite' };
+    // Every step settles to a terminal look once the run finishes: done on success, or a stopped
+    // warning marker if the run errored out — never a spinner that outlives the run.
+    const done = s.analysisComplete || s.analyzeStage > i;
+    const failed = !done && !!s.orchestrationError;
+    const active = !done && !failed && s.analyzeStage === i;
+    return {
+      label: lbl,
+      bg: done ? 'var(--invoicecloud-intent-success-background)' : failed ? 'var(--invoicecloud-intent-warning-background)' : active ? TINT : 'var(--invoicecloud-utility-neutral-05)',
+      opacity: done || active || failed ? 1 : 0.5,
+      iconSrc: done ? asset('assets/icons/Checkmark.svg') : failed ? asset('assets/icons/Warning.svg') : asset('assets/icons/Spinner.svg'),
+      spin: done || failed ? 'none' : 'spin 1s linear infinite',
+    };
   });
 
   const swatches = [brand.primary, brand.secondary, brand.accent, '#1c1c1c'];
@@ -1262,7 +1298,7 @@ export function App() {
               </div>
             ))}
           </div>
-          <h2 style={css('margin-bottom:var(--invoicecloud-spacing-m)')}>{s.analysisComplete ? 'Research completed successfully' : 'Building your preview...'}</h2>
+          <h2 style={css('margin-bottom:var(--invoicecloud-spacing-m)')}>{!s.analysisComplete ? 'Building your preview...' : runOutcome(s.agentActivity) === 'failed' ? 'Preview built — some steps failed' : runOutcome(s.agentActivity) === 'warnings' ? 'Completed with warnings — research unavailable, using supplied info' : 'Research completed successfully'}</h2>
           <div style={css('display:flex;flex-direction:column;gap:var(--invoicecloud-spacing-s);width:100%;max-width:440px')}>
             {analyzeStages.map((st, i) => (
               <div key={i} style={css(`display:flex;align-items:center;gap:var(--invoicecloud-spacing-s);padding:var(--invoicecloud-spacing-s);border-radius:10px;background:${st.bg};opacity:${st.opacity}`)}>
@@ -1271,7 +1307,7 @@ export function App() {
               </div>
             ))}
           </div>
-          <AgentActivityPanel activity={s.agentActivity} connection={s.activityConnection} />
+          <AgentActivityPanel activity={s.agentActivity} connection={s.activityConnection} complete={s.analysisComplete || !!s.orchestrationError} />
           {s.analysisComplete && !s.orchestrationError && (
             <div role="status" style={css('width:100%;max-width:720px;margin-top:16px;padding:16px;border:1px solid #197d00;border-radius:10px;background:#f0f9ed;color:#145c00;text-align:center')}>
               <strong>{s.agentActivity.filter(item => item.status === 'completed').length} agent tasks completed.</strong>
@@ -1294,7 +1330,7 @@ export function App() {
         <div style={css('min-height:100vh;padding:var(--invoicecloud-spacing-xl) var(--invoicecloud-spacing-l);display:flex;flex-direction:column;align-items:center')}>
           <h2 style={css('margin-bottom:var(--invoicecloud-spacing-xxs)')}>Here's what we found</h2>
           <p style={css('font-size:14px;color:var(--invoicecloud-utility-neutral-70);margin-bottom:var(--invoicecloud-spacing-l)')}>Review before we build the live preview.</p>
-          <AgentActivityPanel activity={s.agentActivity} connection="idle" />
+          <AgentActivityPanel activity={s.agentActivity} connection="idle" complete />
           <div style={css('width:100%;max-width:900px;display:flex;flex-direction:column;gap:var(--invoicecloud-spacing-m)')}>
 
             <div style={css('background:var(--invoicecloud-surface-default-background);border:1px solid var(--invoicecloud-surface-default-border);border-radius:14px;padding:var(--invoicecloud-spacing-m)')}>
