@@ -85,9 +85,11 @@ interface Lob {
 }
 
 type Screen = 'landing' | 'wizard' | 'analyzing' | 'results' | 'preview' | 'pricing' | 'dashboard';
+type DashboardSection = 'home' | 'lob' | 'billing' | 'settings' | 'help';
 
 interface State {
   screen: Screen;
+  dashboardSection: DashboardSection;
   wizardStep: number;
   vertical: VerticalId | null;
   otherVerticalDescription: string;
@@ -319,7 +321,7 @@ const WIZARD_RESET: Partial<State> = {
 };
 
 const INITIAL_STATE: State = {
-  screen: 'landing', wizardStep: 0, vertical: null, otherVerticalDescription: '', bizName: '', selectedStates: [], stateSearch: '', website: '', skipWebsite: false,
+  screen: 'landing', dashboardSection: 'home', wizardStep: 0, vertical: null, otherVerticalDescription: '', bizName: '', selectedStates: [], stateSearch: '', website: '', skipWebsite: false,
   brand: null, compliance: null,
   payerStep: 0, amount: 128.42, methodType: 'card', autopayOptIn: false, paperlessOptIn: false, processing: false,
   analyzeStage: 0,
@@ -719,7 +721,7 @@ export function App() {
   const payFromStatement = () => patch({ viewingStatementId: null, payerStep: 1 });
 
   const goPricing = () => patch({ screen: 'pricing', pendingLob: true });
-  const backToPreviewOrDashboard = () => patch((st) => ({ screen: st.accountCreated ? 'dashboard' : 'preview' }));
+  const backToPreviewOrDashboard = () => patch((st) => (st.accountCreated ? { screen: 'dashboard', dashboardSection: 'home' } : { screen: 'preview' }));
   const openSignup = () => patch({ modal: 'signup' });
   const openCheckout = () => { trackEvent('studio.purchase_started', { biller_id: s.backendBillerId ?? undefined }); patch({ modal: 'checkout' }); };
   const closeModal = () => patch({ modal: null });
@@ -734,7 +736,7 @@ export function App() {
     };
     const exists = st.lobs.some((l) => l.id === lob.id);
     const lobs = exists ? st.lobs.map((l) => (l.id === lob.id ? lob : l)) : [...st.lobs, lob];
-    return { lobs, accountCreated: true, purchased: st.purchased || published, screen: 'dashboard', modal: null, editingLobId: null, pendingLob: false };
+    return { lobs, accountCreated: true, purchased: st.purchased || published, screen: 'dashboard', dashboardSection: 'home', modal: null, editingLobId: null, pendingLob: false };
   });
   const submitSignup = (e: FormEvent) => { e.preventDefault(); if (s.pendingLob) saveLob(false); else patch({ modal: null }); };
   const submitCheckout = async (e: FormEvent) => {
@@ -933,6 +935,76 @@ export function App() {
     const v = VERTICALS.find((vv) => vv.id === l.vertical);
     return { ...l, verticalLabel: v?.label || 'Business', statesLabel: (l.compliance?.states || []).join(', ') || (l.selectedStates || []).join(', ') || 'No states set', hasAccountNumber: !!l.accountNumber, badgeColor: l.brand ? l.brand.primary : '#085368', statusLabel: l.published ? 'Live' : 'Draft', onPreview: () => previewLob(l), onEdit: () => editLob(l) };
   });
+
+  const liveLobCount = s.lobs.filter((l) => l.published).length;
+  const dashNav: { id: DashboardSection; label: string; icon: string }[] = [
+    { id: 'home', label: 'Home', icon: 'Home' },
+    { id: 'lob', label: 'Lines of Business', icon: 'Dollar' },
+    { id: 'billing', label: 'Billing', icon: 'BarChart' },
+    { id: 'settings', label: 'Settings', icon: 'Cog' },
+  ];
+  const navItemBase = 'display:flex;align-items:center;gap:var(--invoicecloud-spacing-xs);padding:10px 12px;border-radius:8px;font-size:14px;cursor:pointer;margin-bottom:4px';
+  const navItemActive = ';background:var(--invoicecloud-primary-tint);color:var(--invoicecloud-primary);font-weight:500';
+  const navItemInactive = ';color:var(--invoicecloud-utility-neutral-70)';
+  const goSection = (id: DashboardSection) => patch({ dashboardSection: id });
+  const renderNavItem = ({ id, label, icon }: { id: DashboardSection; label: string; icon: string }) => (
+    <div
+      key={id}
+      role="button"
+      tabIndex={0}
+      aria-current={s.dashboardSection === id ? 'page' : undefined}
+      onClick={() => goSection(id)}
+      onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); goSection(id); } }}
+      style={css(navItemBase + (s.dashboardSection === id ? navItemActive : navItemInactive))}
+    >
+      <img src={asset(`assets/icons/${icon}.svg`)} alt="" style={css('width:18px;height:18px')} />{label}
+    </div>
+  );
+
+  const settingsRow = (label: string, value: string) => (
+    <div style={css('display:flex;justify-content:space-between;gap:16px;padding:12px 0;border-bottom:1px solid var(--invoicecloud-surface-default-border);font-size:14px')}>
+      <span style={css('color:var(--invoicecloud-utility-neutral-70)')}>{label}</span>
+      <span style={css('font-weight:500;text-align:right')}>{value}</span>
+    </div>
+  );
+  const helpLinks = [
+    { title: 'Contact support', desc: 'Email our onboarding team and we\u2019ll respond within one business day.', href: 'mailto:support@pronto.example', cta: 'support@pronto.example' },
+    { title: 'Documentation', desc: 'Guides for configuring lines of business, branding, and publishing.', href: 'https://pronto.eastus2.cloudapp.azure.com/', cta: 'Open docs \u2192' },
+    { title: 'View your live payer site', desc: s.deployment?.published_url ? 'Open the payer experience you published.' : 'Publish a line of business to get a live payer link.', href: s.deployment?.published_url ?? 'https://pronto.eastus2.cloudapp.azure.com/', cta: 'Open payer site \u2192' },
+  ];
+
+  const linesOfBusinessGrid = (
+    <>
+      <div style={css('display:flex;justify-content:space-between;align-items:center;margin-bottom:var(--invoicecloud-spacing-s)')}>
+        <h3 style={css('font-size:16px')}>Lines of business</h3>
+        <button type="button" onClick={addLob} style={css('display:flex;align-items:center;gap:6px;background:var(--invoicecloud-primary);color:#fff;border:none;border-radius:8px;padding:8px 16px;font-size:13px;font-weight:700;cursor:pointer')}><img src={asset('assets/icons/Plus.svg')} alt="" style={css('width:14px;height:14px;filter:brightness(0) invert(1)')} />Add line of business</button>
+      </div>
+      {lobsView.length === 0 ? (
+        <div style={css('border:1px dashed var(--invoicecloud-surface-default-border);border-radius:14px;padding:var(--invoicecloud-spacing-l);text-align:center;color:var(--invoicecloud-utility-neutral-70);font-size:14px')}>No lines of business yet. Add one to configure a payer experience.</div>
+      ) : (
+        <div style={css('display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:var(--invoicecloud-spacing-m)')}>
+          {lobsView.map((l) => (
+            <div key={l.id} style={css('background:var(--invoicecloud-surface-default-background);border:1px solid var(--invoicecloud-surface-default-border);border-radius:14px;padding:var(--invoicecloud-spacing-m)')}>
+              <div style={css('display:flex;align-items:center;gap:var(--invoicecloud-spacing-s);margin-bottom:var(--invoicecloud-spacing-s)')}>
+                <div style={css(`width:40px;height:40px;border-radius:10px;display:flex;align-items:center;justify-content:center;color:#fff;font-weight:700;background:${l.badgeColor}`)}>{(l.brand && l.brand.initials) || initialsFrom(l.bizName)}</div>
+                <div>
+                  <div style={css('font-weight:500')}>{l.bizName}</div>
+                  <div style={css('font-size:12px;color:var(--invoicecloud-utility-neutral-60)')}>{l.verticalLabel}</div>
+                </div>
+                <div style={css('flex:1')}></div>
+                <span style={css(`font-size:11px;font-weight:700;padding:4px 10px;border-radius:4px;background:${l.published ? 'var(--invoicecloud-intent-success-background)' : 'var(--invoicecloud-intent-neutral-background)'};color:${l.published ? 'var(--invoicecloud-intent-success)' : 'var(--invoicecloud-intent-neutral)'}`)}>{l.statusLabel}</span>
+              </div>
+              <div style={css('font-size:13px;color:var(--invoicecloud-utility-neutral-70);margin-bottom:var(--invoicecloud-spacing-s)')}>{l.statesLabel}</div>
+              <div style={css('display:flex;gap:var(--invoicecloud-spacing-xs)')}>
+                <button type="button" onClick={l.onPreview} style={css('flex:1;background:none;border:1px solid var(--invoicecloud-surface-default-border);border-radius:8px;padding:8px;font-size:13px;cursor:pointer')}>Preview</button>
+                <button type="button" onClick={l.onEdit} style={css('flex:1;background:none;border:1px solid var(--invoicecloud-primary);color:var(--invoicecloud-primary);border-radius:8px;padding:8px;font-size:13px;font-weight:700;cursor:pointer')}>Edit</button>
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+    </>
+  );
 
   const landingFeatures = [
     { title: 'Compliance-aware', desc: 'We check local payment regulations for every state you operate in before you launch.', iconSrc: asset('assets/icons/DocumentSearch.svg') },
@@ -1876,54 +1948,105 @@ export function App() {
         <div style={css('min-height:100vh;display:flex')}>
           <nav style={css('width:240px;flex:none;background:var(--invoicecloud-slate-05);border-right:1px solid var(--invoicecloud-surface-default-border);padding:var(--invoicecloud-spacing-m);display:flex;flex-direction:column')}>
             <img src={asset('assets/pronto-logo.svg')} alt="Pronto" style={css('height:20px;margin-bottom:var(--invoicecloud-spacing-l)')} />
-            <div style={css('display:flex;align-items:center;gap:var(--invoicecloud-spacing-xs);padding:10px 12px;border-radius:8px;background:var(--invoicecloud-primary-tint);color:var(--invoicecloud-primary);font-weight:500;font-size:14px;margin-bottom:4px')}><img src={asset('assets/icons/Home.svg')} alt="" style={css('width:18px;height:18px')} />Home</div>
-            <div style={css('display:flex;align-items:center;gap:var(--invoicecloud-spacing-xs);padding:10px 12px;border-radius:8px;font-size:14px;color:var(--invoicecloud-utility-neutral-70)')}><img src={asset('assets/icons/Dollar.svg')} alt="" style={css('width:18px;height:18px')} />Lines of Business</div>
-            <div style={css('display:flex;align-items:center;gap:var(--invoicecloud-spacing-xs);padding:10px 12px;border-radius:8px;font-size:14px;color:var(--invoicecloud-utility-neutral-70)')}><img src={asset('assets/icons/BarChart.svg')} alt="" style={css('width:18px;height:18px')} />Billing</div>
-            <div style={css('display:flex;align-items:center;gap:var(--invoicecloud-spacing-xs);padding:10px 12px;border-radius:8px;font-size:14px;color:var(--invoicecloud-utility-neutral-70)')}><img src={asset('assets/icons/Cog.svg')} alt="" style={css('width:18px;height:18px')} />Settings</div>
+            {dashNav.map(renderNavItem)}
             <div style={css('flex:1')}></div>
-            <div style={css('display:flex;align-items:center;gap:var(--invoicecloud-spacing-xs);padding:10px 12px;border-radius:8px;font-size:14px;color:var(--invoicecloud-utility-neutral-70)')}><img src={asset('assets/icons/Question.svg')} alt="" style={css('width:18px;height:18px')} />Help</div>
+            {renderNavItem({ id: 'help', label: 'Help', icon: 'Question' })}
           </nav>
           <main style={css('flex:1;padding:var(--invoicecloud-spacing-xl);max-width:1250px')}>
             <div style={css('display:flex;justify-content:space-between;align-items:center;margin-bottom:var(--invoicecloud-spacing-m)')}>
               <div><h2 style={css('margin-bottom:2px')}>Welcome back</h2><div style={css('font-size:13px;color:var(--invoicecloud-utility-neutral-60)')}>demo@{siteSlug}.com</div></div>
               <span style={css('width:36px;height:36px;border-radius:50%;background:var(--invoicecloud-primary);color:#fff;display:flex;align-items:center;justify-content:center;font-weight:700;font-size:13px')}>DM</span>
             </div>
-            {!s.purchased && (
-              <div style={css('display:flex;align-items:center;justify-content:space-between;background:var(--invoicecloud-intent-info-background);border:1px solid var(--invoicecloud-intent-info-border);border-radius:10px;padding:var(--invoicecloud-spacing-s) var(--invoicecloud-spacing-m);margin-bottom:var(--invoicecloud-spacing-l)')}>
-                <span style={css('font-size:14px;color:var(--invoicecloud-intent-info)')}>You're in draft mode - publish to make this live for payers.</span>
-                <button type="button" onClick={openCheckout} style={css('background:var(--invoicecloud-intent-info);color:#fff;border:none;border-radius:8px;padding:8px 16px;font-size:13px;font-weight:700;cursor:pointer')}>Publish</button>
-              </div>
+
+            {s.dashboardSection === 'home' && (
+              <>
+                {!s.purchased && (
+                  <div style={css('display:flex;align-items:center;justify-content:space-between;background:var(--invoicecloud-intent-info-background);border:1px solid var(--invoicecloud-intent-info-border);border-radius:10px;padding:var(--invoicecloud-spacing-s) var(--invoicecloud-spacing-m);margin-bottom:var(--invoicecloud-spacing-l)')}>
+                    <span style={css('font-size:14px;color:var(--invoicecloud-intent-info)')}>You're in draft mode - publish to make this live for payers.</span>
+                    <button type="button" onClick={openCheckout} style={css('background:var(--invoicecloud-intent-info);color:#fff;border:none;border-radius:8px;padding:8px 16px;font-size:13px;font-weight:700;cursor:pointer')}>Publish</button>
+                  </div>
+                )}
+                {s.purchased && s.deployment?.published_url && (
+                  <div style={css('display:flex;align-items:center;justify-content:space-between;gap:16px;background:var(--invoicecloud-intent-success-background);border:1px solid var(--invoicecloud-intent-success-border);border-radius:10px;padding:var(--invoicecloud-spacing-s) var(--invoicecloud-spacing-m);margin-bottom:var(--invoicecloud-spacing-l)')}>
+                    <span style={css('font-size:14px;color:var(--invoicecloud-intent-success)')}>Your payer experience is live.</span>
+                    <a href={s.deployment.published_url} target="_blank" rel="noreferrer" style={css('font-size:13px;font-weight:700;color:var(--invoicecloud-intent-success)')}>Open payment site &rarr;</a>
+                  </div>
+                )}
+                {linesOfBusinessGrid}
+              </>
             )}
-            {s.purchased && s.deployment?.published_url && (
-              <div style={css('display:flex;align-items:center;justify-content:space-between;gap:16px;background:var(--invoicecloud-intent-success-background);border:1px solid var(--invoicecloud-intent-success-border);border-radius:10px;padding:var(--invoicecloud-spacing-s) var(--invoicecloud-spacing-m);margin-bottom:var(--invoicecloud-spacing-l)')}>
-                <span style={css('font-size:14px;color:var(--invoicecloud-intent-success)')}>Your payer experience is live.</span>
-                <a href={s.deployment.published_url} target="_blank" rel="noreferrer" style={css('font-size:13px;font-weight:700;color:var(--invoicecloud-intent-success)')}>Open payment site &rarr;</a>
-              </div>
+
+            {s.dashboardSection === 'lob' && (
+              <>
+                <p style={css('font-size:14px;color:var(--invoicecloud-utility-neutral-70);margin-bottom:var(--invoicecloud-spacing-m)')}>Each line of business has its own branded payer experience, states, and payment settings.</p>
+                {linesOfBusinessGrid}
+              </>
             )}
-            <div style={css('display:flex;justify-content:space-between;align-items:center;margin-bottom:var(--invoicecloud-spacing-s)')}>
-              <h3 style={css('font-size:16px')}>Lines of business</h3>
-              <button type="button" onClick={addLob} style={css('display:flex;align-items:center;gap:6px;background:var(--invoicecloud-primary);color:#fff;border:none;border-radius:8px;padding:8px 16px;font-size:13px;font-weight:700;cursor:pointer')}><img src={asset('assets/icons/Plus.svg')} alt="" style={css('width:14px;height:14px;filter:brightness(0) invert(1)')} />Add line of business</button>
-            </div>
-            <div style={css('display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:var(--invoicecloud-spacing-m)')}>
-              {lobsView.map((l) => (
-                <div key={l.id} style={css('background:var(--invoicecloud-surface-default-background);border:1px solid var(--invoicecloud-surface-default-border);border-radius:14px;padding:var(--invoicecloud-spacing-m)')}>
-                  <div style={css('display:flex;align-items:center;gap:var(--invoicecloud-spacing-s);margin-bottom:var(--invoicecloud-spacing-s)')}>
-                    <div style={css(`width:40px;height:40px;border-radius:10px;display:flex;align-items:center;justify-content:center;color:#fff;font-weight:700;background:${l.badgeColor}`)}>{(l.brand && l.brand.initials) || initialsFrom(l.bizName)}</div>
+
+            {s.dashboardSection === 'billing' && (
+              <>
+                <h3 style={css('font-size:16px;margin-bottom:var(--invoicecloud-spacing-s)')}>Billing &amp; subscription</h3>
+                <div style={css('background:var(--invoicecloud-surface-default-background);border:1px solid var(--invoicecloud-surface-default-border);border-radius:14px;padding:var(--invoicecloud-spacing-l);margin-bottom:var(--invoicecloud-spacing-m)')}>
+                  <div style={css('display:flex;justify-content:space-between;align-items:center;gap:16px')}>
                     <div>
-                      <div style={css('font-weight:500')}>{l.bizName}</div>
-                      <div style={css('font-size:12px;color:var(--invoicecloud-utility-neutral-60)')}>{l.verticalLabel}</div>
+                      <div style={css('font-weight:700;font-size:15px')}>{s.purchased ? 'Pronto Publish' : 'Draft (no active plan)'}</div>
+                      <div style={css('font-size:13px;color:var(--invoicecloud-utility-neutral-70);margin-top:2px')}>{s.purchased ? 'Your payer experiences can be published live.' : 'Publish a line of business to start your subscription.'}</div>
                     </div>
-                    <div style={css('flex:1')}></div>
-                    <span style={css(`font-size:11px;font-weight:700;padding:4px 10px;border-radius:4px;background:${l.published ? 'var(--invoicecloud-intent-success-background)' : 'var(--invoicecloud-intent-neutral-background)'};color:${l.published ? 'var(--invoicecloud-intent-success)' : 'var(--invoicecloud-intent-neutral)'}`)}>{l.statusLabel}</span>
+                    <div style={css('text-align:right')}>
+                      <span style={css(`font-size:11px;font-weight:700;padding:4px 10px;border-radius:4px;background:${s.purchased ? 'var(--invoicecloud-intent-success-background)' : 'var(--invoicecloud-intent-neutral-background)'};color:${s.purchased ? 'var(--invoicecloud-intent-success)' : 'var(--invoicecloud-intent-neutral)'}`)}>{s.purchased ? 'Active' : 'Inactive'}</span>
+                      <div style={css('font-weight:700;font-size:18px;margin-top:6px')}>$199<span style={css('font-size:13px;font-weight:500;color:var(--invoicecloud-utility-neutral-70)')}>/mo</span></div>
+                    </div>
                   </div>
-                  <div style={css('font-size:13px;color:var(--invoicecloud-utility-neutral-70);margin-bottom:var(--invoicecloud-spacing-s)')}>{l.statesLabel}</div>
-                  <div style={css('display:flex;gap:var(--invoicecloud-spacing-xs)')}>
-                    <button type="button" onClick={l.onPreview} style={css('flex:1;background:none;border:1px solid var(--invoicecloud-surface-default-border);border-radius:8px;padding:8px;font-size:13px;cursor:pointer')}>Preview</button>
-                    <button type="button" onClick={l.onEdit} style={css('flex:1;background:none;border:1px solid var(--invoicecloud-primary);color:var(--invoicecloud-primary);border-radius:8px;padding:8px;font-size:13px;font-weight:700;cursor:pointer')}>Edit</button>
-                  </div>
+                  {!s.purchased && (
+                    <button type="button" onClick={openCheckout} style={css('margin-top:var(--invoicecloud-spacing-m);background:var(--invoicecloud-primary);color:#fff;border:none;border-radius:8px;padding:10px 18px;font-size:13px;font-weight:700;cursor:pointer')}>Publish &amp; subscribe</button>
+                  )}
                 </div>
-              ))}
-            </div>
+                <div style={css('background:var(--invoicecloud-surface-default-background);border:1px solid var(--invoicecloud-surface-default-border);border-radius:14px;padding:var(--invoicecloud-spacing-m) var(--invoicecloud-spacing-l)')}>
+                  {settingsRow('Lines of business', String(s.lobs.length))}
+                  {settingsRow('Live lines of business', String(liveLobCount))}
+                  {settingsRow('Billing contact', `demo@${siteSlug}.com`)}
+                  {settingsRow('Payment method', s.purchased ? 'Card ending 4242 (demo)' : 'None on file')}
+                </div>
+                <p style={css('font-size:12px;color:var(--invoicecloud-utility-neutral-60);margin-top:var(--invoicecloud-spacing-s)')}>Demo placeholder - billing reflects your current session state; no real charges are made.</p>
+              </>
+            )}
+
+            {s.dashboardSection === 'settings' && (
+              <>
+                <h3 style={css('font-size:16px;margin-bottom:var(--invoicecloud-spacing-s)')}>Settings</h3>
+                <div style={css('background:var(--invoicecloud-surface-default-background);border:1px solid var(--invoicecloud-surface-default-border);border-radius:14px;padding:var(--invoicecloud-spacing-m) var(--invoicecloud-spacing-l);margin-bottom:var(--invoicecloud-spacing-m)')}>
+                  <div style={css('font-weight:700;font-size:14px;margin-bottom:4px')}>Business profile</div>
+                  {settingsRow('Business name', s.bizName || 'Not set')}
+                  {settingsRow('Account email', `demo@${siteSlug}.com`)}
+                  {settingsRow('Primary vertical', verticalSummaryLabel)}
+                  {settingsRow('Operating states', s.selectedStates.length ? s.selectedStates.join(', ') : 'None selected')}
+                </div>
+                <div style={css('background:var(--invoicecloud-surface-default-background);border:1px solid var(--invoicecloud-surface-default-border);border-radius:14px;padding:var(--invoicecloud-spacing-m) var(--invoicecloud-spacing-l)')}>
+                  <div style={css('font-weight:700;font-size:14px;margin-bottom:4px')}>Payment preferences</div>
+                  {settingsRow('Guest checkout', guestCheckoutAllowedLabel)}
+                  {settingsRow('Offer AutoPay', offerAutopayLabel)}
+                  {settingsRow('Offer Paperless', offerPaperlessLabel)}
+                  {settingsRow('Accepted methods', s.acceptedMethods.map((m) => methodLabels[m] ?? m).join(', ') || 'None')}
+                </div>
+                <p style={css('font-size:12px;color:var(--invoicecloud-utility-neutral-60);margin-top:var(--invoicecloud-spacing-s)')}>Demo placeholder - edit these values through the onboarding wizard for each line of business.</p>
+              </>
+            )}
+
+            {s.dashboardSection === 'help' && (
+              <>
+                <h3 style={css('font-size:16px;margin-bottom:var(--invoicecloud-spacing-s)')}>Help &amp; support</h3>
+                <div style={css('display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:var(--invoicecloud-spacing-m)')}>
+                  {helpLinks.map((link) => (
+                    <a key={link.title} href={link.href} target={link.href.startsWith('http') ? '_blank' : undefined} rel="noreferrer" style={css('display:block;background:var(--invoicecloud-surface-default-background);border:1px solid var(--invoicecloud-surface-default-border);border-radius:14px;padding:var(--invoicecloud-spacing-m);text-decoration:none;color:inherit')}>
+                      <div style={css('font-weight:700;font-size:14px;margin-bottom:4px')}>{link.title}</div>
+                      <div style={css('font-size:13px;color:var(--invoicecloud-utility-neutral-70);margin-bottom:var(--invoicecloud-spacing-s)')}>{link.desc}</div>
+                      <div style={css('font-size:13px;font-weight:700;color:var(--invoicecloud-primary)')}>{link.cta}</div>
+                    </a>
+                  ))}
+                </div>
+                <p style={css('font-size:12px;color:var(--invoicecloud-utility-neutral-60);margin-top:var(--invoicecloud-spacing-s)')}>Demo placeholder - support links point at demo destinations.</p>
+              </>
+            )}
           </main>
         </div>
       )}
