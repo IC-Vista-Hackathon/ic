@@ -7,6 +7,8 @@ import { categorizeError } from './telemetryPolicy';
 import { logError, logEvent } from './telemetry';
 import type { AgentActivity, Deployment, ExperienceDefinition, ExperienceRevision } from './types';
 
+const PUBLISH_FAILURE_MESSAGE = 'We could not publish your payer site. Please try again. If the problem continues, contact support.';
+
 /* ------------------------------------------------------------------ *
  * Pronto Payment Portal Builder — Biller Experience Studio
  *
@@ -795,7 +797,7 @@ export function App() {
       const currentState = deployment?.state.toLowerCase();
       if (!deployment || currentState === 'failed' || currentState === 'rolled_back' || currentState === 'ready') {
         if (currentState === 'failed' || currentState === 'rolled_back') {
-          throw new Error(deployment?.failure_message || 'Publication failed. Run the agent analysis again to create a new revision.');
+          throw new Error(PUBLISH_FAILURE_MESSAGE);
         }
         const updated = await api.update(s.backendBillerId, publishableDefinition(s), s.backendDraft?.e_tag);
         patch({ backendDraft: updated });
@@ -818,7 +820,7 @@ export function App() {
       for (let attempt = 0; attempt < 45 && deployment.state.toLowerCase() !== 'ready'; attempt += 1) {
         const state = deployment.state.toLowerCase();
         if (state === 'failed' || state === 'rolled_back') {
-          throw new Error(deployment.failure_message || `Publication ${state.replace('_', ' ')}.`);
+          throw new Error(PUBLISH_FAILURE_MESSAGE);
         }
         await new Promise(resolve => window.setTimeout(resolve, 1000));
         deployment = await api.deployment(s.backendBillerId, deployment.deployment_id);
