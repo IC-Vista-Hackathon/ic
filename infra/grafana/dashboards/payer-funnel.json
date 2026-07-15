@@ -1,0 +1,149 @@
+{
+  "annotations": { "list": [] },
+  "description": "Payer conversion funnel and opt-in / failure product metrics, sourced from pwa.* customEvents in Application Insights (appi-ic-hack). Naming follows the PWA telemetry allowlist (snake_case customEvents).",
+  "editable": true,
+  "graphTooltip": 0,
+  "schemaVersion": 39,
+  "tags": ["ic", "observability", "payer", "product"],
+  "templating": {
+    "list": [
+      {
+        "name": "datasource",
+        "label": "Azure Monitor datasource",
+        "type": "datasource",
+        "query": "grafana-azure-monitor-datasource",
+        "current": {},
+        "hide": 0
+      },
+      {
+        "name": "appInsights",
+        "label": "App Insights resource id",
+        "type": "textbox",
+        "query": "/subscriptions/ca64adec-b195-49fd-a782-15553708c07c/resourceGroups/rg-ic-hack/providers/microsoft.insights/components/appi-ic-hack",
+        "current": {
+          "text": "/subscriptions/ca64adec-b195-49fd-a782-15553708c07c/resourceGroups/rg-ic-hack/providers/microsoft.insights/components/appi-ic-hack",
+          "value": "/subscriptions/ca64adec-b195-49fd-a782-15553708c07c/resourceGroups/rg-ic-hack/providers/microsoft.insights/components/appi-ic-hack"
+        },
+        "hide": 0
+      }
+    ]
+  },
+  "time": { "from": "now-24h", "to": "now" },
+  "timepicker": {},
+  "title": "IC — Payer funnel & product metrics",
+  "uid": "ic-payer-funnel",
+  "version": 1,
+  "panels": [
+    {
+      "id": 1,
+      "title": "Payer conversion funnel (unique flows per stage)",
+      "type": "barchart",
+      "datasource": { "type": "grafana-azure-monitor-datasource", "uid": "${datasource}" },
+      "gridPos": { "h": 9, "w": 24, "x": 0, "y": 0 },
+      "fieldConfig": { "defaults": { "color": { "mode": "palette-classic" } }, "overrides": [] },
+      "options": { "orientation": "horizontal", "xTickLabelRotation": 0, "showValue": "always", "legend": { "showLegend": false } },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": { "type": "grafana-azure-monitor-datasource", "uid": "${datasource}" },
+          "queryType": "Azure Log Analytics",
+          "azureLogAnalytics": {
+            "resources": ["${appInsights}"],
+            "resultFormat": "table",
+            "query": "let ev = customEvents\n| where $__timeFilter(timestamp)\n| where name in (\"pwa.session_started\", \"pwa.bill_lookup\", \"pwa.payment_method_selected\", \"pwa.review_opened\", \"pwa.payment_submitted\", \"pwa.payment_completed\")\n| extend flow_id = tostring(customDimensions.flow_id), outcome = tostring(customDimensions.outcome);\nev\n| where name != \"pwa.bill_lookup\" or outcome == \"found\"\n| summarize flows = dcount(flow_id) by name\n| extend stage_order = case(name == \"pwa.session_started\", 1, name == \"pwa.bill_lookup\", 2, name == \"pwa.payment_method_selected\", 3, name == \"pwa.review_opened\", 4, name == \"pwa.payment_submitted\", 5, name == \"pwa.payment_completed\", 6, 99)\n| extend stage = case(name == \"pwa.session_started\", \"1 session_started\", name == \"pwa.bill_lookup\", \"2 bill_lookup (found)\", name == \"pwa.payment_method_selected\", \"3 payment_method_selected\", name == \"pwa.review_opened\", \"4 review_opened\", name == \"pwa.payment_submitted\", \"5 payment_submitted\", name == \"pwa.payment_completed\", \"6 payment_completed\", name)\n| order by stage_order asc\n| project stage, flows"
+          }
+        }
+      ]
+    },
+    {
+      "id": 2,
+      "title": "Payment failure rate (%)",
+      "type": "stat",
+      "datasource": { "type": "grafana-azure-monitor-datasource", "uid": "${datasource}" },
+      "gridPos": { "h": 6, "w": 8, "x": 0, "y": 9 },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percent",
+          "thresholds": { "mode": "absolute", "steps": [ { "color": "green", "value": null }, { "color": "yellow", "value": 5 }, { "color": "red", "value": 15 } ] }
+        },
+        "overrides": []
+      },
+      "options": { "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false }, "colorMode": "background", "graphMode": "none" },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": { "type": "grafana-azure-monitor-datasource", "uid": "${datasource}" },
+          "queryType": "Azure Log Analytics",
+          "azureLogAnalytics": {
+            "resources": ["${appInsights}"],
+            "resultFormat": "table",
+            "query": "let submitted = toscalar(customEvents | where $__timeFilter(timestamp) | where name == \"pwa.payment_submitted\" | count);\nlet failed = toscalar(customEvents | where $__timeFilter(timestamp) | where name == \"pwa.payment_failed\" | count);\nprint failure_rate_pct = iff(submitted == 0, 0.0, round(100.0 * failed / submitted, 1))"
+          }
+        }
+      ]
+    },
+    {
+      "id": 3,
+      "title": "AutoPay opt-in rate at completion (%)",
+      "type": "stat",
+      "datasource": { "type": "grafana-azure-monitor-datasource", "uid": "${datasource}" },
+      "gridPos": { "h": 6, "w": 8, "x": 8, "y": 9 },
+      "fieldConfig": { "defaults": { "unit": "percent", "thresholds": { "mode": "absolute", "steps": [ { "color": "blue", "value": null } ] } }, "overrides": [] },
+      "options": { "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false }, "colorMode": "value", "graphMode": "none" },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": { "type": "grafana-azure-monitor-datasource", "uid": "${datasource}" },
+          "queryType": "Azure Log Analytics",
+          "azureLogAnalytics": {
+            "resources": ["${appInsights}"],
+            "resultFormat": "table",
+            "query": "let completed = toscalar(customEvents | where $__timeFilter(timestamp) | where name == \"pwa.payment_completed\" | count);\nlet optins = toscalar(customEvents | where $__timeFilter(timestamp) | where name == \"pwa.payment_completed\" | where tostring(customDimensions.autopay_opt_in) == \"true\" | count);\nprint autopay_opt_in_pct = iff(completed == 0, 0.0, round(100.0 * optins / completed, 1))"
+          }
+        }
+      ]
+    },
+    {
+      "id": 4,
+      "title": "Paperless opt-in rate at completion (%)",
+      "type": "stat",
+      "datasource": { "type": "grafana-azure-monitor-datasource", "uid": "${datasource}" },
+      "gridPos": { "h": 6, "w": 8, "x": 16, "y": 9 },
+      "fieldConfig": { "defaults": { "unit": "percent", "thresholds": { "mode": "absolute", "steps": [ { "color": "blue", "value": null } ] } }, "overrides": [] },
+      "options": { "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false }, "colorMode": "value", "graphMode": "none" },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": { "type": "grafana-azure-monitor-datasource", "uid": "${datasource}" },
+          "queryType": "Azure Log Analytics",
+          "azureLogAnalytics": {
+            "resources": ["${appInsights}"],
+            "resultFormat": "table",
+            "query": "let completed = toscalar(customEvents | where $__timeFilter(timestamp) | where name == \"pwa.payment_completed\" | count);\nlet optins = toscalar(customEvents | where $__timeFilter(timestamp) | where name == \"pwa.payment_completed\" | where tostring(customDimensions.paperless_opt_in) == \"true\" | count);\nprint paperless_opt_in_pct = iff(completed == 0, 0.0, round(100.0 * optins / completed, 1))"
+          }
+        }
+      ]
+    },
+    {
+      "id": 5,
+      "title": "Failures by error_category (payment_failed + bill_lookup)",
+      "type": "timeseries",
+      "datasource": { "type": "grafana-azure-monitor-datasource", "uid": "${datasource}" },
+      "gridPos": { "h": 9, "w": 24, "x": 0, "y": 15 },
+      "fieldConfig": { "defaults": { "custom": { "drawStyle": "bars", "stacking": { "mode": "normal" }, "fillOpacity": 60 } }, "overrides": [] },
+      "options": { "legend": { "displayMode": "table", "placement": "right", "showLegend": true }, "tooltip": { "mode": "multi" } },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": { "type": "grafana-azure-monitor-datasource", "uid": "${datasource}" },
+          "queryType": "Azure Log Analytics",
+          "azureLogAnalytics": {
+            "resources": ["${appInsights}"],
+            "resultFormat": "time_series",
+            "query": "customEvents\n| where $__timeFilter(timestamp)\n| where name in (\"pwa.payment_failed\", \"pwa.bill_lookup\")\n| extend error_category = tostring(customDimensions.error_category)\n| where isnotempty(error_category)\n| summarize failures = count() by error_category, bin(timestamp, 5m)\n| order by timestamp asc"
+          }
+        }
+      ]
+    }
+  ]
+}
