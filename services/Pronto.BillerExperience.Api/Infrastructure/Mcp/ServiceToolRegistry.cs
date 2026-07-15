@@ -70,7 +70,7 @@ public sealed class ServiceToolRegistry
         new(ToolNames.UpdatePayerPreferences, "Update payer preferences", ReadOnly: false, Idempotent: true,
             ToolScope.Payer, WriteCapabilityRequired: true,
             "Updates the verified payer's notification/autopay preferences. Requires a write-capable, payer-bound capability."),
-        new(ToolNames.CreatePaymentIntent, "Create payment intent", ReadOnly: true, Idempotent: true,
+        new(ToolNames.CreatePaymentIntent, "Create payment intent", ReadOnly: true, Idempotent: false,
             ToolScope.Payer, WriteCapabilityRequired: true,
             "Quotes a payment and returns a confirmation-required intent (with an idempotency key) for the payer to approve. Requires a write-capable, payer-bound capability. No money moves."),
         new(ToolNames.SubmitPayment, "Submit payment", ReadOnly: false, Idempotent: true,

@@ -158,7 +158,7 @@ public sealed partial class ServiceMcpTools(
                 cancellationToken).AsTask());
     }
 
-    [McpServerTool(Name = ServiceToolRegistry.ToolNames.CreatePaymentIntent, ReadOnly = true, Idempotent = true, OpenWorld = false, UseStructuredContent = true)]
+    [McpServerTool(Name = ServiceToolRegistry.ToolNames.CreatePaymentIntent, ReadOnly = true, Idempotent = false, OpenWorld = false, UseStructuredContent = true)]
     [Description("Quote a payment for the verified payer and return a confirmation-required intent (carrying an idempotency key) for them to approve. Requires a write-capable, payer-bound capability. No money moves; submit_payment executes the approved intent.")]
     public async ValueTask<PaymentIntentView> CreatePaymentIntentAsync(
         [Description("Write-capable payer-bound capability returned by verify_payer_account.")] string capabilityToken,
