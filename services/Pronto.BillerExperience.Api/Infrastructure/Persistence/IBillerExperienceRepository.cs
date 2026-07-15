@@ -33,3 +33,14 @@ public interface IBillerExperienceRepository
 }
 
 public sealed class ConcurrencyException(string message) : Exception(message);
+
+/// <summary>
+/// Thrown by <see cref="IBillerExperienceRepository.CreateBillerAsync"/> when the biller's slug
+/// was reserved by another creation between the availability check and the atomic reservation.
+/// Callers pick the next free slug and retry.
+/// </summary>
+public sealed class SlugConflictException(string slug)
+    : Exception($"The slug '{slug}' was reserved by another request.")
+{
+    public string Slug { get; } = slug;
+}

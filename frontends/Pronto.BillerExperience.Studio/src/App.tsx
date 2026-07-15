@@ -34,6 +34,64 @@ function validationOutcome(revision: ExperienceRevision | null): 'passed' | 'war
   return findings.some(f => f.requires_review || isBlocking(f.severity)) ? 'failed' : 'warnings';
 }
 
+// Agent statuses a run can legitimately settle into. Anything else (running, queued, discovered,
+// needs_input, retrying) is still in-flight and must not persist once the run has finished.
+const TERMINAL_AGENT_STATUSES: AgentActivity['status'][] = ['completed', 'failed', 'degraded', 'skipped'];
+const isTerminalStatus = (status: AgentActivity['status']) => TERMINAL_AGENT_STATUSES.includes(status);
+
+// Worst-case outcome of a finished run, used to keep the completion header honest. A run is only
+// "success" when nothing failed, nothing degraded, and no agent was left stranded in a
+// non-terminal state; otherwise it is reported as warnings/failed rather than success.
+function runOutcome(activity: AgentActivity[]): 'success' | 'warnings' | 'failed' {
+  // Collapse the accumulated event history to the latest event per agent; the raw array keeps
+  // superseded statuses (discovered -> running -> completed) that would otherwise read as in-flight.
+  const latest = [...activity]
+    .reverse()
+    .filter((item, index, all) => all.findIndex(candidate => candidate.agent_id === item.agent_id) === index)
+    .reverse();
+  if (latest.some(item => item.status === 'failed')) return 'failed';
+  if (latest.some(item => item.status === 'degraded' || !isTerminalStatus(item.status))) return 'warnings';
+  return 'success';
+}
+
+interface ProposedChange { field: string; detail: string }
+
+// Derives the "proposed revision" summary strictly from the diff between the current definition and
+// the one the agent proposes, so the card lists exactly what "Accept and update preview" will apply
+// — never a field that didn't change. If it returns [], nothing the preview can honor changed.
+function proposedChanges(current: ExperienceDefinition | null | undefined, proposed: ExperienceDefinition): ProposedChange[] {
+  if (!current) return [];
+  const changes: ProposedChange[] = [];
+  if (current.brand.primary_color.toLowerCase() !== proposed.brand.primary_color.toLowerCase()) {
+    changes.push({ field: 'Primary color', detail: `${current.brand.primary_color} → ${proposed.brand.primary_color}` });
+  }
+  if (current.content.heading !== proposed.content.heading) {
+    changes.push({ field: 'Heading', detail: `“${proposed.content.heading}”` });
+  }
+  const currentLabel = current.ui?.actions?.[0]?.label;
+  const proposedLabel = proposed.ui?.actions?.[0]?.label;
+  if (proposedLabel && currentLabel !== proposedLabel) {
+    changes.push({ field: 'Primary action', detail: `“${proposedLabel}”` });
+  }
+  const currentMethods = [...(current.preferences?.accepted_methods ?? [])].sort();
+  const proposedMethods = [...(proposed.preferences?.accepted_methods ?? [])].sort();
+  if (currentMethods.join(',') !== proposedMethods.join(',')) {
+    changes.push({ field: 'Payment methods', detail: proposedMethods.join(', ') || 'none' });
+  }
+  const toggles = [
+    ['offer_autopay', 'AutoPay'],
+    ['offer_paperless', 'Paperless billing'],
+    ['guest_checkout_allowed', 'Guest checkout'],
+  ] as const;
+  for (const [key, label] of toggles) {
+    const after = proposed.preferences?.[key];
+    if (typeof after === 'boolean' && current.preferences?.[key] !== after) {
+      changes.push({ field: label, detail: after ? 'enabled' : 'disabled' });
+    }
+  }
+  return changes;
+}
+
 /** Parse a CSS declaration string into a React style object so the
  *  design's inline styles can be transcribed verbatim. */
 function css(text: string): CSSProperties {
@@ -116,6 +174,10 @@ interface State {
   modal: 'signup' | 'checkout' | null;
   purchased: boolean;
   accountCreated: boolean;
+  billerAccountEmail: string | null;
+  signupEmail: string;
+  signupPassword: string;
+  signupError: string | null;
   lobs: Lob[];
   editingLobId: string | null;
   pendingLob: boolean;
@@ -244,6 +306,8 @@ function safeFontName(fontName: string): string { return (fontName || '').replac
 function hashString(str: string): number { let h = 0; for (let i = 0; i < str.length; i++) { h = (h * 31 + str.charCodeAt(i)) >>> 0; } return h; }
 function paletteFromString(str: string): Palette { return PALETTES[hashString(str || 'default') % PALETTES.length]; }
 function initialsFrom(name: string): string { return (name || '').trim().split(/\s+/).slice(0, 2).map((w) => w[0]?.toUpperCase() || '').join('') || 'YB'; }
+function initialsFromEmail(email: string): string { const local = (email || '').trim().split('@')[0] || ''; const parts = local.split(/[^a-zA-Z0-9]+/).filter(Boolean); const initials = parts.slice(0, 2).map((p) => p[0]?.toUpperCase() || '').join(''); return initials || 'YB'; }
+const MIN_PASSWORD_LENGTH = 8;
 function domainFromWebsite(url: string): string { if (!url) return ''; return url.trim().toLowerCase().replace(/^https?:\/\//, '').replace(/^www\./, '').split('/')[0]; }
 
 function extractColorsFromImage(img: HTMLImageElement): string[] {
@@ -364,7 +428,7 @@ const INITIAL_STATE: State = {
   brand: null, compliance: null,
   payerStep: 0, amount: 128.42, methodType: 'card', autopayOptIn: false, paperlessOptIn: false, processing: false,
   analyzeStage: 0,
-  modal: null, purchased: false, accountCreated: false, lobs: [], editingLobId: null, pendingLob: false,
+  modal: null, purchased: false, accountCreated: false, billerAccountEmail: null, signupEmail: '', signupPassword: '', signupError: null, lobs: [], editingLobId: null, pendingLob: false,
   viewingStatementId: null,
   agreedToCompliance: false, docs: [], newDocName: '', expandedCompliance: [],
   logoDataUrl: null, logoFetchOk: false, extractedColors: null,
@@ -403,9 +467,11 @@ const wizardCtaStyle = (enabled: boolean) =>
 function AgentActivityPanel({
   activity,
   connection,
+  complete = false,
 }: {
   activity: AgentActivity[];
   connection: State['activityConnection'];
+  complete?: boolean;
 }) {
   const latest = [...activity]
     .reverse()
@@ -414,26 +480,36 @@ function AgentActivityPanel({
   const color = (status: AgentActivity['status']) =>
     status === 'completed' ? '#197d00' : status === 'failed' ? '#b42318' : status === 'degraded' ? '#b54708' : status === 'skipped' ? '#667085' : '#0b4f6c';
   const icon = (status: AgentActivity['status']) =>
-    status === 'completed' ? '✓' : status === 'failed' || status === 'degraded' ? '!' : status === 'discovered' ? '⌕' : '•';
+    status === 'completed' ? '✓' : status === 'failed' || status === 'degraded' ? '!' : status === 'skipped' ? '–' : status === 'discovered' ? '⌕' : '•';
+  // Once the run has finished, an agent still reporting a non-terminal status was never delivered
+  // an outcome (e.g. the model was unavailable). Settle it to a terminal "skipped" state so no card
+  // spins on "running" forever; leave already-terminal statuses untouched.
+  const displayStatus = (status: AgentActivity['status']) =>
+    complete && !isTerminalStatus(status) ? 'skipped' : status;
+  const connectionLabel = complete ? 'Completed' : connection === 'idle' ? 'Waiting' : connection;
 
   return (
     <section aria-live="polite" style={css('width:100%;max-width:720px;margin-top:20px;padding:16px;border:1px solid var(--invoicecloud-surface-default-border);border-radius:14px;background:#fff;box-shadow:var(--invoicecloud-elevation-1)')}>
       <div style={css('display:flex;justify-content:space-between;gap:12px;align-items:center;margin-bottom:12px')}>
         <span><strong>Foundry agents at work</strong><small style={css('display:block;margin-top:3px;color:var(--invoicecloud-utility-neutral-70)')}>Pronto orchestration is delegating and tracking the agents below.</small></span>
-        <small style={css(`color:${connection === 'disconnected' ? '#b42318' : 'var(--invoicecloud-utility-neutral-70)'}`)}>{connection === 'idle' ? 'Waiting' : connection}</small>
+        <small style={css(`color:${connection === 'disconnected' && !complete ? '#b42318' : 'var(--invoicecloud-utility-neutral-70)'}`)}>{connectionLabel}</small>
       </div>
       {latest.length === 0 ? (
-        <p style={css('margin:0;color:var(--invoicecloud-utility-neutral-70);font-size:14px')}>Waiting for orchestration to discover eligible agents…</p>
+        <p style={css('margin:0;color:var(--invoicecloud-utility-neutral-70);font-size:14px')}>{complete ? 'Orchestration run finished; no eligible agents were engaged.' : 'Waiting for orchestration to discover eligible agents…'}</p>
       ) : (
         <div style={css('display:grid;grid-template-columns:repeat(auto-fit,minmax(210px,1fr));gap:10px')}>
-          {latest.map(item => (
-            <article key={item.agent_id} style={css(`border:1px solid ${color(item.status)}33;border-radius:10px;padding:10px;background:${color(item.status)}0d`)}>
-              <div style={css('display:flex;align-items:center;gap:8px')}><b style={css(`color:${color(item.status)}`)}>{icon(item.status)}</b><strong>{item.display_name}</strong></div>
-              <code title={item.agent_id} style={css('display:block;margin:5px 0;font-size:11px;overflow:hidden;text-overflow:ellipsis')}>{item.agent_id}</code>
-              <small>{item.summary}</small>
-              <small style={css('display:block;margin-top:5px;color:var(--invoicecloud-utility-neutral-70)')}>{item.status}{item.duration_ms !== undefined ? ` · ${Math.round(item.duration_ms)} ms` : ''}{item.error_code ? ` · ${item.error_code}` : ''}</small>
-            </article>
-          ))}
+          {latest.map(item => {
+            const status = displayStatus(item.status);
+            const settled = status !== item.status;
+            return (
+              <article key={item.agent_id} style={css(`border:1px solid ${color(status)}33;border-radius:10px;padding:10px;background:${color(status)}0d`)}>
+                <div style={css('display:flex;align-items:center;gap:8px')}><b style={css(`color:${color(status)}`)}>{icon(status)}</b><strong>{item.display_name}</strong></div>
+                <code title={item.agent_id} style={css('display:block;margin:5px 0;font-size:11px;overflow:hidden;text-overflow:ellipsis')}>{item.agent_id}</code>
+                <small>{settled ? 'Agent did not report a result before the run finished.' : item.summary}</small>
+                <small style={css('display:block;margin-top:5px;color:var(--invoicecloud-utility-neutral-70)')}>{status}{!settled && item.duration_ms !== undefined ? ` · ${Math.round(item.duration_ms)} ms` : ''}{item.error_code ? ` · ${item.error_code}` : ''}</small>
+              </article>
+            );
+          })}
         </div>
       )}
     </section>
@@ -821,9 +897,11 @@ export function App() {
   const rememberModalTrigger = () => {
     modalTriggerRef.current = document.activeElement instanceof HTMLElement ? document.activeElement : null;
   };
-  const openSignup = () => { rememberModalTrigger(); patch({ modal: 'signup', pendingLob: true }); };
+  const openSignup = () => { rememberModalTrigger(); patch({ modal: 'signup', pendingLob: true, signupError: null }); };
   const openCheckout = () => { rememberModalTrigger(); trackEvent('studio.purchase_started', { biller_id: s.backendBillerId ?? undefined }); patch({ modal: 'checkout' }); };
   const closeModal = () => patch({ modal: null });
+  const setSignupEmail = (e: React.ChangeEvent<HTMLInputElement>) => patch({ signupEmail: e.target.value, signupError: null });
+  const setSignupPassword = (e: React.ChangeEvent<HTMLInputElement>) => patch({ signupPassword: e.target.value, signupError: null });
 
   const saveLob = (published: boolean) => patch((st) => {
     const lob: Lob = {
@@ -840,7 +918,15 @@ export function App() {
     const lobs = exists ? st.lobs.map((l) => (l.id === lob.id ? lob : l)) : [...st.lobs, lob];
     return { lobs, accountCreated: true, purchased: st.purchased || published, screen: 'dashboard', dashboardSection: 'home', modal: null, editingLobId: null, pendingLob: false };
   });
-  const submitSignup = (e: FormEvent) => { e.preventDefault(); if (s.pendingLob) saveLob(false); else patch({ modal: null }); };
+  const submitSignup = (e: FormEvent) => {
+    e.preventDefault();
+    const email = s.signupEmail.trim();
+    if (!email) { patch({ signupError: 'Enter your work email.' }); return; }
+    if (!s.signupPassword) { patch({ signupError: 'Enter a password.' }); return; }
+    if (s.signupPassword.length < MIN_PASSWORD_LENGTH) { patch({ signupError: `Password must be at least ${MIN_PASSWORD_LENGTH} characters.` }); return; }
+    patch({ billerAccountEmail: email, accountCreated: true, signupError: null, signupPassword: '' });
+    if (s.pendingLob) saveLob(false); else patch({ modal: null });
+  };
   const submitCheckout = async (e: FormEvent) => {
     e.preventDefault();
     if (s.publishing) return;
@@ -967,8 +1053,18 @@ export function App() {
     s.skipWebsite || !s.website ? 'Applying smart brand defaults' : `Scanning ${s.website} for brand assets`,
   ];
   const analyzeStages = analyzeLabels.map((lbl, i) => {
-    const done = s.analyzeStage > i, active = s.analyzeStage === i;
-    return { label: lbl, bg: done ? 'var(--invoicecloud-intent-success-background)' : active ? TINT : 'var(--invoicecloud-utility-neutral-05)', opacity: done || active ? 1 : 0.5, iconSrc: done ? asset('assets/icons/Checkmark.svg') : asset('assets/icons/Spinner.svg'), spin: done ? 'none' : 'spin 1s linear infinite' };
+    // Every step settles to a terminal look once the run finishes: done on success, or a stopped
+    // warning marker if the run errored out — never a spinner that outlives the run.
+    const done = s.analysisComplete || s.analyzeStage > i;
+    const failed = !done && !!s.orchestrationError;
+    const active = !done && !failed && s.analyzeStage === i;
+    return {
+      label: lbl,
+      bg: done ? 'var(--invoicecloud-intent-success-background)' : failed ? 'var(--invoicecloud-intent-warning-background)' : active ? TINT : 'var(--invoicecloud-utility-neutral-05)',
+      opacity: done || active || failed ? 1 : 0.5,
+      iconSrc: done ? asset('assets/icons/Checkmark.svg') : failed ? asset('assets/icons/Warning.svg') : asset('assets/icons/Spinner.svg'),
+      spin: done || failed ? 'none' : 'spin 1s linear infinite',
+    };
   });
 
   const swatches = [brand.primary, brand.secondary, brand.accent, '#1c1c1c'];
@@ -1035,6 +1131,11 @@ export function App() {
   const previewAutopayStatusLabel = s.previewAutopayEnrolled ? `Enrolled \u2014 next charge $${amount.toFixed(2)} on Aug 4, 2026` : 'Not enrolled';
   const previewPaperlessStatusLabel = s.previewPaperlessEnrolled ? 'Enrolled \u2014 e-statements only' : 'Not enrolled \u2014 save paper, get bills faster';
   const siteSlug = (s.bizName || 'yourbusiness').toLowerCase().replace(/[^a-z0-9]+/g, '') || 'yourbusiness';
+  const accountEmail = s.billerAccountEmail || `demo@${siteSlug}.com`;
+  // Rendered from the accepted draft so a proposed heading / primary-action label change is actually
+  // reflected in the preview once accepted — keeping the preview and the proposal summary in agreement.
+  const previewHeading = s.backendDraft?.definition.content.heading?.trim() ?? '';
+  const primaryActionLabel = s.backendDraft?.definition.ui?.actions?.[0]?.label?.trim() || 'Pay Now';
 
   const guestCheckoutAllowedLabel = s.guestCheckoutAllowed ? 'Allowed' : 'Not allowed';
   const offerAutopayLabel = s.offerAutopay ? 'Yes' : 'No';
@@ -1459,7 +1560,7 @@ export function App() {
               </div>
             ))}
           </div>
-          <h2 style={css('margin-bottom:var(--invoicecloud-spacing-m)')}>{s.analysisComplete ? 'Research completed successfully' : 'Building your preview...'}</h2>
+          <h2 style={css('margin-bottom:var(--invoicecloud-spacing-m)')}>{!s.analysisComplete ? 'Building your preview...' : runOutcome(s.agentActivity) === 'failed' ? 'Preview built — some steps failed' : runOutcome(s.agentActivity) === 'warnings' ? 'Completed with warnings — research unavailable, using supplied info' : 'Research completed successfully'}</h2>
           <div style={css('display:flex;flex-direction:column;gap:var(--invoicecloud-spacing-s);width:100%;max-width:440px')}>
             {analyzeStages.map((st, i) => (
               <div key={i} style={css(`display:flex;align-items:center;gap:var(--invoicecloud-spacing-s);padding:var(--invoicecloud-spacing-s);border-radius:10px;background:${st.bg};opacity:${st.opacity}`)}>
@@ -1468,14 +1569,28 @@ export function App() {
               </div>
             ))}
           </div>
-          <AgentActivityPanel activity={s.agentActivity} connection={s.activityConnection} />
-          {s.analysisComplete && !s.orchestrationError && (
-            <div role="status" style={css('width:100%;max-width:720px;margin-top:16px;padding:16px;border:1px solid #197d00;border-radius:10px;background:#f0f9ed;color:#145c00;text-align:center')}>
-              <strong>{s.agentActivity.filter(item => item.status === 'completed').length} agent tasks completed.</strong>
-              <p style={css('margin:6px 0 12px')}>The orchestration run finished and its results are ready for review.</p>
-              <button type="button" onClick={() => patch({ screen: 'results' })} style={css('border:0;border-radius:8px;padding:10px 18px;background:#197d00;color:#fff;font-weight:700;cursor:pointer')}>Review agent findings</button>
-            </div>
-          )}
+          <AgentActivityPanel activity={s.agentActivity} connection={s.activityConnection} complete={s.analysisComplete || !!s.orchestrationError} />
+          {s.analysisComplete && !s.orchestrationError && (() => {
+            const outcome = runOutcome(s.agentActivity);
+            const palette = outcome === 'failed'
+              ? { border: '#b42318', bg: '#fff1f0', text: '#7a271a', button: '#b42318' }
+              : outcome === 'warnings'
+                ? { border: '#b54708', bg: '#fffaeb', text: '#7a4100', button: '#b54708' }
+                : { border: '#197d00', bg: '#f0f9ed', text: '#145c00', button: '#197d00' };
+            const completedCount = s.agentActivity.filter(item => item.status === 'completed').length;
+            const heading = outcome === 'failed'
+              ? 'Some agent tasks failed — review findings before proceeding.'
+              : outcome === 'warnings'
+                ? `${completedCount} agent tasks completed; some steps returned warnings.`
+                : `${completedCount} agent tasks completed.`;
+            return (
+              <div role="status" style={css(`width:100%;max-width:720px;margin-top:16px;padding:16px;border:1px solid ${palette.border};border-radius:10px;background:${palette.bg};color:${palette.text};text-align:center`)}>
+                <strong>{heading}</strong>
+                <p style={css('margin:6px 0 12px')}>The orchestration run finished and its results are ready for review.</p>
+                <button type="button" onClick={() => patch({ screen: 'results' })} style={css(`border:0;border-radius:8px;padding:10px 18px;background:${palette.button};color:#fff;font-weight:700;cursor:pointer`)}>Review agent findings</button>
+              </div>
+            );
+          })()}
           {s.orchestrationError && (
             <div role="alert" style={css('width:100%;max-width:720px;margin-top:16px;padding:16px;border:1px solid #b42318;border-radius:10px;background:#fff1f0;color:#7a271a')}>
               <strong>We could not finish building this preview.</strong>
@@ -1491,7 +1606,7 @@ export function App() {
         <div style={css('min-height:100vh;padding:var(--invoicecloud-spacing-xl) var(--invoicecloud-spacing-l);display:flex;flex-direction:column;align-items:center')}>
           <h2 style={css('margin-bottom:var(--invoicecloud-spacing-xxs)')}>Here's what we found</h2>
           <p style={css('font-size:14px;color:var(--invoicecloud-utility-neutral-70);margin-bottom:var(--invoicecloud-spacing-l)')}>Review before we build the live preview.</p>
-          <AgentActivityPanel activity={s.agentActivity} connection="idle" />
+          <AgentActivityPanel activity={s.agentActivity} connection="idle" complete />
           <div style={css('width:100%;max-width:900px;display:flex;flex-direction:column;gap:var(--invoicecloud-spacing-m)')}>
 
             <div style={css('background:var(--invoicecloud-surface-default-background);border:1px solid var(--invoicecloud-surface-default-border);border-radius:14px;padding:var(--invoicecloud-spacing-m)')}>
@@ -1770,11 +1885,16 @@ export function App() {
             {s.previewProposal && (
               <div style={css('margin-top:12px;padding:12px;border:1px solid var(--invoicecloud-primary);border-radius:10px;background:var(--invoicecloud-primary-tint)')}>
                 <strong>Proposed revision {s.previewProposal.revision}</strong>
-                <ul style={css('margin:8px 0 10px;padding-left:20px;font-size:13px')}>
-                  <li>Heading: {s.previewProposal.definition.content.heading}</li>
-                  <li>Primary action: {s.previewProposal.definition.ui?.actions[0]?.label ?? 'unchanged'}</li>
-                  <li>Payment methods: {s.previewProposal.definition.preferences?.accepted_methods.join(', ') ?? 'unchanged'}</li>
-                </ul>
+                {(() => {
+                  const changes = proposedChanges(s.backendDraft?.definition, s.previewProposal.definition);
+                  return changes.length ? (
+                    <ul style={css('margin:8px 0 10px;padding-left:20px;font-size:13px')}>
+                      {changes.map(change => <li key={change.field}>{change.field}: {change.detail}</li>)}
+                    </ul>
+                  ) : (
+                    <p style={css('margin:8px 0 10px;font-size:13px')}>No changes the preview can apply were detected in your request. The offline designer supports primary color and heading/button-label edits — try rephrasing, e.g. "change the primary color to purple".</p>
+                  );
+                })()}
                 {(s.previewProposal.findings ?? []).map(finding => <div key={finding.code} style={css('font-size:12px;color:#b54708')}>{finding.message}</div>)}
                 <div style={css('display:flex;gap:8px;margin-top:10px')}>
                   <button type="button" onClick={acceptPreviewChange} style={css('border:0;border-radius:8px;padding:9px 14px;background:#197d00;color:#fff;font-weight:700;cursor:pointer')}>Accept and update preview</button>
@@ -1821,6 +1941,10 @@ export function App() {
                 </div>
               </div>
 
+              {s.payerStep === 0 && previewHeading && (
+                <h2 style={css('font-size:22px;font-weight:700;margin-bottom:var(--invoicecloud-spacing-m)')}>{previewHeading}</h2>
+              )}
+
               {s.payerStep === 0 && (
                 <>
                   {s.previewScenario === 'payment' && (
@@ -1828,7 +1952,7 @@ export function App() {
                       <div style={css(`border-radius:14px;padding:var(--invoicecloud-spacing-l);color:#fff;margin-bottom:var(--invoicecloud-spacing-l);background:${brand.primary}`)}>
                         <div style={css('font-size:13px;opacity:.85;margin-bottom:4px')}>Amount due - Due Aug 4</div>
                         <div style={css('font-size:36px;font-weight:700;font-family:var(--invoicecloud-font-family-mono);margin-bottom:var(--invoicecloud-spacing-s)')}>${amount.toFixed(2)}</div>
-                        <button type="button" onClick={payerGoPay} style={css(`background:#fff;border:none;border-radius:10px;padding:12px 28px;font-size:15px;font-weight:700;cursor:pointer;color:${brand.primary}`)}>Pay Now</button>
+                        <button type="button" onClick={payerGoPay} style={css(`background:#fff;border:none;border-radius:10px;padding:12px 28px;font-size:15px;font-weight:700;cursor:pointer;color:${brand.primary}`)}>{primaryActionLabel}</button>
                       </div>
                       <div style={css('display:flex;justify-content:space-between;align-items:center;margin-bottom:var(--invoicecloud-spacing-s)')}>
                         <div style={css('display:flex;background:var(--invoicecloud-slate-10);border-radius:10px;padding:3px')}>
@@ -2059,7 +2183,7 @@ export function App() {
                       <p style={css('font-size:12px;color:var(--invoicecloud-utility-neutral-70);margin-bottom:var(--invoicecloud-spacing-s)')}>Save a password to view your history and manage payments online. You can skip this and pay as a guest.</p>
                       <input type="email" value={s.accountEmail} onChange={setAccountEmail} placeholder="Email address" style={css('width:100%;padding:12px 14px;border-radius:4px;border:1px solid var(--invoicecloud-surface-default-border);margin-bottom:var(--invoicecloud-spacing-s)')} />
                       <input type="password" value={s.accountPassword} onChange={setAccountPassword} placeholder="Create a password (optional)" style={css('width:100%;padding:12px 14px;border-radius:4px;border:1px solid var(--invoicecloud-surface-default-border);margin-bottom:var(--invoicecloud-spacing-m)')} />
-                      <div style={css('font-size:12px;color:var(--invoicecloud-utility-neutral-60);margin:var(--invoicecloud-spacing-m) 0')}>By selecting the button below, you agree to the <a href="#" style={css('color:var(--invoicecloud-primary)')}>InvoiceCloud Terms and Conditions</a> and <a href="#" style={css('color:var(--invoicecloud-primary)')}>Fee Disclosure</a>.</div>
+                      <div style={css('font-size:12px;color:var(--invoicecloud-utility-neutral-60);margin:var(--invoicecloud-spacing-m) 0')}>By selecting the button below, you agree to the <a href={asset('legal/terms.html')} target="_blank" rel="noopener noreferrer" style={css('color:var(--invoicecloud-primary)')}>Pronto Terms and Conditions</a> and <a href={asset('legal/fee-disclosure.html')} target="_blank" rel="noopener noreferrer" style={css('color:var(--invoicecloud-primary)')}>Fee Disclosure</a>.</div>
                       <div style={css('display:flex;justify-content:space-between;align-items:center')}>
                         <button type="button" onClick={payerBack} style={css('background:none;border:none;color:var(--invoicecloud-primary);font-weight:700;cursor:pointer')}>&larr; Back</button>
                         <button type="button" onClick={submitPayment} disabled={s.processing} style={css('background:var(--invoicecloud-intent-success-hover);color:#fff;border:none;border-radius:10px;padding:14px 32px;font-weight:700;cursor:pointer;font-size:15px')}>{s.processing ? 'Processing...' : 'Pay Now'}</button>
@@ -2150,8 +2274,8 @@ export function App() {
           </nav>
           <main style={css('flex:1;padding:var(--invoicecloud-spacing-xl);max-width:1250px')}>
             <div style={css('display:flex;justify-content:space-between;align-items:center;margin-bottom:var(--invoicecloud-spacing-m)')}>
-              <div><h2 style={css('margin-bottom:2px')}>Welcome back</h2><div style={css('font-size:13px;color:var(--invoicecloud-utility-neutral-60)')}>demo@{siteSlug}.com</div></div>
-              <span style={css('width:36px;height:36px;border-radius:50%;background:var(--invoicecloud-primary);color:#fff;display:flex;align-items:center;justify-content:center;font-weight:700;font-size:13px')}>DM</span>
+              <div><h2 style={css('margin-bottom:2px')}>Welcome back</h2><div style={css('font-size:13px;color:var(--invoicecloud-utility-neutral-60)')}>{accountEmail}</div></div>
+              <span style={css('width:36px;height:36px;border-radius:50%;background:var(--invoicecloud-primary);color:#fff;display:flex;align-items:center;justify-content:center;font-weight:700;font-size:13px')}>{initialsFromEmail(accountEmail)}</span>
             </div>
 
             {s.dashboardSection === 'home' && (
@@ -2257,9 +2381,12 @@ export function App() {
               <button type="button" onClick={closeModal} aria-label="Close" style={css('background:none;border:none;cursor:pointer;padding:4px')}><img src={asset('assets/icons/MenuClose.svg')} alt="" style={css('width:14px;height:14px')} /></button>
             </div>
             <label htmlFor="signup-email" style={css('display:block;font-size:13px;font-weight:500;margin-bottom:4px')}>Work email</label>
-            <input id="signup-email" data-autofocus type="email" required autoComplete="email" placeholder={`you@${siteSlug}.com`} style={css('width:100%;padding:12px 14px;border-radius:4px;border:1px solid var(--invoicecloud-surface-default-border);font-size:15px;margin-bottom:var(--invoicecloud-spacing-s)')} />
+            <input id="signup-email" data-autofocus type="email" required autoComplete="email" value={s.signupEmail} onChange={setSignupEmail} placeholder={`you@${siteSlug}.com`} style={css('width:100%;padding:12px 14px;border-radius:4px;border:1px solid var(--invoicecloud-surface-default-border);font-size:15px;margin-bottom:var(--invoicecloud-spacing-s)')} />
             <label htmlFor="signup-password" style={css('display:block;font-size:13px;font-weight:500;margin-bottom:4px')}>Password</label>
-            <input id="signup-password" type="password" required autoComplete="new-password" placeholder="Create a password" style={css('width:100%;padding:12px 14px;border-radius:4px;border:1px solid var(--invoicecloud-surface-default-border);font-size:15px;margin-bottom:var(--invoicecloud-spacing-l)')} />
+            <input id="signup-password" type="password" autoComplete="new-password" value={s.signupPassword} onChange={setSignupPassword} aria-invalid={s.signupError ? true : undefined} placeholder={`At least ${MIN_PASSWORD_LENGTH} characters`} style={css(`width:100%;padding:12px 14px;border-radius:4px;border:1px solid ${s.signupError ? 'var(--invoicecloud-intent-error-border)' : 'var(--invoicecloud-surface-default-border)'};font-size:15px;margin-bottom:${s.signupError ? 'var(--invoicecloud-spacing-s)' : 'var(--invoicecloud-spacing-l)'}`)} />
+            {s.signupError && (
+              <div role="alert" style={css('background:var(--invoicecloud-intent-error-background);border:1px solid var(--invoicecloud-intent-error-border);color:var(--invoicecloud-intent-error);border-radius:8px;padding:10px 12px;font-size:13px;margin-bottom:var(--invoicecloud-spacing-l)')}>{s.signupError}</div>
+            )}
             <button type="submit" style={css('width:100%;background:var(--invoicecloud-primary);color:#fff;border:none;border-radius:10px;padding:14px;font-size:15px;font-weight:700;cursor:pointer')}>Create Account &amp; Save Draft</button>
           </form>
         </div>
