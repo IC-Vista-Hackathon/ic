@@ -118,7 +118,7 @@ resource telemetrySilence 'Microsoft.Insights/scheduledQueryRules@2023-12-01' = 
     enabled: true
     scopes: [appInsightsId]
     evaluationFrequency: 'PT15M'
-    windowSize: 'PT1H'
+    windowSize: 'PT${telemetrySilenceLookbackHours}H'
     autoMitigate: true
     criteria: {
       allOf: [
