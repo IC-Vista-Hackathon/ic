@@ -1,6 +1,7 @@
 using System.Diagnostics;
 using Pronto.Agentic.Orchestration.Abstractions;
 using Pronto.BillerExperience.Api.Configuration;
+using Pronto.BillerExperience.Contracts.V1.AgentContext;
 using Pronto.BillerExperience.Contracts.V1.Research;
 using Microsoft.Extensions.Options;
 using Pronto.Agentic.Orchestration.Execution;
@@ -13,7 +14,8 @@ public sealed partial class BillerResearchCoordinator(
     IOptions<BillerExperienceOptions> options,
     ILogger<BillerResearchCoordinator> logger,
     IFoundryResearchConsolidator? consolidator = null,
-    IAgentContextCapabilityIssuer? capabilityIssuer = null) : IBillerResearchCoordinator
+    IAgentContextCapabilityIssuer? capabilityIssuer = null,
+    IAgentContextMcpGateway? contextGateway = null) : IBillerResearchCoordinator
 {
     private readonly ResearchOptions _options = options.Value.Research;
     private readonly McpOptions _optionsForMcp = options.Value.Mcp;
@@ -177,8 +179,26 @@ public sealed partial class BillerResearchCoordinator(
             timeout.CancelAfter(TimeSpan.FromSeconds(Math.Max(1, _options.AgentTimeoutSeconds)));
         try
         {
-                var invocationContext = CreateInvocationContext(agent, executionContext);
-                var response = await dispatcher.DispatchAsync(agent, request, invocationContext, timeout.Token);
+                McpInvocationContext? mcpContext;
+                try
+                {
+                    mcpContext = await CreateInvocationContextAsync(agent, executionContext, timeout.Token);
+                }
+                catch (Exception exception) when (exception is not OperationCanceledException)
+                {
+                    const string errorCode = "research.mcp_context_read_failed";
+                    LogContextReadFailure(logger, agent.Id, Activity.Current?.TraceId.ToString(), exception);
+                    await PublishActivityAsync(executionContext, agent, OrchestrationEventStatus.Failed,
+                        "Orchestration could not read shared agent context through MCP.", errorCode, true,
+                        Stopwatch.GetElapsedTime(startedAt).TotalMilliseconds, CancellationToken.None);
+                    return new AgentResult(null, errorCode, true);
+                }
+
+                var response = await dispatcher.DispatchAsync(agent, request, mcpContext?.InvocationContext, timeout.Token);
+                if (mcpContext is not null && response.Outcome is ResearchOutcome.Completed or ResearchOutcome.Degraded)
+                {
+                    response = await AppendResearchContextAsync(agent, response, mcpContext, timeout.Token);
+                }
                 if (response.Outcome == ResearchOutcome.Failed)
                 {
                     LogAgentReportedFailure(
@@ -239,18 +259,77 @@ public sealed partial class BillerResearchCoordinator(
     private static BillerResearchResponse Failed(string code, bool retryable) =>
         new(ResearchOutcome.Failed, [], [], [code], code, retryable);
 
-    private ResearchAgentInvocationContext? CreateInvocationContext(
+    private async Task<McpInvocationContext?> CreateInvocationContextAsync(
         ResearchAgentDescriptor agent,
-        ResearchExecutionContext? executionContext)
+        ResearchExecutionContext? executionContext,
+        CancellationToken cancellationToken)
     {
-        if (!_optionsForMcp.Enabled || executionContext is null || capabilityIssuer is null ||
-            !Uri.TryCreate(_optionsForMcp.PublicEndpoint, UriKind.Absolute, out var endpoint))
+        if (!_optionsForMcp.Enabled || executionContext is null)
         {
             return null;
         }
+        if (capabilityIssuer is null || contextGateway is null)
+        {
+            throw new InvalidOperationException(
+                "MCP context orchestration is enabled but its capability issuer or gateway is unavailable.");
+        }
 
         var token = capabilityIssuer.Issue(executionContext.BillerId, executionContext.RunId, agent.Id, canWrite: true);
-        return new ResearchAgentInvocationContext(endpoint, token);
+        var snapshot = await contextGateway.GetAsync(token, cancellationToken);
+        return new McpInvocationContext(token, snapshot, new ResearchAgentInvocationContext(snapshot));
+    }
+
+    private async Task<BillerResearchResponse> AppendResearchContextAsync(
+        ResearchAgentDescriptor agent,
+        BillerResearchResponse response,
+        McpInvocationContext context,
+        CancellationToken cancellationToken)
+    {
+        if (contextGateway is null || response.Sources.Count == 0) return response;
+
+        var sources = response.Sources.Select(source => source.Url).Distinct().Take(20).ToArray();
+        var conclusions = string.Join("; ", response.Facts.Take(12)
+            .Select(fact => $"{fact.Name}: {fact.Value}"));
+        var content = conclusions.Length <= 3_900 ? conclusions : conclusions[..3_900];
+        if (string.IsNullOrWhiteSpace(content)) return response;
+
+        var request = new AppendAgentContextRequest(
+            context.Snapshot.Version,
+            AgentContextEntryKind.CandidateArtifact,
+            agent.Id,
+            "research",
+            content,
+            sources,
+            External: true);
+        try
+        {
+            await contextGateway.AppendAsync(context.CapabilityToken, request, cancellationToken);
+            return response;
+        }
+        catch (Exception exception) when (exception is not OperationCanceledException)
+        {
+            LogContextWriteFailure(logger, agent.Id, retrying: true, Activity.Current?.TraceId.ToString(), exception);
+        }
+
+        try
+        {
+            var latest = await contextGateway.GetAsync(context.CapabilityToken, cancellationToken);
+            await contextGateway.AppendAsync(
+                context.CapabilityToken,
+                request with { ExpectedVersion = latest.Version },
+                cancellationToken);
+            return response;
+        }
+        catch (Exception exception) when (exception is not OperationCanceledException)
+        {
+            LogContextWriteFailure(logger, agent.Id, retrying: false, Activity.Current?.TraceId.ToString(), exception);
+            const string warning = "research.mcp_context_write_failed";
+            return response with
+            {
+                Outcome = ResearchOutcome.Degraded,
+                Warnings = response.Warnings.Append(warning).Distinct(StringComparer.Ordinal).ToArray()
+            };
+        }
     }
 
     private bool IsEligible(ResearchAgentDescriptor agent, string[] allowedAgentIds) =>
@@ -307,6 +386,10 @@ public sealed partial class BillerResearchCoordinator(
     }
 
     private sealed record AgentResult(BillerResearchResponse? Response, string? ErrorCode, bool Retryable);
+    private sealed record McpInvocationContext(
+        string CapabilityToken,
+        AgentContextSnapshot Snapshot,
+        ResearchAgentInvocationContext InvocationContext);
 
     [LoggerMessage(2650, LogLevel.Error, "Research agent catalog discovery failed; trace {TraceId}")]
     private static partial void LogCatalogFailure(ILogger logger, Exception exception, string? traceId);
@@ -328,4 +411,10 @@ public sealed partial class BillerResearchCoordinator(
 
     [LoggerMessage(2656, LogLevel.Error, "Publishing research activity for agent {AgentId} status {Status} failed; trace {TraceId}")]
     private static partial void LogActivityFailure(ILogger logger, string agentId, string status, string? traceId, Exception exception);
+
+    [LoggerMessage(2657, LogLevel.Error, "Orchestration failed to read MCP context for research agent {AgentId}; trace {TraceId}")]
+    private static partial void LogContextReadFailure(ILogger logger, string agentId, string? traceId, Exception exception);
+
+    [LoggerMessage(2658, LogLevel.Error, "Orchestration failed to append MCP context for research agent {AgentId}; retrying {Retrying}; trace {TraceId}")]
+    private static partial void LogContextWriteFailure(ILogger logger, string agentId, bool retrying, string? traceId, Exception exception);
 }

@@ -37,8 +37,9 @@ public sealed partial class AgentContextCapabilityService(
                 payerId);
             var payload = Base64UrlEncode(JsonSerializer.SerializeToUtf8Bytes(claims, JsonOptions));
             var signature = Sign(payload);
-            LogIssued(logger, billerId, runId, agentId, canWrite, claims.ExpiresAt);
-            return $"{payload}.{signature}";
+            var token = $"{payload}.{signature}";
+            LogIssued(logger, billerId, runId, agentId, canWrite, claims.ExpiresAt, Fingerprint(token));
+            return token;
         }
         catch (Exception exception)
         {
@@ -79,12 +80,12 @@ public sealed partial class AgentContextCapabilityService(
         }
         catch (Exception exception) when (exception is not UnauthorizedAccessException)
         {
-            LogValidationFailed(logger, exception);
+            LogValidationFailed(logger, Fingerprint(token), exception);
             throw new UnauthorizedAccessException("The MCP context capability is invalid.", exception);
         }
         catch (UnauthorizedAccessException exception)
         {
-            LogValidationFailed(logger, exception);
+            LogValidationFailed(logger, Fingerprint(token), exception);
             throw;
         }
     }
@@ -111,10 +112,16 @@ public sealed partial class AgentContextCapabilityService(
         return Convert.FromBase64String(padded);
     }
 
-    [LoggerMessage(2750, LogLevel.Information, "Issued MCP context capability for biller {BillerId}, run {RunId}, agent {AgentId}, writable {CanWrite}, expires {ExpiresAt}")]
-    private static partial void LogIssued(ILogger logger, string billerId, string runId, string agentId, bool canWrite, DateTimeOffset expiresAt);
-    [LoggerMessage(2790, LogLevel.Error, "MCP context capability validation failed")]
-    private static partial void LogValidationFailed(ILogger logger, Exception exception);
+    private static string Fingerprint(string? token)
+    {
+        if (string.IsNullOrEmpty(token)) return "empty";
+        return Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(token)))[..12].ToLowerInvariant();
+    }
+
+    [LoggerMessage(2750, LogLevel.Information, "Issued MCP context capability for biller {BillerId}, run {RunId}, agent {AgentId}, writable {CanWrite}, expires {ExpiresAt}, fingerprint {TokenFingerprint}")]
+    private static partial void LogIssued(ILogger logger, string billerId, string runId, string agentId, bool canWrite, DateTimeOffset expiresAt, string tokenFingerprint);
+    [LoggerMessage(2790, LogLevel.Error, "MCP context capability validation failed for fingerprint {TokenFingerprint}")]
+    private static partial void LogValidationFailed(ILogger logger, string tokenFingerprint, Exception exception);
     [LoggerMessage(2793, LogLevel.Error, "Issuing MCP context capability failed for biller {BillerId}, run {RunId}, agent {AgentId}")]
     private static partial void LogIssuanceFailed(ILogger logger, string billerId, string runId, string agentId, Exception exception);
 }

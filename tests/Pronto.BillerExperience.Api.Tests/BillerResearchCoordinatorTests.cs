@@ -1,6 +1,7 @@
 using Pronto.BillerExperience.Api.Configuration;
 using Pronto.BillerExperience.Api.Infrastructure.Research;
 using Pronto.Agentic.Orchestration.Abstractions;
+using Pronto.BillerExperience.Contracts.V1.AgentContext;
 using Pronto.BillerExperience.Contracts.V1.Research;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
@@ -78,15 +79,17 @@ public sealed class BillerResearchCoordinatorTests
     }
 
     [Fact]
-    public async Task OrchestrationIssuesAgentScopedMcpContextForEachInvocation()
+    public async Task OrchestrationReadsAndWritesAgentScopedContextThroughMcp()
     {
         var dispatcher = new StubDispatcher((agent, _) => Completed(agent.Id));
         var issuer = new StubCapabilityIssuer();
+        var gateway = new StubContextGateway();
         var coordinator = Create(
             new StubCatalog([Agent("worker", "biller_research")]),
             dispatcher,
             [],
             capabilityIssuer: issuer,
+            contextGateway: gateway,
             mcpEndpoint: "http://demo.example/api/mcp");
 
         await coordinator.ResearchAsync(
@@ -95,8 +98,58 @@ public sealed class BillerResearchCoordinatorTests
 
         Assert.Equal(("biller-1", "run-1", "worker", true), issuer.Issued);
         var context = Assert.Single(dispatcher.InvocationContexts);
-        Assert.Equal(new Uri("http://demo.example/api/mcp"), context!.McpEndpoint);
-        Assert.Equal("scoped-token", context.ContextCapabilityToken);
+        Assert.Equal("biller-1", context!.SharedContext.BillerId);
+        Assert.Equal(4, context.SharedContext.Version);
+        Assert.Equal("scoped-token", gateway.GetToken);
+        Assert.Equal("scoped-token", gateway.AppendToken);
+        Assert.Equal(4, gateway.Appended!.ExpectedVersion);
+        Assert.Equal(AgentContextEntryKind.CandidateArtifact, gateway.Appended.Kind);
+        Assert.Equal("research", gateway.Appended.Scope);
+    }
+
+    [Fact]
+    public async Task McpContextReadFailureStopsAgentWithSpecificRetryableError()
+    {
+        var dispatcher = new StubDispatcher((agent, _) => Completed(agent.Id));
+        var coordinator = Create(
+            new StubCatalog([Agent("worker", "biller_research")]),
+            dispatcher,
+            [],
+            capabilityIssuer: new StubCapabilityIssuer(),
+            contextGateway: new FailingReadContextGateway(),
+            mcpEndpoint: "http://demo.example/api/mcp");
+
+        var response = await coordinator.ResearchAsync(
+            Request(),
+            new ResearchExecutionContext("biller-1", "run-1", new RecordingSink()));
+
+        Assert.Equal(ResearchOutcome.Failed, response.Outcome);
+        Assert.Equal("research.mcp_context_read_failed", response.ErrorCode);
+        Assert.True(response.Retryable);
+        Assert.Empty(dispatcher.Dispatched);
+    }
+
+    [Fact]
+    public async Task McpContextWriteFailurePreservesResearchAsDegradedAfterRetry()
+    {
+        var gateway = new FailingWriteContextGateway();
+        var coordinator = Create(
+            new StubCatalog([Agent("worker", "biller_research")]),
+            new StubDispatcher((agent, _) => Completed(agent.Id)),
+            [],
+            capabilityIssuer: new StubCapabilityIssuer(),
+            contextGateway: gateway,
+            mcpEndpoint: "http://demo.example/api/mcp");
+
+        var response = await coordinator.ResearchAsync(
+            Request(),
+            new ResearchExecutionContext("biller-1", "run-1", new RecordingSink()));
+
+        Assert.Equal(ResearchOutcome.Degraded, response.Outcome);
+        Assert.Contains("research.mcp_context_write_failed", response.Warnings);
+        Assert.Single(response.Facts);
+        Assert.Equal(2, gateway.GetCount);
+        Assert.Equal(2, gateway.AppendCount);
     }
 
     [Fact]
@@ -148,6 +201,7 @@ public sealed class BillerResearchCoordinatorTests
         string[] allowlist,
         IFoundryResearchConsolidator? consolidator = null,
         IAgentContextCapabilityIssuer? capabilityIssuer = null,
+        IAgentContextMcpGateway? contextGateway = null,
         string? mcpEndpoint = null) => new(
             catalog,
             dispatcher,
@@ -168,7 +222,8 @@ public sealed class BillerResearchCoordinatorTests
             }),
             NullLogger<BillerResearchCoordinator>.Instance,
             consolidator,
-            capabilityIssuer);
+            capabilityIssuer,
+            contextGateway);
 
     private static BillerResearchRequest Request() => new(new Uri("https://example.com"), "brand");
     private static ResearchAgentDescriptor Agent(string id, string capability) => new(id, id, new HashSet<string> { capability });
@@ -213,6 +268,64 @@ public sealed class BillerResearchCoordinatorTests
         {
             Issued = (billerId, runId, agentId, canWrite);
             return "scoped-token";
+        }
+    }
+
+    private sealed class StubContextGateway : IAgentContextMcpGateway
+    {
+        public string? GetToken { get; private set; }
+        public string? AppendToken { get; private set; }
+        public AppendAgentContextRequest? Appended { get; private set; }
+
+        public Task<AgentContextSnapshot> GetAsync(string capabilityToken, CancellationToken cancellationToken)
+        {
+            GetToken = capabilityToken;
+            return Task.FromResult(new AgentContextSnapshot(
+                "biller-1", "run-1", 4, "Build a payment experience", [], DateTimeOffset.UtcNow));
+        }
+
+        public Task<AgentContextSnapshot> AppendAsync(
+            string capabilityToken,
+            AppendAgentContextRequest request,
+            CancellationToken cancellationToken)
+        {
+            AppendToken = capabilityToken;
+            Appended = request;
+            return Task.FromResult(new AgentContextSnapshot(
+                "biller-1", "run-1", request.ExpectedVersion + 1, "Build a payment experience", [], DateTimeOffset.UtcNow));
+        }
+    }
+
+    private sealed class FailingReadContextGateway : IAgentContextMcpGateway
+    {
+        public Task<AgentContextSnapshot> GetAsync(string capabilityToken, CancellationToken cancellationToken) =>
+            Task.FromException<AgentContextSnapshot>(new HttpRequestException("MCP unavailable"));
+
+        public Task<AgentContextSnapshot> AppendAsync(
+            string capabilityToken,
+            AppendAgentContextRequest request,
+            CancellationToken cancellationToken) => throw new NotSupportedException();
+    }
+
+    private sealed class FailingWriteContextGateway : IAgentContextMcpGateway
+    {
+        public int GetCount { get; private set; }
+        public int AppendCount { get; private set; }
+
+        public Task<AgentContextSnapshot> GetAsync(string capabilityToken, CancellationToken cancellationToken)
+        {
+            GetCount++;
+            return Task.FromResult(new AgentContextSnapshot(
+                "biller-1", "run-1", GetCount + 2, "Build a payment experience", [], DateTimeOffset.UtcNow));
+        }
+
+        public Task<AgentContextSnapshot> AppendAsync(
+            string capabilityToken,
+            AppendAgentContextRequest request,
+            CancellationToken cancellationToken)
+        {
+            AppendCount++;
+            return Task.FromException<AgentContextSnapshot>(new InvalidOperationException("version conflict"));
         }
     }
 

@@ -86,6 +86,8 @@ builder.Services.AddSingleton<AgentContextCapabilityService>();
 builder.Services.AddSingleton<CompliancePolicyEngine>();
 builder.Services.AddSingleton<IAgentContextCapabilityIssuer>(services =>
     services.GetRequiredService<AgentContextCapabilityService>());
+builder.Services.AddHttpClient<IAgentContextMcpGateway, OrchestrationMcpContextGateway>(client =>
+    client.Timeout = Timeout.InfiniteTimeSpan);
 builder.Services.AddSingleton<ServiceToolRegistry>();
 builder.Services.AddMcpServer()
     .WithHttpTransport(transport => transport.Stateless = true)
@@ -115,7 +117,8 @@ if (!string.IsNullOrWhiteSpace(options.Research.FoundryProjectEndpoint))
         string.IsNullOrWhiteSpace(options.Research.CoordinatorAgentId)
             ? null
             : services.GetRequiredService<FoundryResearchAgentAdapter>(),
-        services.GetRequiredService<IAgentContextCapabilityIssuer>()));
+        services.GetRequiredService<IAgentContextCapabilityIssuer>(),
+        services.GetRequiredService<IAgentContextMcpGateway>()));
     if (options.AgentProvisioning.Enabled)
     {
         builder.Services.AddSingleton<IFoundryAgentAdministrationGateway, FoundryAgentAdministrationGateway>();
@@ -136,7 +139,8 @@ else
         services.GetRequiredService<IResearchAgentDispatcher>(),
         services.GetRequiredService<Microsoft.Extensions.Options.IOptions<BillerExperienceOptions>>(),
         services.GetRequiredService<ILogger<BillerResearchCoordinator>>(),
-        capabilityIssuer: services.GetRequiredService<IAgentContextCapabilityIssuer>()));
+        capabilityIssuer: services.GetRequiredService<IAgentContextCapabilityIssuer>(),
+        contextGateway: services.GetRequiredService<IAgentContextMcpGateway>()));
 }
 if (!string.IsNullOrWhiteSpace(options.Compliance.FoundryAgentId))
 {

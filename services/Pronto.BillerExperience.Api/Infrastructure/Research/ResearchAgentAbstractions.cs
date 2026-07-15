@@ -1,5 +1,6 @@
 using System.Net;
 using System.Net.Sockets;
+using Pronto.BillerExperience.Contracts.V1.AgentContext;
 using Pronto.BillerExperience.Contracts.V1.Research;
 using Pronto.Agentic.Orchestration.Abstractions;
 
@@ -31,13 +32,25 @@ public interface IBillerResearchCoordinator
 
 public sealed record ResearchExecutionContext(string BillerId, string RunId, IOrchestrationEventSink ActivitySink);
 
-public sealed record ResearchAgentInvocationContext(
-    Uri McpEndpoint,
-    string ContextCapabilityToken);
+public sealed record ResearchAgentInvocationContext(AgentContextSnapshot SharedContext);
 
 public interface IAgentContextCapabilityIssuer
 {
     string Issue(string billerId, string runId, string agentId, bool canWrite);
+}
+
+/// <summary>
+/// Gives orchestration access to shared context through MCP. Capability tokens stay behind this
+/// boundary and are never placed in model-visible prompts.
+/// </summary>
+public interface IAgentContextMcpGateway
+{
+    Task<AgentContextSnapshot> GetAsync(string capabilityToken, CancellationToken cancellationToken);
+
+    Task<AgentContextSnapshot> AppendAsync(
+        string capabilityToken,
+        AppendAgentContextRequest request,
+        CancellationToken cancellationToken);
 }
 
 public sealed record ResearchAgentDescriptor(

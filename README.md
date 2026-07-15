@@ -100,8 +100,9 @@ flowchart TB
         Foundry --> Web
     end
 
+    Orchestration -->|"scoped context read/write"| MCP
     Orchestration -->|"inventory + invoke"| Foundry
-    Foundry -.->|"remote MCP after TLS"| MCP
+    Foundry -->|"typed cited result"| Orchestration
 
     subgraph AzureData["Azure data plane"]
         Cosmos[("Cosmos DB for NoSQL<br/>biller + billing profile, workflow, invoice, payment, payer state")]
@@ -143,10 +144,10 @@ flowchart TB
     Bicep -.-> AppInsights
 ```
 
-Solid arrows are active request, orchestration, publication, and data paths. The dashed Foundry-to-MCP
-path is intentionally gated in the current production environment: the public Gateway is HTTP-only,
-so remote MCP is disabled until TLS is configured. The MCP service router and its deterministic tools
-are deployed, tested, and ready for that connection; agents never access service storage directly.
+Solid arrows are active request, orchestration, publication, and data paths. Orchestration owns MCP
+credentials and short-lived capabilities: it reads shared context through `/mcp`, delegates only a
+sanitized snapshot to Foundry, validates the typed cited result, and appends that result through MCP.
+Opaque credentials never enter model-visible prompts, and agents never access service storage directly.
 
 The shared tier creates no per-biller Deployment. Publication runs a short-lived, locked-down builder
 Job, writes an immutable bundle plus an atomic active pointer to private Blob Storage, and the shared
@@ -183,9 +184,10 @@ activity, and decides whether the goal can continue or must fail.
 Every agent instruction imports [`agents/RESPONSIBLE_AI.md`](agents/RESPONSIBLE_AI.md). Runtime
 guardrails repeat the policy at provider boundaries and validate cited output. Shared learning,
 including accepted billing-profile artifacts and corrections, is biller- and run-scoped in Cosmos
-DB. Remote agents access it through the stateless `/mcp` endpoint
-using `get_goal_context` and `append_context`; orchestration issues a short-lived HMAC capability
-bound to the biller, run, agent, and read/write permission. The public MCP API key is a demo-level
+DB. Orchestration accesses it through the stateless `/mcp` endpoint using `get_goal_context` and
+`append_context`, then supplies agents with sanitized snapshots and persists only validated typed
+results. It issues a short-lived HMAC capability bound to the biller, run, agent, and read/write
+permission, but never exposes that capability to a model. The public MCP API key is a demo-level
 connection credential, not the tenant boundary. Context rejects likely secrets, payment instrument
 data, oversized entries, uncited external claims, and stale writes. Private chain-of-thought is
 never stored.
