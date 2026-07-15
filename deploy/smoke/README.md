@@ -27,6 +27,6 @@ Requires `curl`, `jq`, and (for layer 1) `kubectl` with cluster credentials
 
 | Var | Default | Purpose |
 | --- | --- | --- |
-| `BASE_URL` | `http://ic-hack.eastus2.cloudapp.azure.com` | Public gateway base URL |
+| `BASE_URL` | `http://pronto.eastus2.cloudapp.azure.com` | Public gateway base URL |
 | `HTTP_TIMEOUT` | `10` | Per-request timeout (seconds) |
 | `SKIP_KUBECTL` | `0` | Set `1` to skip layer 1 when cluster creds aren't available (HTTP-only run) |

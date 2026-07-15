@@ -1,11 +1,13 @@
 using System.Diagnostics;
 using System.Text.RegularExpressions;
 using IC.Agentic.Orchestration.Abstractions;
-using IC.Agentic.Orchestration.Execution;
+using IC.BillerExperience.Api.Application.Orchestration;
+using IC.BillerExperience.Api.Application.Agents;
 using IC.BillerExperience.Api.Domain;
 using IC.BillerExperience.Api.Infrastructure;
 using IC.BillerExperience.Api.Infrastructure.AI;
 using IC.BillerExperience.Api.Infrastructure.Persistence;
+using IC.BillerExperience.Api.Infrastructure.Research;
 using IC.BillerExperience.Api.Infrastructure.SupportingServices;
 using IC.BillerExperience.Contracts.V1.Billers;
 using IC.BillerExperience.Contracts.V1.Deployments;
@@ -17,8 +19,11 @@ namespace IC.BillerExperience.Api.Application;
 public sealed partial class BillerOnboardingService(
     IBillerExperienceRepository repository,
     IExperienceDraftGenerator draftGenerator,
+    IOrchestrationRunner orchestrationRunner,
     ILogger<BillerOnboardingService> logger,
-    IInvoiceSeeder? invoiceSeeder = null)
+    IBillerResearchCoordinator? researchCoordinator = null,
+    IInvoiceSeeder? invoiceSeeder = null,
+    AgentContextService? agentContextService = null)
 {
     private const string RunId = "onboarding";
 
@@ -65,6 +70,14 @@ public sealed partial class BillerOnboardingService(
         await repository.CreateBillerAsync(biller, cancellationToken);
         var savedExperience = await repository.SaveExperienceAsync(experience, null, cancellationToken);
         var savedRun = await repository.SaveRunAsync(run, null, cancellationToken);
+        if (agentContextService is not null)
+        {
+            await agentContextService.EnsureAsync(
+                id,
+                savedRun.Id,
+                $"Create, review, approve, and publish a safe branded payment experience for {biller.Name}.",
+                cancellationToken);
+        }
         await (invoiceSeeder ?? new NullInvoiceSeeder()).SeedAsync(id, biller.BillType, cancellationToken);
         LogBillerCreated(logger, id, savedRun.Id, draftGenerator.Provider);
         return (Map(biller), Map(savedRun), Map(savedExperience));
@@ -101,31 +114,18 @@ public sealed partial class BillerOnboardingService(
             billerId,
             run.Id);
         var eventSink = new AgentActivityRepositorySink(repository, billerId, run.Id, logger);
-        var researchStep = new ObservableOrchestrationStep<BillerRecord, BillerRecord>(
-            "biller-research", "Biller Research", "Reviewing the supplied biller profile and brand context",
-            static (input, _, _) => ValueTask.FromResult(input), eventSink);
-        await researchStep.ExecuteAsync(biller, orchestrationContext, cancellationToken);
-
-        var designStep = new ObservableOrchestrationStep<ExperienceRecord, DraftGenerationResult>(
-            "experience-designer", "Experience Designer", "Applying copy, layout, and action changes to the live preview",
-            (input, _, token) => draftGenerator.GenerateAsync(biller, input, messages, token), eventSink);
-        var generated = await designStep.ExecuteAsync(experience, orchestrationContext, cancellationToken);
-
-        var accessibilityStep = new ObservableOrchestrationStep<DraftGenerationResult, DraftGenerationResult>(
-            "accessibility", "Accessibility", "Checking colors, hierarchy, and action clarity",
-            static (input, _, _) => ValueTask.FromResult(input), eventSink);
-        generated = await accessibilityStep.ExecuteAsync(generated, orchestrationContext, cancellationToken);
-
-        var complianceStep = new ObservableOrchestrationStep<DraftGenerationResult, DraftGenerationResult>(
-            "compliance", "Compliance", "Checking payment capabilities and required review guidance",
-            (input, _, _) => ValueTask.FromResult(input with
-            {
-                Findings = input.Findings.Concat(ValidateDefinition(billerId, input.Definition))
-                    .GroupBy(finding => finding.Code, StringComparer.Ordinal)
-                    .Select(group => group.First())
-                    .ToArray()
-            }), eventSink);
-        generated = await complianceStep.ExecuteAsync(generated, orchestrationContext, cancellationToken);
+        var workflow = new BillerExperienceChatWorkflow(
+            new ExperienceDesignAgent(draftGenerator),
+            new AccessibilityReviewAgent(),
+            new ComplianceReviewAgent(ValidateDefinition),
+            researchCoordinator,
+            logger,
+            researchRequired: false);
+        var generated = await orchestrationRunner.RunAsync(
+            workflow,
+            new BillerExperienceChatWorkflowInput(biller, experience, messages, eventSink),
+            orchestrationContext,
+            cancellationToken);
         var assistantMessage = new OnboardingChatMessage("assistant", generated.Reply, DateTimeOffset.UtcNow);
         var nextState = generated.MissingFields.Count == 0
             ? OnboardingSessionState.DraftReady
@@ -263,7 +263,16 @@ public sealed partial class BillerOnboardingService(
         CancellationToken cancellationToken)
     {
         var run = await GetRequiredRunAsync(billerId, cancellationToken);
-        return (Map(run), run.AgentActivity ?? []);
+        var appendedActivity = await repository.GetAgentActivityAsync(billerId, run.Id, cancellationToken);
+        var activity = (run.AgentActivity ?? [])
+            .Concat(appendedActivity)
+            .GroupBy(item => item.EventId, StringComparer.Ordinal)
+            .Select(group => group.OrderByDescending(item => item.OccurredAt).First())
+            .OrderBy(item => item.Sequence)
+            .ThenBy(item => item.OccurredAt)
+            .TakeLast(100)
+            .ToArray();
+        return (Map(run), activity);
     }
 
     public async ValueTask<DeploymentStatusResponse> GetDeploymentAsync(

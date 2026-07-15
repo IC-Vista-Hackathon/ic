@@ -1,10 +1,12 @@
 import { FormEvent, useMemo, useState } from 'react';
 import { activityUrl, api } from './api';
 import { logError, logEvent } from './telemetry';
+import { errorMessage, UiRequestError } from './http';
 import type { AgentActivity, Bootstrap, Deployment, ExperienceDefinition, ExperiencePreferences, ExperienceRevision, PreviewInvoice, PreviewScenario, Session } from './types';
 
 type Message = { role: 'assistant' | 'user'; content: string };
 type PreviewDevice = 'desktop' | 'mobile';
+type OperationError = { operation: string; message: string; retryable: boolean };
 
 export function App() {
   const [bootstrap, setBootstrap] = useState<Bootstrap>();
@@ -13,7 +15,8 @@ export function App() {
   const [messages, setMessages] = useState<Message[]>([]);
   const [message, setMessage] = useState('Make the experience welcoming, concise, and use #085368 as the primary color.');
   const [busy, setBusy] = useState(false);
-  const [error, setError] = useState('');
+  const [error, setError] = useState<OperationError>();
+  const [activityConnection, setActivityConnection] = useState<'idle'|'connecting'|'connected'|'disconnected'>('idle');
   const [approved, setApproved] = useState(false);
   const [deployment, setDeployment] = useState<Deployment>();
   const [agentActivity, setAgentActivity] = useState<AgentActivity[]>([]);
@@ -30,7 +33,7 @@ export function App() {
   ] as const, [draft, preferences, approved]);
 
   async function createBiller(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault(); setBusy(true); setError('');
+    event.preventDefault(); setBusy(true); setError(undefined);
     const data = new FormData(event.currentTarget);
     try {
       const created = await api.create({ display_name: String(data.get('name')), slug: String(data.get('slug')), bill_type: String(data.get('billType')), postal_code: String(data.get('postalCode')), website: String(data.get('website')) || undefined });
@@ -40,46 +43,61 @@ export function App() {
       const seeded = await api.invoices(created.biller.biller_id);
       setPreviewInvoices(seeded.invoices);
       logEvent('studio.onboarding.started', { biller_id: created.biller.biller_id });
-    } catch (caught) { setError(toMessage(caught)); logError('studio.onboarding.start_failed', caught); }
+    } catch (caught) { setFailure('Create biller', caught); logError('studio.onboarding.start_failed', caught); }
     finally { setBusy(false); }
   }
 
   async function sendMessage(event: FormEvent) {
     event.preventDefault(); if (!bootstrap || !message.trim()) return;
-    const sent = message.trim(); setMessages(current => [...current, { role: 'user', content: sent }]); setMessage(''); setBusy(true); setError('');
+    const sent = message.trim(); setMessages(current => [...current, { role: 'user', content: sent }]); setMessage(''); setBusy(true); setError(undefined);
     const events = new EventSource(activityUrl(bootstrap.biller.biller_id));
+    setActivityConnection('connecting');
+    events.onopen = () => setActivityConnection('connected');
     events.addEventListener('agent_activity', raw => {
-      const activity = JSON.parse((raw as MessageEvent).data) as AgentActivity;
-      setAgentActivity(current => [...current.filter(item => item.event_id !== activity.event_id), activity].sort((a, b) => a.sequence - b.sequence));
+      try {
+        const activity = JSON.parse((raw as MessageEvent).data) as AgentActivity;
+        if (!activity.event_id || !activity.agent_id || !activity.status) throw new Error('Agent activity payload is incomplete.');
+        setAgentActivity(current => [...current.filter(item => item.event_id !== activity.event_id), activity].sort((a, b) => a.sequence - b.sequence));
+        if (activity.status === 'failed' || activity.status === 'degraded') logError('studio.agent.unhealthy', new Error(activity.summary), { biller_id: bootstrap.biller.biller_id, agent_id: activity.agent_id, run_id: activity.run_id, agent_status: activity.status, trace_id: activity.trace_id });
+      } catch (caught) { logError('studio.activity.invalid_event', caught, { biller_id: bootstrap.biller.biller_id }); }
     });
+    events.addEventListener('stream_error', raw => {
+      try {
+        const problem = JSON.parse((raw as MessageEvent).data) as { message?: string; trace_id?: string };
+        setActivityConnection('disconnected');
+        setError({ operation: 'Stream agent activity', message: `${problem.message ?? 'Live agent updates are temporarily unavailable.'}${problem.trace_id ? ` Reference: ${problem.trace_id}` : ''}`, retryable: true });
+        logError('studio.activity.server_failed', new Error(problem.message ?? 'Agent activity stream failed.'), { biller_id: bootstrap.biller.biller_id, trace_id: problem.trace_id });
+      } catch (caught) { logError('studio.activity.invalid_error_event', caught, { biller_id: bootstrap.biller.biller_id }); }
+    });
+    events.onerror = () => { setActivityConnection('disconnected'); logError('studio.activity.connection_failed', new Error('Agent activity stream disconnected.'), { biller_id: bootstrap.biller.biller_id }); };
     try {
       const response = await api.chat(bootstrap.biller.biller_id, sent);
       setMessages(current => [...current, { role: 'assistant', content: response.reply }]); setDraft(response.draft); setSession(response.session); setApproved(false);
-    } catch (caught) { setError(toMessage(caught)); logError('studio.chat.failed', caught, { biller_id: bootstrap.biller.biller_id }); }
-    finally { window.setTimeout(() => events.close(), 750); setBusy(false); }
+    } catch (caught) { setFailure('Apply requested change', caught); logError('studio.chat.failed', caught, { biller_id: bootstrap.biller.biller_id }); }
+    finally { window.setTimeout(() => { events.close(); setActivityConnection('idle'); }, 15_000); setBusy(false); }
   }
 
   async function approve() {
-    if (!bootstrap || !draft) return; setBusy(true); setError('');
+    if (!bootstrap || !draft) return; setBusy(true); setError(undefined);
     try { setDraft(await api.approve(bootstrap.biller.biller_id, draft.revision)); setApproved(true); }
-    catch (caught) { setError(toMessage(caught)); logError('studio.approval.failed', caught); }
+    catch (caught) { setFailure('Approve draft', caught); logError('studio.approval.failed', caught); }
     finally { setBusy(false); }
   }
 
   async function updatePreferences(next: ExperiencePreferences) {
-    if (!bootstrap || !draft) return; setBusy(true); setError('');
+    if (!bootstrap || !draft) return; setBusy(true); setError(undefined);
     try {
       const updated = await api.update(bootstrap.biller.biller_id, { ...draft.definition, preferences: next }, draft.e_tag);
       setDraft(updated); setApproved(false);
       logEvent('studio.preferences.updated', { biller_id: bootstrap.biller.biller_id });
-    } catch (caught) { setError(toMessage(caught)); logError('studio.preferences.update_failed', caught, { biller_id: bootstrap.biller.biller_id }); }
+    } catch (caught) { setFailure('Update preferences', caught); logError('studio.preferences.update_failed', caught, { biller_id: bootstrap.biller.biller_id }); }
     finally { setBusy(false); }
   }
 
   async function publish() {
-    if (!bootstrap || !draft) return; setBusy(true); setError('');
+    if (!bootstrap || !draft) return; setBusy(true); setError(undefined);
     try { const requested = await api.publish(bootstrap.biller.biller_id, draft.revision); setDeployment(requested); void monitorDeployment(bootstrap.biller.biller_id, requested.deployment_id); }
-    catch (caught) { setError(toMessage(caught)); logError('studio.publication.failed', caught); }
+    catch (caught) { setFailure('Publish experience', caught); logError('studio.publication.failed', caught); }
     finally { setBusy(false); }
   }
 
@@ -92,14 +110,16 @@ export function App() {
         await delay(2000);
       }
       throw new Error('Publication is still running. Refresh to check its status.');
-    } catch (caught) { setError(toMessage(caught)); logError('studio.publication.monitor_failed', caught, { biller_id: billerId, deployment_id: deploymentId }); }
+    } catch (caught) { setFailure('Monitor publication', caught); logError('studio.publication.monitor_failed', caught, { biller_id: billerId, deployment_id: deploymentId }); }
   }
+
+  function setFailure(operation: string, caught: unknown) { setError({ operation, message: errorMessage(caught), retryable: caught instanceof UiRequestError && caught.retryable }); }
 
   if (!bootstrap) return <Landing busy={busy} error={error} onSubmit={createBiller} />;
   return <main className="studio-shell">
     <header className="topbar"><div><span className="eyebrow">IC Biller Studio</span><h1>{bootstrap.biller.display_name}</h1></div><span className={`status status-${deployment?.state ?? session?.state}`}>{deployment ? humanize(deployment.state) : humanize(session?.state ?? 'collecting_information')}</span></header>
-    {error && <div className="alert error global-alert" role="alert">{error}</div>}
-    <AgentActivityStrip activity={agentActivity} busy={busy} />
+    {error && <div className="alert error global-alert" role="alert"><strong>{error.operation} failed</strong><span>{error.message}</span>{error.retryable && <small>You can safely try again; the last successful preview remains available.</small>}</div>}
+    <AgentActivityStrip activity={agentActivity} busy={busy} connection={activityConnection} />
     <div className="workspace">
       <section className="chat-panel" aria-label="Onboarding conversation">
         <div className="panel-heading"><span className="eyebrow">Conversation</span><h2>Build with your onboarding agent</h2><p>Describe outcomes in plain language. Every accepted change appears in the preview.</p></div>
@@ -125,7 +145,7 @@ export function App() {
   </main>;
 }
 
-function Landing({ busy, error, onSubmit }: { busy: boolean; error: string; onSubmit: (event: FormEvent<HTMLFormElement>) => void }) {
+function Landing({ busy, error, onSubmit }: { busy: boolean; error?: OperationError; onSubmit: (event: FormEvent<HTMLFormElement>) => void }) {
   const [started, setStarted] = useState(false);
   const [step, setStep] = useState(0);
   const [name, setName] = useState('City of Vista');
@@ -146,7 +166,7 @@ function Landing({ busy, error, onSubmit }: { busy: boolean; error: string; onSu
   const steps = ['Business type', 'Business details', 'Brand details', 'Review'];
   return <main className="wizard-page"><div className="wordmark">InvoiceCloud</div><form className="wizard-card" onSubmit={onSubmit}>
     <div className="wizard-progress"><div><span style={{ width: `${((step + 1) / steps.length) * 100}%` }}/></div><ol>{steps.map((label, index) => <li className={index <= step ? 'active' : ''} key={label}>{label}</li>)}</ol></div>
-    {error && <div className="alert error" role="alert">{error}</div>}
+    {error && <div className="alert error" role="alert"><strong>{error.operation} failed</strong><span>{error.message}</span>{error.retryable && <small>Please try again.</small>}</div>}
     {step === 0 && <section><h1>What line of business is this for?</h1><p>We’ll tailor terminology, recommendations, and the payer preview to your business.</p><div className="choice-list">{['Utility','Property Tax','Insurance','General Invoice'].map(value => <button type="button" className={billType === value ? 'selected' : ''} onClick={() => setBillType(value)} key={value}><strong>{value}</strong><small>{value === 'Utility' ? 'Water, electric, gas, or municipal services' : value === 'Property Tax' ? 'Local tax and assessment payments' : value === 'Insurance' ? 'Premiums and policyholder billing' : 'Flexible invoice and account payments'}</small></button>)}</div></section>}
     {step === 1 && <section><h1>Tell us about the business</h1><p>This becomes the identity and URL of the generated experience.</p><label>Business name<input value={name} onChange={event => { setName(event.target.value); setSlugValue(slug(event.target.value)); }} autoFocus /></label><div className="field-row"><label>URL slug<input value={slugValue} onChange={event => setSlugValue(event.target.value)} pattern="[a-z0-9-]{3,63}" /></label><label>Postal code<input value={postalCode} onChange={event => setPostalCode(event.target.value)} inputMode="numeric" pattern="[0-9]{5}" /></label></div></section>}
     {step === 2 && <section><h1>Brand details</h1><p>Share a website and the design agent will use it as context for the branded preview.</p><label>Website <span>(optional)</span><input value={website} onChange={event => setWebsite(event.target.value)} type="url" placeholder="https://example.gov" autoFocus /></label><div className="smart-defaults"><strong>No website yet?</strong><span>Leave this blank and the agents will begin with accessible InvoiceCloud design-system defaults. You can refine colors, type, and content in Studio.</span></div></section>}
@@ -156,11 +176,20 @@ function Landing({ busy, error, onSubmit }: { busy: boolean; error: string; onSu
   </form></main>;
 }
 
-function AgentActivityStrip({ activity, busy }: { activity: AgentActivity[]; busy: boolean }) { const latest = [...activity].reverse().filter((item, index, all) => all.findIndex(candidate => candidate.agent_id === item.agent_id) === index).reverse(); return <section className="agent-strip" aria-live="polite"><div className="agent-title"><span className={`agent-pulse ${busy ? 'active' : ''}`} /><strong>{busy ? 'Agents working' : 'Agent activity'}</strong></div><div className="agent-list">{latest.length === 0 ? <span className="agent-empty">Research, Design, Accessibility, and Compliance are ready</span> : latest.map(item => <span className={`agent-chip ${item.status}`} key={item.agent_id}><i>{item.status === 'completed' ? '✓' : item.status === 'failed' ? '!' : '•'}</i><span><strong>{item.display_name}</strong><small>{item.summary}</small></span></span>)}</div></section>; }
+function AgentActivityStrip({ activity, busy, connection }: { activity: AgentActivity[]; busy: boolean; connection: 'idle'|'connecting'|'connected'|'disconnected' }) {
+  const latest = [...activity].reverse().filter((item, index, all) => all.findIndex(candidate => candidate.agent_id === item.agent_id) === index).reverse();
+  return <section className={`agent-strip ${busy ? 'analyzing' : ''}`} aria-live="polite">
+    <div className="agent-title"><span className={`agent-pulse ${busy ? 'active' : ''}`} /><span><strong>{busy ? 'Building your preview…' : 'Foundry agent activity'}</strong><small>{busy ? 'Orchestration is delegating work to the eligible agents below.' : 'The last known state remains visible.'}</small></span>{connection !== 'idle' && <small className={`stream-${connection}`}>{connection === 'disconnected' ? 'Updates disconnected' : `Updates ${connection}`}</small>}</div>
+    <div className="agent-list">{latest.length === 0 ? <span className="agent-empty">Waiting for orchestration to discover eligible Foundry agents.</span> : latest.map(item => <article className={`agent-chip ${item.status}`} key={item.agent_id}><i>{activityIcon(item.status)}</i><span><strong>{item.display_name}</strong><code title={item.agent_id}>{shortAgentId(item.agent_id)}</code><small>{item.summary}</small>{item.duration_ms !== undefined && <em>{Math.round(item.duration_ms)} ms</em>}</span></article>)}</div>
+  </section>;
+}
 
 function OrchestrationOutput({ activity, busy }: { activity: AgentActivity[]; busy: boolean }) {
-  return <details className="orchestration-output" open={busy || activity.length > 0}><summary><span><i className={busy ? 'running' : ''}/><strong>Agent orchestration output</strong></span><small>{activity.length ? `${activity.length} events` : 'Ready'}</small></summary><div className="orchestration-events">{activity.length === 0 ? <p>Agent decisions, status changes, and trace IDs will appear here as the experience is generated.</p> : activity.map(item => <article className={item.status} key={item.event_id}><i>{item.status === 'completed' ? '✓' : item.status === 'failed' ? '!' : '•'}</i><span><strong>{item.display_name}</strong><p>{item.summary}</p><small>{humanize(item.status)} · {new Date(item.occurred_at).toLocaleTimeString()}{item.trace_id ? ` · trace ${item.trace_id}` : ''}</small></span></article>)}</div></details>;
+  return <details className="orchestration-output" open={busy || activity.length > 0}><summary><span><i className={busy ? 'running' : ''}/><strong>Agent orchestration output</strong></span><small>{activity.length ? `${activity.length} events` : 'Ready'}</small></summary><div className="orchestration-events">{activity.length === 0 ? <p>Agent discovery, delegation, tool status, and trace IDs will appear here as the experience is generated.</p> : activity.map(item => <article className={item.status} key={item.event_id}><i>{activityIcon(item.status)}</i><span><strong>{item.display_name} <code>{shortAgentId(item.agent_id)}</code></strong><p>{item.summary}</p><small>{humanize(item.status)} · {new Date(item.occurred_at).toLocaleTimeString()}{item.duration_ms !== undefined ? ` · ${Math.round(item.duration_ms)} ms` : ''}{item.error_code ? ` · ${item.error_code}` : ''}{item.trace_id ? ` · trace ${item.trace_id}` : ''}</small></span></article>)}</div></details>;
 }
+
+function activityIcon(status: AgentActivity['status']) { return status === 'completed' ? '✓' : status === 'failed' || status === 'degraded' ? '!' : status === 'discovered' ? '⌕' : '•'; }
+function shortAgentId(id: string) { return id.length > 20 ? `${id.slice(0, 8)}…${id.slice(-6)}` : id; }
 
 function PreferenceReview({ preferences, capabilities, busy, onChange }: { preferences: ExperiencePreferences; capabilities: string[]; busy: boolean; onChange: (next: ExperiencePreferences) => void }) {
   const rows = [
@@ -201,7 +230,6 @@ function snake(value: string) { return value.toLowerCase().replaceAll(' ', '_');
 function slug(value: string) { return value.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/(^-|-$)/g, ''); }
 function initials(value: string) { return value.split(' ').map(word => word[0]).slice(0, 2).join(''); }
 function humanize(value: string) { return value.replaceAll('_', ' ').replace(/\b\w/g, match => match.toUpperCase()); }
-function toMessage(error: unknown) { return error instanceof Error ? error.message : 'The request failed.'; }
 function delay(milliseconds: number) { return new Promise(resolve => window.setTimeout(resolve, milliseconds)); }
 function parseEnum(value: string): ExperiencePreferences['reminder_channel'] { return Number(value); }
 function money(cents: number) { return new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' }).format(cents / 100); }

@@ -1,4 +1,5 @@
 using IC.BillerExperience.Contracts.V1.Billers;
+using IC.BillerExperience.Contracts.V1.AgentContext;
 using IC.BillerExperience.Contracts.V1.Experiences;
 using IC.BillerExperience.Contracts.V1.Onboarding;
 using Newtonsoft.Json;
@@ -51,4 +52,15 @@ public sealed record DeploymentRecord(
     [property: JsonProperty("published_url")] Uri? PublishedUrl = null,
     [property: JsonProperty("failure_code")] string? FailureCode = null,
     [property: JsonProperty("failure_message")] string? FailureMessage = null,
+    [property: JsonIgnore] string? ETag = null);
+
+public sealed record AgentContextRecord(
+    [property: JsonProperty("id")] string Id,
+    [property: JsonProperty("biller_id")] string BillerId,
+    [property: JsonProperty("run_id")] string RunId,
+    [property: JsonProperty("document_type")] string DocumentType,
+    [property: JsonProperty("version")] long Version,
+    [property: JsonProperty("goal")] string Goal,
+    [property: JsonProperty("entries")] IReadOnlyList<AgentContextEntry> Entries,
+    [property: JsonProperty("updated_at")] DateTimeOffset UpdatedAt,
     [property: JsonIgnore] string? ETag = null);

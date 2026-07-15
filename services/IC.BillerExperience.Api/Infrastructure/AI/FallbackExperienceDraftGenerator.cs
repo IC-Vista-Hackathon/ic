@@ -1,5 +1,6 @@
 using IC.BillerExperience.Api.Domain;
 using IC.BillerExperience.Contracts.V1.Onboarding;
+using IC.BillerExperience.Contracts.V1.Research;
 
 namespace IC.BillerExperience.Api.Infrastructure.AI;
 
@@ -14,11 +15,12 @@ public sealed partial class FallbackExperienceDraftGenerator(
         BillerRecord biller,
         ExperienceRecord current,
         IReadOnlyList<OnboardingChatMessage> messages,
+        BillerResearchResponse research,
         CancellationToken cancellationToken)
     {
         try
         {
-            return await primary.GenerateAsync(biller, current, messages, cancellationToken);
+            return await primary.GenerateAsync(biller, current, messages, research, cancellationToken);
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
@@ -27,7 +29,7 @@ public sealed partial class FallbackExperienceDraftGenerator(
         catch (Exception exception)
         {
             LogFallback(logger, biller.Id, exception);
-            return await fallback.GenerateAsync(biller, current, messages, cancellationToken);
+            return await fallback.GenerateAsync(biller, current, messages, research, cancellationToken);
         }
     }
 

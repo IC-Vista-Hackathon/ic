@@ -26,7 +26,7 @@ export interface ExperiencePreferences {
   recommendation_rationale?: Record<string, string>;
 }
 export type PreviewScenario = 'payment' | 'history' | 'communication' | 'complex';
-export interface AgentActivity { event_id: string; sequence: number; run_id: string; agent_id: string; display_name: string; status: 'queued'|'running'|'completed'|'needs_input'|'failed'; summary: string; occurred_at: string; trace_id?: string }
+export interface AgentActivity { event_id: string; sequence: number; run_id: string; agent_id: string; display_name: string; status: 'discovered'|'queued'|'running'|'completed'|'needs_input'|'failed'|'retrying'|'degraded'; summary: string; occurred_at: string; trace_id?: string; error_code?: string; retryable?: boolean; attempt?: number; duration_ms?: number }
 
 export interface ExperienceRevision {
   biller_id: string;

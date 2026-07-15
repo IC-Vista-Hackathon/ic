@@ -51,7 +51,7 @@ spec:
             - { name: Publication__DatabaseName, value: ic }
             - { name: Publication__StorageEndpoint, value: "https://stichackjk4zmntatjem4.blob.core.windows.net/" }
             - { name: Publication__ContainerName, value: payer-experiences }
-            - { name: Publication__PublicBaseUrl, value: "http://ic-hack.eastus2.cloudapp.azure.com/" }
+            - { name: Publication__PublicBaseUrl, value: "http://pronto.eastus2.cloudapp.azure.com/" }
             # Resolved from Azure and substituted by the deploy workflow (envsubst); empty
             # locally, in which case the service simply does not export to Azure Monitor.
             - { name: APPLICATIONINSIGHTS_CONNECTION_STRING, value: "${APPLICATIONINSIGHTS_CONNECTION_STRING}" }

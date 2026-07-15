@@ -151,7 +151,7 @@ no cost, no propagation delay.
 Resulting hostname:
 
 ```
-ic-hack.eastus2.cloudapp.azure.com   ->  20.96.210.8
+pronto.eastus2.cloudapp.azure.com   ->  20.96.210.8
 ```
 
 Verified two ways:
@@ -159,9 +159,9 @@ Verified two ways:
 ```bash
 az network public-ip list -g MC_rg-ic-hack_aks-ic-hack_eastus2 \
   --query "[].{name:name, ip:ipAddress, fqdn:dnsSettings.fqdn}" -o table
-# kubernetes-a31175a886f9c42f1a7c997a7fa2f750  20.96.210.8  ic-hack.eastus2.cloudapp.azure.com
+# kubernetes-a31175a886f9c42f1a7c997a7fa2f750  20.96.210.8  pronto.eastus2.cloudapp.azure.com
 
-curl -i http://ic-hack.eastus2.cloudapp.azure.com/
+curl -i http://pronto.eastus2.cloudapp.azure.com/
 # HTTP/1.1 500 Internal Server Error
 # server: envoy
 ```

@@ -1,15 +1,20 @@
 using System.Diagnostics;
 using System.Net;
 using System.Text;
+using IC.Agentic.Orchestration.Abstractions;
+using IC.Agentic.Orchestration.Execution;
 using IC.BillerExperience.Api.Application;
 using IC.BillerExperience.Api.Infrastructure;
 using IC.BillerExperience.Api.Infrastructure.AI;
 using IC.BillerExperience.Api.Infrastructure.Persistence;
+using IC.BillerExperience.Api.Infrastructure.Research;
 using IC.BillerExperience.Api.Infrastructure.SupportingServices;
 using IC.BillerExperience.Contracts.V1.Billers;
 using IC.BillerExperience.Contracts.V1.Deployments;
 using IC.BillerExperience.Contracts.V1.Experiences;
 using IC.BillerExperience.Contracts.V1.Onboarding;
+using IC.BillerExperience.Contracts.V1.Research;
+using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using Newtonsoft.Json;
 using Xunit;
@@ -118,6 +123,66 @@ public sealed class BillerOnboardingServiceTests
     }
 
     [Fact]
+    public async Task ChatRunsThroughNamedOrchestrationWorkflow()
+    {
+        var runner = new RecordingOrchestrationRunner();
+        var service = CreateService(runner: runner);
+        var created = await service.CreateAsync(CreateRequest(), CancellationToken.None);
+
+        await service.SendMessageAsync(created.Biller.BillerId, new("Ready for review"), CancellationToken.None);
+
+        Assert.Equal("biller-experience-chat-turn", runner.WorkflowName);
+        Assert.Equal(created.Biller.BillerId, runner.Context?.BillerId);
+    }
+
+    [Fact]
+    public async Task AgentFailureIsSurfacedAndRecorded()
+    {
+        var logger = new RecordingLogger<BillerOnboardingService>();
+        var service = CreateService(generator: new FailingDraftGenerator(), logger: logger);
+        var created = await service.CreateAsync(CreateRequest(), CancellationToken.None);
+
+        var exception = await Assert.ThrowsAsync<InvalidOperationException>(async () =>
+            await service.SendMessageAsync(created.Biller.BillerId, new("Trigger failure"), CancellationToken.None));
+
+        Assert.Equal("designer failed", exception.Message);
+        var (_, activity) = await service.GetSessionActivityAsync(created.Biller.BillerId, CancellationToken.None);
+        Assert.Contains(activity, item => item.AgentId == "experience-designer" && item.Status == AgentActivityStatus.Failed);
+        Assert.Contains(logger.Entries, entry => entry.Level == LogLevel.Error && entry.EventId.Id == 9101);
+    }
+
+    [Fact]
+    public async Task MissingWebsitePassesExplicitSkippedResearchToDesigner()
+    {
+        var generator = new CapturingDraftGenerator();
+        var service = CreateService(generator: generator);
+        var created = await service.CreateAsync(CreateRequest() with { Website = null }, CancellationToken.None);
+
+        await service.SendMessageAsync(created.Biller.BillerId, new("Ready for review"), CancellationToken.None);
+
+        Assert.Equal(ResearchOutcome.Skipped, generator.Research?.Outcome);
+        Assert.Equal("research.website_missing", generator.Research?.ErrorCode);
+    }
+
+    [Fact]
+    public async Task OptionalResearchFailureContinuesAsVisibleDegradedResult()
+    {
+        var generator = new CapturingDraftGenerator();
+        var coordinator = new StubResearchCoordinator(new BillerResearchResponse(
+            ResearchOutcome.Failed, [], [], ["research.request_failed"], "research.request_failed", true));
+        var service = CreateService(generator: generator, researchCoordinator: coordinator);
+        var created = await service.CreateAsync(CreateRequest(), CancellationToken.None);
+
+        var response = await service.SendMessageAsync(
+            created.Biller.BillerId, new("Ready for review"), CancellationToken.None);
+
+        Assert.NotNull(response.Draft);
+        Assert.Equal(ResearchOutcome.Degraded, generator.Research?.Outcome);
+        var (_, activity) = await service.GetSessionActivityAsync(created.Biller.BillerId, CancellationToken.None);
+        Assert.Contains(activity, item => item.AgentId == "biller-research" && item.Status == AgentActivityStatus.Degraded);
+    }
+
+    [Fact]
     public async Task CreatingBillerSeedsItsInvoiceData()
     {
         var seeder = new RecordingInvoiceSeeder();
@@ -153,11 +218,17 @@ public sealed class BillerOnboardingServiceTests
         Assert.Contains("\"bill_type\":\"Utility\"", handler.RequestBody, StringComparison.Ordinal);
     }
 
-    private static BillerOnboardingService CreateService(IInvoiceSeeder? seeder = null)
+    private static BillerOnboardingService CreateService(
+        IInvoiceSeeder? seeder = null,
+        IOrchestrationRunner? runner = null,
+        IExperienceDraftGenerator? generator = null,
+        ILogger<BillerOnboardingService>? logger = null,
+        IBillerResearchCoordinator? researchCoordinator = null)
     {
         var repository = new InMemoryBillerExperienceRepository();
-        var generator = new DeterministicExperienceDraftGenerator(NullLogger<DeterministicExperienceDraftGenerator>.Instance);
-        return new(repository, generator, NullLogger<BillerOnboardingService>.Instance, seeder);
+        generator ??= new DeterministicExperienceDraftGenerator(NullLogger<DeterministicExperienceDraftGenerator>.Instance);
+        return new(repository, generator, runner ?? new OrchestrationRunner(),
+            logger ?? NullLogger<BillerOnboardingService>.Instance, researchCoordinator, seeder);
     }
 
     private static CreateBillerRequest CreateRequest() =>
@@ -193,5 +264,73 @@ public sealed class BillerOnboardingServiceTests
                     "application/json"),
             };
         }
+    }
+
+    private sealed class RecordingOrchestrationRunner : IOrchestrationRunner
+    {
+        public string? WorkflowName { get; private set; }
+        public OrchestrationContext? Context { get; private set; }
+
+        public ValueTask<TOutput> RunAsync<TInput, TOutput>(
+            IOrchestrationWorkflow<TInput, TOutput> workflow,
+            TInput input,
+            OrchestrationContext context,
+            CancellationToken cancellationToken = default)
+        {
+            WorkflowName = workflow.Name;
+            Context = context;
+            return workflow.ExecuteAsync(input, context, cancellationToken);
+        }
+    }
+
+    private sealed class FailingDraftGenerator : IExperienceDraftGenerator
+    {
+        public string Provider => "failing-test";
+
+        public ValueTask<DraftGenerationResult> GenerateAsync(
+            IC.BillerExperience.Api.Domain.BillerRecord biller,
+            IC.BillerExperience.Api.Domain.ExperienceRecord current,
+            IReadOnlyList<OnboardingChatMessage> messages,
+            BillerResearchResponse research,
+            CancellationToken cancellationToken) =>
+            ValueTask.FromException<DraftGenerationResult>(new InvalidOperationException("designer failed"));
+    }
+
+    private sealed class CapturingDraftGenerator : IExperienceDraftGenerator
+    {
+        private readonly DeterministicExperienceDraftGenerator inner =
+            new(NullLogger<DeterministicExperienceDraftGenerator>.Instance);
+
+        public string Provider => inner.Provider;
+        public BillerResearchResponse? Research { get; private set; }
+
+        public ValueTask<DraftGenerationResult> GenerateAsync(
+            IC.BillerExperience.Api.Domain.BillerRecord biller,
+            IC.BillerExperience.Api.Domain.ExperienceRecord current,
+            IReadOnlyList<OnboardingChatMessage> messages,
+            BillerResearchResponse research,
+            CancellationToken cancellationToken)
+        {
+            Research = research;
+            return inner.GenerateAsync(biller, current, messages, research, cancellationToken);
+        }
+    }
+
+    private sealed class StubResearchCoordinator(BillerResearchResponse response) : IBillerResearchCoordinator
+    {
+        public Task<BillerResearchResponse> ResearchAsync(
+            BillerResearchRequest request,
+            ResearchExecutionContext? executionContext = null,
+            CancellationToken cancellationToken = default) => Task.FromResult(response);
+    }
+
+    private sealed class RecordingLogger<T> : ILogger<T>
+    {
+        public List<(LogLevel Level, EventId EventId)> Entries { get; } = [];
+
+        public IDisposable? BeginScope<TState>(TState state) where TState : notnull => null;
+        public bool IsEnabled(LogLevel logLevel) => true;
+        public void Log<TState>(LogLevel logLevel, EventId eventId, TState state, Exception? exception,
+            Func<TState, Exception?, string> formatter) => Entries.Add((logLevel, eventId));
     }
 }

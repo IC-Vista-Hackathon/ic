@@ -1,5 +1,6 @@
 import type { Bootstrap, ChatResponse, Deployment, ExperienceDefinition, ExperienceRevision, PreviewInvoice } from './types';
 import { logError, logEvent, newTrace } from './telemetry';
+import { fetchWithTimeout, requestError } from './http';
 
 const baseUrl = import.meta.env.VITE_API_URL ?? (import.meta.env.PROD ? '/api' : 'http://localhost:5000');
 const supportingServicesBaseUrl = import.meta.env.VITE_SUPPORTING_SERVICES_URL ?? '';
@@ -9,13 +10,12 @@ async function request<T>(path: string, init?: RequestInit, billerId?: string): 
   const trace = newTrace();
   const started = performance.now();
   try {
-    const response = await fetch(`${baseUrl}${path}`, {
+    const response = await fetchWithTimeout(`${baseUrl}${path}`, {
       ...init,
       headers: { 'content-type': 'application/json', 'x-correlation-id': trace.correlationId, traceparent: trace.traceparent, ...(billerId ? { 'x-ic-biller-id': billerId } : {}), ...init?.headers },
     });
     if (!response.ok) {
-      const problem = await response.json().catch(() => ({}));
-      throw new Error(problem.detail ?? `Request failed with ${response.status}`);
+      throw await requestError(response, `Request failed with ${response.status}.`);
     }
     logEvent('studio.api.completed', { path, method: init?.method ?? 'GET', duration_ms: Math.round(performance.now() - started), correlation_id: trace.correlationId });
     return await response.json() as T;
@@ -44,7 +44,14 @@ export const api = {
 
 async function supportingRequest<T>(path: string, billerId: string): Promise<T> {
   const trace = newTrace();
-  const response = await fetch(`${supportingServicesBaseUrl}${path}`, { headers: { 'x-correlation-id': trace.correlationId, traceparent: trace.traceparent, 'x-ic-biller-id': billerId } });
-  if (!response.ok) throw new Error(`Supporting service request failed with ${response.status}.`);
-  return response.json() as Promise<T>;
+  const started = performance.now();
+  try {
+    const response = await fetchWithTimeout(`${supportingServicesBaseUrl}${path}`, { headers: { 'x-correlation-id': trace.correlationId, traceparent: trace.traceparent, 'x-ic-biller-id': billerId } });
+    if (!response.ok) throw await requestError(response, `Supporting service request failed with ${response.status}.`);
+    logEvent('studio.supporting_api.completed', { path, duration_ms: Math.round(performance.now() - started), correlation_id: trace.correlationId });
+    return await response.json() as T;
+  } catch (error) {
+    logError('studio.supporting_api.failed', error, { path, biller_id: billerId, duration_ms: Math.round(performance.now() - started), correlation_id: trace.correlationId });
+    throw error;
+  }
 }

@@ -14,5 +14,6 @@ export function logEvent(name: string, fields: Record<string, unknown> = {}): vo
 
 export function logError(name: string, error: unknown, fields: Record<string, unknown> = {}): void {
   const message = error instanceof Error ? error.message : String(error);
-  console.error(JSON.stringify({ level: 'error', event: name, timestamp: new Date().toISOString(), message, ...fields }));
+  const details = error && typeof error === 'object' ? error as Record<string, unknown> : {};
+  console.error(JSON.stringify({ level: 'error', event: name, timestamp: new Date().toISOString(), message, error_type: error instanceof Error ? error.name : typeof error, error_code: details.code, http_status: details.status, correlation_id: details.correlationId ?? fields.correlation_id, retryable: details.retryable, ...fields }));
 }

@@ -1,6 +1,7 @@
 import { FormEvent, useEffect, useMemo, useState } from 'react';
 import { ServicePaymentExperienceProvider } from './provider';
 import { logError, logEvent, observed } from './telemetry';
+import { errorMessage, fetchWithTimeout, requestError } from './http';
 import type { ExperienceDefinition, ExperiencePreferences, Invoice, PayerProfile, PaymentHistory, PaymentReceipt } from './types';
 
 type Step = 'lookup' | 'method' | 'review' | 'complete';
@@ -8,6 +9,8 @@ type Page = 'payment' | 'history' | 'preferences';
 
 export function App() {
   const [config, setConfig] = useState<ExperienceDefinition>();
+  const [configState, setConfigState] = useState<'loading'|'ready'|'error'>('loading');
+  const [configAttempt, setConfigAttempt] = useState(0);
   const [invoice, setInvoice] = useState<Invoice>();
   const [invoices, setInvoices] = useState<Invoice[]>([]);
   const [payer, setPayer] = useState<PayerProfile>();
@@ -24,12 +27,13 @@ export function App() {
   const [payerEmail, setPayerEmail] = useState('');
 
   useEffect(() => {
+    setConfigState('loading'); setError('');
     const slug = billerSlug(); const configUrl = import.meta.env.VITE_CONFIG_URL ?? `/api/public/experiences/${encodeURIComponent(slug)}`;
     const manifest = document.querySelector<HTMLLinkElement>('#experience-manifest'); if (manifest) manifest.href = `/api/public/experiences/${encodeURIComponent(slug)}/manifest.webmanifest`;
-    observed('pwa.config.load', async () => { const response = await fetch(configUrl, { cache: 'no-store' }); if (!response.ok) throw new Error('Experience configuration is unavailable.'); return response.json() as Promise<ExperienceDefinition>; })
-      .then(value => { setConfig(value); document.title = value.pwa.name; document.documentElement.style.setProperty('--brand', value.brand.primary_color); document.documentElement.style.setProperty('--brand-secondary', value.brand.secondary_color); if (value.brand.font_family) document.documentElement.style.setProperty('--brand-font', value.brand.font_family); })
-      .catch(caught => { setError(toMessage(caught)); logError('pwa.config.failed', caught, { biller_slug: slug }); });
-  }, []);
+    observed('pwa.config.load', async () => { const response = await fetchWithTimeout(configUrl, { cache: 'no-store' }); if (!response.ok) throw await requestError(response, 'Experience configuration is unavailable.'); return validateConfig(await response.json()); })
+      .then(value => { setConfig(value); setConfigState('ready'); document.title = value.pwa.name; document.documentElement.style.setProperty('--brand', value.brand.primary_color); document.documentElement.style.setProperty('--brand-secondary', value.brand.secondary_color); if (value.brand.font_family) document.documentElement.style.setProperty('--brand-font', value.brand.font_family); })
+      .catch(caught => { setConfigState('error'); setError(`Load payment experience: ${errorMessage(caught)}`); logError('pwa.config.failed', caught, { biller_slug: slug }); });
+  }, [configAttempt]);
 
   const preferences = useMemo(() => experiencePreferences(config), [config]);
   const feeHandling = preferences.fee_handling;
@@ -41,12 +45,12 @@ export function App() {
 
   useEffect(() => { if (!acceptedMethods.includes(method)) setMethod(acceptedMethods.includes('ach') ? 'ach' : 'card'); }, [acceptedMethods, method]);
 
-  async function lookup(event: FormEvent<HTMLFormElement>) { event.preventDefault(); if (!provider) return; setBusy(true); setError(''); try { const data = new FormData(event.currentTarget); const account = String(data.get('account')); const loaded = await provider.getInvoices(account); const current = loaded.find(item => item.status !== 'paid'); if (!current) throw new Error('No open bill was found for that account.'); setInvoices(loaded); setInvoice(current); const profile = await provider.findPayer(account); setPayer(profile); if (profile) { setAutoPay(profile.preferences.autopay); setPaperless(profile.preferences.paperless); setPayerName(profile.name); setPayerEmail(profile.email); setPayments(await provider.getPayments(profile.payer_id)); } setStep('method'); } catch (caught) { setError(toMessage(caught)); logError('pwa.invoice.lookup_failed', caught); } finally { setBusy(false); } }
-  async function pay() { if (!invoice || !provider) return; setBusy(true); setError(''); try { const completed = await provider.pay({ invoiceId: invoice.id, method, autoPay, paperless, scheduledFor: schedulesPayment ? invoice.dueDate : undefined, payerName, payerEmail, accountNumber: invoice.accountNumber }); setReceipt(completed); if (completed.payerAccountId) { const profile = await provider.findPayer(invoice.accountNumber); setPayer(profile); if (profile) setPayments(await provider.getPayments(profile.payer_id)); } setStep('complete'); logEvent('pwa.payment.completed', { method, scheduled: schedulesPayment, autopay_opt_in: autoPay, paperless_opt_in: paperless }); } catch (caught) { setError(toMessage(caught)); logError('pwa.payment.failed', caught, { method, scheduled: schedulesPayment }); } finally { setBusy(false); } }
-  async function savePreferences() { if (!provider || !payer) return; setBusy(true); setError(''); try { const updated = await provider.updatePreferences(payer.payer_id, { ...payer.preferences, autopay: autoPay, paperless, channels: payer.preferences.channels.length ? payer.preferences.channels : ['email'], payment_day: autoPay ? (payer.preferences.payment_day ?? 15) : payer.preferences.payment_day }); setPayer({ ...payer, preferences: updated }); logEvent('pwa.preferences.saved', { payer_id: payer.payer_id }); } catch (caught) { setError(toMessage(caught)); logError('pwa.preferences.save_failed', caught); } finally { setBusy(false); } }
-  function navigate(next: Page) { setPage(next); setError(''); }
+  async function lookup(event: FormEvent<HTMLFormElement>) { event.preventDefault(); if (!provider) return; setBusy(true); setError(''); try { const data = new FormData(event.currentTarget); const account = String(data.get('account')); const loaded = await provider.getInvoices(account); const current = loaded.find(item => item.status !== 'paid'); if (!current) throw new Error('No open bill was found for that account.'); setInvoices(loaded); setInvoice(current); const profile = await provider.findPayer(account); setPayer(profile); if (profile) { setAutoPay(profile.preferences.autopay); setPaperless(profile.preferences.paperless); setPayerName(profile.name); setPayerEmail(profile.email); setPayments(await provider.getPayments(profile.payer_id)); } setStep('method'); } catch (caught) { setError(`Find bill: ${errorMessage(caught)}`); logError('pwa.invoice.lookup_failed', caught); } finally { setBusy(false); } }
+  async function pay() { if (!invoice || !provider) return; setBusy(true); setError(''); try { const completed = await provider.pay({ invoiceId: invoice.id, method, autoPay, paperless, scheduledFor: schedulesPayment ? invoice.dueDate : undefined, payerName, payerEmail, accountNumber: invoice.accountNumber }); setReceipt(completed); if (completed.payerAccountId) { const profile = await provider.findPayer(invoice.accountNumber); setPayer(profile); if (profile) setPayments(await provider.getPayments(profile.payer_id)); } setStep('complete'); logEvent('pwa.payment.completed', { method, scheduled: schedulesPayment, autopay_opt_in: autoPay, paperless_opt_in: paperless }); } catch (caught) { setError(`Submit payment: ${errorMessage(caught)}`); logError('pwa.payment.failed', caught, { method, scheduled: schedulesPayment }); } finally { setBusy(false); } }
+  async function savePreferences() { if (!provider || !payer) return; setBusy(true); setError(''); try { const updated = await provider.updatePreferences(payer.payer_id, { ...payer.preferences, autopay: autoPay, paperless, channels: payer.preferences.channels.length ? payer.preferences.channels : ['email'], payment_day: autoPay ? (payer.preferences.payment_day ?? 15) : payer.preferences.payment_day }); setPayer({ ...payer, preferences: updated }); logEvent('pwa.preferences.saved', { payer_id: payer.payer_id }); } catch (caught) { setError(`Save preferences: ${errorMessage(caught)}`); logError('pwa.preferences.save_failed', caught); } finally { setBusy(false); } }
+  function navigate(next: Page) { setPage(next); }
 
-  if (!config) return <main className="center"><div className="card" aria-live="polite">{error || 'Loading your payment experience…'}</div></main>;
+  if (!config) return <main className="center"><div className="card config-state" aria-live="polite"><h1>{configState === 'error' ? 'Payment experience unavailable' : 'Loading payment experience'}</h1><p>{error || 'Loading your secure, branded payment page…'}</p>{configState === 'error' && <button onClick={() => setConfigAttempt(value => value + 1)}>Retry</button>}</div></main>;
   return <div className="app">
     <header style={{ background: config.brand.primary_color }}><div className="mark">{initials(config.brand.display_name)}</div><strong>{config.brand.display_name}</strong><span>Secure account services</span></header>
     <nav className="account-nav" aria-label="Account services"><button className={page === 'payment' ? 'active' : ''} onClick={() => navigate('payment')}>Pay Bill</button>{preferences.self_service_history && <button className={page === 'history' ? 'active' : ''} onClick={() => navigate('history')}>Account History</button>}{preferences.self_service_updates && <button className={page === 'preferences' ? 'active' : ''} onClick={() => navigate('preferences')}>Preferences</button>}</nav>
@@ -74,5 +78,15 @@ function reminderLabel(value: number | string) { return typeof value === 'number
 function humanize(value: string) { return value.replaceAll('_', ' ').replace(/\b\w/g, match => match.toUpperCase()); }
 function money(cents: number) { return new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' }).format(cents / 100); }
 function initials(name: string) { return name.split(' ').map(word => word[0]).slice(0, 2).join(''); }
-function toMessage(error: unknown) { return error instanceof Error ? error.message : 'The request failed.'; }
 function billerSlug() { const match = window.location.pathname.match(/^\/pay\/([^/]+)/); return match?.[1] ?? import.meta.env.VITE_BILLER_SLUG ?? 'demo'; }
+function validateConfig(value: unknown): ExperienceDefinition {
+  if (!value || typeof value !== 'object') throw new Error('The payment experience configuration is invalid.');
+  const candidate = value as Partial<ExperienceDefinition>;
+  if (!candidate.biller_id || !candidate.brand?.display_name || !candidate.brand.primary_color || !candidate.content?.heading || !candidate.pwa?.name || !Array.isArray(candidate.enabled_payment_capabilities)) {
+    throw new Error('The payment experience configuration is incomplete.');
+  }
+  if (candidate.preferences && (!Array.isArray(candidate.preferences.accepted_methods) || !candidate.preferences.preview || !Array.isArray(candidate.preferences.preview.enabled_scenarios))) {
+    throw new Error('The payment experience preferences are invalid.');
+  }
+  return candidate as ExperienceDefinition;
+}

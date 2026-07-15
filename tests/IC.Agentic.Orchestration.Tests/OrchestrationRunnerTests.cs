@@ -45,6 +45,38 @@ public sealed class OrchestrationRunnerTests
             item => Assert.Equal(OrchestrationEventStatus.Completed, item.Status));
     }
 
+    [Fact]
+    public async Task ObservableStepPublishesSafeFailureDetails()
+    {
+        var sink = new CollectingSink();
+        var step = new ObservableOrchestrationStep<string, string>(
+            "research", "Research", "Searching",
+            static (_, _, _) => ValueTask.FromException<string>(new TimeoutException("provider details")), sink);
+
+        await Assert.ThrowsAsync<TimeoutException>(async () =>
+            await step.ExecuteAsync("request", OrchestrationContext.Create(billerId: "biller-1")));
+
+        var failed = Assert.Single(sink.Events, item => item.Status == OrchestrationEventStatus.Failed);
+        Assert.Equal("research_failed", failed.ErrorCode);
+        Assert.True(failed.Retryable);
+        Assert.DoesNotContain("provider details", failed.Summary, StringComparison.Ordinal);
+        Assert.NotNull(failed.DurationMs);
+    }
+
+    [Fact]
+    public async Task FailureSinkErrorDoesNotMaskAgentError()
+    {
+        var step = new ObservableOrchestrationStep<string, string>(
+            "designer", "Designer", "Designing",
+            static (_, _, _) => ValueTask.FromException<string>(new InvalidOperationException("root failure")),
+            new FailureEventThrowingSink());
+
+        var exception = await Assert.ThrowsAsync<InvalidOperationException>(async () =>
+            await step.ExecuteAsync("request", OrchestrationContext.Create()));
+
+        Assert.Equal("root failure", exception.Message);
+    }
+
     private sealed class CollectingSink : IOrchestrationEventSink
     {
         public List<OrchestrationEvent> Events { get; } = [];
@@ -53,6 +85,14 @@ public sealed class OrchestrationRunnerTests
             Events.Add(activity);
             return ValueTask.CompletedTask;
         }
+    }
+
+    private sealed class FailureEventThrowingSink : IOrchestrationEventSink
+    {
+        public ValueTask PublishAsync(OrchestrationEvent activity, CancellationToken cancellationToken = default) =>
+            activity.Status == OrchestrationEventStatus.Failed
+                ? ValueTask.FromException(new IOException("sink failure"))
+                : ValueTask.CompletedTask;
     }
 
     private sealed class EchoWorkflow : IOrchestrationWorkflow<string, string>

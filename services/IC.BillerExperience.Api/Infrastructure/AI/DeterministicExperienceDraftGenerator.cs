@@ -4,6 +4,7 @@ using IC.BillerExperience.Api.Domain;
 using IC.BillerExperience.Api.Infrastructure;
 using IC.BillerExperience.Contracts.V1.Experiences;
 using IC.BillerExperience.Contracts.V1.Onboarding;
+using IC.BillerExperience.Contracts.V1.Research;
 
 namespace IC.BillerExperience.Api.Infrastructure.AI;
 
@@ -16,6 +17,7 @@ public sealed partial class DeterministicExperienceDraftGenerator(
         BillerRecord biller,
         ExperienceRecord current,
         IReadOnlyList<OnboardingChatMessage> messages,
+        BillerResearchResponse research,
         CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();

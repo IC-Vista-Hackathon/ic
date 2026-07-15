@@ -1,4 +1,5 @@
 using IC.BillerExperience.Api.Domain;
+using IC.BillerExperience.Contracts.V1.Onboarding;
 
 namespace IC.BillerExperience.Api.Infrastructure.Persistence;
 
@@ -11,6 +12,10 @@ public interface IBillerExperienceRepository
     ValueTask<ExperienceRecord> SaveExperienceAsync(ExperienceRecord experience, string? expectedETag, CancellationToken cancellationToken);
     ValueTask<OnboardingRunRecord?> GetRunAsync(string billerId, string runId, CancellationToken cancellationToken);
     ValueTask<OnboardingRunRecord> SaveRunAsync(OnboardingRunRecord run, string? expectedETag, CancellationToken cancellationToken);
+    ValueTask AppendAgentActivityAsync(string billerId, string runId, AgentActivityEvent activity, CancellationToken cancellationToken);
+    ValueTask<IReadOnlyList<AgentActivityEvent>> GetAgentActivityAsync(string billerId, string runId, CancellationToken cancellationToken);
+    ValueTask<AgentContextRecord?> GetAgentContextAsync(string billerId, string runId, CancellationToken cancellationToken);
+    ValueTask<AgentContextRecord> SaveAgentContextAsync(AgentContextRecord context, string? expectedETag, CancellationToken cancellationToken);
     ValueTask<DeploymentRecord?> GetDeploymentAsync(string billerId, string deploymentId, CancellationToken cancellationToken);
     ValueTask<DeploymentRecord> CreateDeploymentAsync(DeploymentRecord deployment, CancellationToken cancellationToken);
 }

@@ -1,7 +1,9 @@
 using System.Diagnostics;
 using System.Net;
 using IC.BillerExperience.Api.Domain;
+using IC.BillerExperience.Contracts.V1.Onboarding;
 using Microsoft.Azure.Cosmos;
+using Newtonsoft.Json;
 
 namespace IC.BillerExperience.Api.Infrastructure.Persistence;
 
@@ -108,6 +110,87 @@ public sealed partial class CosmosBillerExperienceRepository(
             }
         });
 
+    public async ValueTask AppendAgentActivityAsync(
+        string billerId,
+        string runId,
+        AgentActivityEvent activity,
+        CancellationToken cancellationToken)
+    {
+        await ObserveAsync("append", "orchestration_runs", billerId, async () =>
+        {
+            var document = new AgentActivityDocument(
+                $"activity-{runId}-{activity.EventId}", billerId, runId, "agent_activity", activity);
+            await Runs.CreateItemAsync(document, new PartitionKey(billerId), cancellationToken: cancellationToken);
+            return true;
+        });
+    }
+
+    public ValueTask<IReadOnlyList<AgentActivityEvent>> GetAgentActivityAsync(
+        string billerId,
+        string runId,
+        CancellationToken cancellationToken) =>
+        ObserveAsync<IReadOnlyList<AgentActivityEvent>>("query_activity", "orchestration_runs", billerId, async () =>
+        {
+            var query = new QueryDefinition(
+                    "SELECT c.event FROM c WHERE c.document_type = @type AND c.run_id = @runId")
+                .WithParameter("@type", "agent_activity")
+                .WithParameter("@runId", runId);
+            using var iterator = Runs.GetItemQueryIterator<AgentActivityProjection>(query, requestOptions: new QueryRequestOptions
+            {
+                PartitionKey = new PartitionKey(billerId),
+                MaxItemCount = 100
+            });
+            var events = new List<AgentActivityEvent>();
+            while (iterator.HasMoreResults)
+            {
+                var page = await iterator.ReadNextAsync(cancellationToken);
+                events.AddRange(page.Resource.Select(item => item.Event));
+            }
+            return events.OrderBy(item => item.Sequence).ThenBy(item => item.OccurredAt).TakeLast(100).ToArray();
+        });
+
+    public ValueTask<AgentContextRecord?> GetAgentContextAsync(
+        string billerId,
+        string runId,
+        CancellationToken cancellationToken) =>
+        ObserveAsync<AgentContextRecord?>("read_context", "orchestration_runs", billerId, async () =>
+        {
+            try
+            {
+                var response = await Runs.ReadItemAsync<AgentContextRecord>(
+                    $"context-{runId}",
+                    new PartitionKey(billerId),
+                    cancellationToken: cancellationToken);
+                return response.Resource with { ETag = response.ETag };
+            }
+            catch (CosmosException exception) when (exception.StatusCode == HttpStatusCode.NotFound)
+            {
+                return null;
+            }
+        });
+
+    public ValueTask<AgentContextRecord> SaveAgentContextAsync(
+        AgentContextRecord context,
+        string? expectedETag,
+        CancellationToken cancellationToken) =>
+        ObserveAsync("upsert_context", "orchestration_runs", context.BillerId, async () =>
+        {
+            try
+            {
+                var options = expectedETag is null ? null : new ItemRequestOptions { IfMatchEtag = expectedETag };
+                var response = await Runs.UpsertItemAsync(
+                    context,
+                    new PartitionKey(context.BillerId),
+                    options,
+                    cancellationToken);
+                return response.Resource with { ETag = response.ETag };
+            }
+            catch (CosmosException exception) when (exception.StatusCode == HttpStatusCode.PreconditionFailed)
+            {
+                throw new ConcurrencyException("The shared agent context was modified by another request.");
+            }
+        });
+
     public ValueTask<DeploymentRecord> CreateDeploymentAsync(DeploymentRecord deployment, CancellationToken cancellationToken) =>
         ObserveAsync("create", "deployments", deployment.BillerId, async () =>
         {
@@ -175,4 +258,14 @@ public sealed partial class CosmosBillerExperienceRepository(
         string billerId,
         string? traceId,
         Exception exception);
+
+    private sealed record AgentActivityDocument(
+        [property: JsonProperty("id")] string Id,
+        [property: JsonProperty("biller_id")] string BillerId,
+        [property: JsonProperty("run_id")] string RunId,
+        [property: JsonProperty("document_type")] string DocumentType,
+        [property: JsonProperty("event")] AgentActivityEvent Event);
+
+    private sealed record AgentActivityProjection(
+        [property: JsonProperty("event")] AgentActivityEvent Event);
 }

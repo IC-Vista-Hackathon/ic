@@ -4,7 +4,7 @@
 #
 #   ic-hack-nonprod.eastus2.cloudapp.azure.com
 #
-# Prod keeps its own Gateway (ic-hack.eastus2.cloudapp.azure.com) in kgateway-system,
+# Prod keeps its own Gateway (pronto.eastus2.cloudapp.azure.com) in kgateway-system,
 # so the two environments never share a load balancer, hostname, or route path.
 # Both Gateway and GatewayParameters live in ic-nonprod (namespaced by the overlay).
 apiVersion: gateway.kgateway.dev/v1alpha1
