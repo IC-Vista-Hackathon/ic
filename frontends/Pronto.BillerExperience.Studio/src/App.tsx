@@ -803,7 +803,8 @@ export function App() {
   const reminderChannelLabel = labelOf({ email: 'Email', text: 'Text (SMS)', both: 'Both', none: 'None' }, s.reminderChannel);
   const feeHandlingLabel = labelOf({ absorb: 'We absorb all fees', charge: 'Convenience fee charged to customers', mixed: 'Different rules per payment type', unsure: 'Not decided yet' }, s.feeHandling);
   const acceptedMethodsLabel = s.acceptedMethods.map((id) => labelOf({ ach: 'ACH', card: 'Cards', applepay: 'Apple Pay', googlepay: 'Google Pay', paypal: 'PayPal', other: 'Other' }, id)).join(', ') || 'None selected';
-  const acceptedMethodChips = [{ id: 'applepay', label: 'Apple Pay' }, { id: 'googlepay', label: 'Google Pay' }, { id: 'paypal', label: 'PayPal' }, { id: 'other', label: 'Other' }].filter((c) => s.acceptedMethods.includes(c.id));
+  const shownMethodTypeIds = new Set(methodTypesBase.map((mt) => mt.id));
+  const acceptedMethodChips = [{ id: 'applepay', label: 'Apple Pay' }, { id: 'googlepay', label: 'Google Pay' }, { id: 'paypal', label: 'PayPal' }, { id: 'other', label: 'Other' }].filter((c) => s.acceptedMethods.includes(c.id) && !shownMethodTypeIds.has(c.id as MethodType));
 
   const statements = STATEMENTS.map((st) => ({ ...st, label: `${docLabels.numberLabel} ${docLabels.numberPrefix}${st.id}`, onClick: () => viewStatement(st.id), badgeBg: st.status === 'Due' ? 'var(--invoicecloud-intent-warning-background)' : 'var(--invoicecloud-intent-success-background)', badgeColor: st.status === 'Due' ? 'var(--invoicecloud-intent-warning)' : 'var(--invoicecloud-intent-success)' }));
   const currentStatements = statements.filter((st) => st.status === 'Due');
