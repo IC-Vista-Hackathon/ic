@@ -1101,7 +1101,7 @@ export function App() {
   const livePreviewBrand = buildBrand(s);
   const livePreviewSwatches = [livePreviewBrand.primary, livePreviewBrand.secondary, livePreviewBrand.accent];
   const chatLog = CHAT_QUESTIONS.slice(0, s.chatStep).map((q, i) => ({ question: q, answer: s.chatAnswers[i], editing: s.editingChatIndex === i, onEdit: () => editChatAnswerClick(i) }));
-  const chatHasCurrentQuestion = s.chatStep < 4;
+  const chatHasCurrentQuestion = s.chatStep < 4 && s.editingChatIndex === null;
   const chatComplete = s.chatStep >= 4;
   const chatDraftEmpty = !s.chatDraft.trim();
   const chatReviewRows = CHAT_QUESTIONS.map((q, i) => ({ question: q, answer: s.chatAnswers[i] || 'Not answered', rationale: CHAT_RATIONALES[i], editing: s.editingChatIndex === i, onEdit: () => editChatAnswerClick(i) }));
