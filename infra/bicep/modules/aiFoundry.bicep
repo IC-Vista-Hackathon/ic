@@ -7,6 +7,10 @@ param workloadIdentityPrincipalId string
 param appInsightsId string
 @secure()
 param appInsightsConnectionString string
+param mcpConnectionEnabled bool = false
+param mcpServerUrl string = ''
+@secure()
+param mcpApiKey string = ''
 
 resource account 'Microsoft.CognitiveServices/accounts@2025-04-01-preview' = {
   name: name
@@ -73,6 +77,31 @@ resource appInsightsConnection 'Microsoft.CognitiveServices/accounts/projects/co
   }
 }
 
+// Shared biller/run context exposed to prompt agents as a remote MCP tool. The project
+// connection stores only the server-level demo credential. Orchestration separately issues a
+// short-lived capability token bound to the biller, run, agent, and write permission.
+resource sharedContextMcpConnection 'Microsoft.CognitiveServices/accounts/projects/connections@2026-03-01' = if (mcpConnectionEnabled) {
+  parent: project
+  name: 'ic-shared-context-mcp'
+  properties: {
+    category: 'CustomKeys'
+    target: mcpServerUrl
+    authType: 'CustomKeys'
+    isSharedToAll: false
+    credentials: {
+      keys: {
+        'X-IC-MCP-Key': mcpApiKey
+      }
+    }
+    metadata: {
+      Kind: 'RemoteMCP'
+      ServerLabel: 'ic_shared_context'
+      AllowedTools: 'get_goal_context,append_context'
+      ResponsibleAiPolicy: 'agents/RESPONSIBLE_AI.md'
+    }
+  }
+}
+
 // Lets services/agents call the AI Foundry project's inference endpoints with no API key.
 resource cognitiveServicesUserRoleAssignment 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
   name: guid(account.id, workloadIdentityPrincipalId, 'CognitiveServicesUser')
@@ -89,3 +118,18 @@ output endpoint string = account.properties.endpoint
 output projectName string = project.name
 output primaryModelDeployment string = gpt54.name
 output miniModelDeployment string = gpt54Mini.name
+output sharedContextMcpConnectionName string = mcpConnectionEnabled ? sharedContextMcpConnection.name : ''
+// Agent versions are data-plane resources. Their provisioning code consumes this exact tool
+// definition so the allowlist and approval behavior remain infrastructure-reviewed.
+output sharedContextMcpTool object = mcpConnectionEnabled ? {
+  type: 'mcp'
+  server_label: 'ic_shared_context'
+  server_url: mcpServerUrl
+  allowed_tools: [
+    'get_goal_context'
+    'append_context'
+  ]
+  // Demo mode: writes remain constrained by scoped capabilities and server-side validation.
+  require_approval: 'never'
+  project_connection_id: sharedContextMcpConnection.name
+} : {}

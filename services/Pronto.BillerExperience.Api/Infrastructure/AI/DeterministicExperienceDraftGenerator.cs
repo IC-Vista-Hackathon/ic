@@ -4,6 +4,7 @@ using Pronto.BillerExperience.Api.Domain;
 using Pronto.BillerExperience.Api.Infrastructure;
 using Pronto.BillerExperience.Contracts.V1.Experiences;
 using Pronto.BillerExperience.Contracts.V1.Onboarding;
+using Pronto.BillerExperience.Contracts.V1.Research;
 
 namespace Pronto.BillerExperience.Api.Infrastructure.AI;
 
@@ -16,6 +17,7 @@ public sealed partial class DeterministicExperienceDraftGenerator(
         BillerRecord biller,
         ExperienceRecord current,
         IReadOnlyList<OnboardingChatMessage> messages,
+        BillerResearchResponse research,
         CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();

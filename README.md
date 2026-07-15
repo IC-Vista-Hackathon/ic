@@ -81,6 +81,27 @@ content and configuration, but they may not generate executable application code
 instructions, shell commands, or raw Kubernetes manifests. Publication writes validated JSON and
 manifest artifacts; every biller uses the same reviewed PWA image.
 
+### Agents, orchestration, and shared context
+
+Agents and orchestration are deliberately separate. Research, design, accessibility, and
+compliance agents perform bounded domain work and return typed results. The
+`Pronto.Agentic.Orchestration` library discovers and delegates to agents, sequences dependencies,
+fans independent reviews out in parallel, passes results, enforces timeouts, records state and
+activity, and decides whether the goal can continue or must fail.
+
+Every agent instruction imports [`agents/RESPONSIBLE_AI.md`](agents/RESPONSIBLE_AI.md). Runtime
+guardrails repeat the policy at provider boundaries and validate cited output. Shared learning is
+biller- and run-scoped in Cosmos DB. Remote agents access it through the stateless `/mcp` endpoint
+using `get_goal_context` and `append_context`; orchestration issues a short-lived HMAC capability
+bound to the biller, run, agent, and read/write permission. The public MCP API key is a demo-level
+connection credential, not the tenant boundary. Context rejects likely secrets, payment instrument
+data, oversized entries, uncited external claims, and stale writes. Private chain-of-thought is
+never stored.
+
+HTTP MCP endpoints are supported for local and hackathon environments. Production should expose
+the endpoint over HTTPS and source both MCP secrets from Key Vault. Foundry may require HTTPS for
+its remote MCP connection even when the IC API permits HTTP.
+
 ### Capability ownership
 
 | Documented capability | Concrete project/location | Ownership |
@@ -146,15 +167,16 @@ The production workflow is typed, checkpointed, resumable, and observable:
 
 1. Create the biller and onboarding session.
 2. Collect required brand, support, legal, PWA, and payment-capability information.
-3. Detect missing or conflicting information.
-4. Produce a structured experience draft.
-5. Validate the schema, policy, accessibility, and supported payment references.
-6. Render a live preview.
-7. Wait for explicit biller approval.
-8. persist an immutable experience revision.
-9. Request publication idempotently using biller ID and revision.
-10. Write immutable versioned artifacts to private Blob Storage.
-11. Verify the artifact, atomically replace the active pointer, and mark the revision published.
+3. Discover approved Foundry research agents and fan out bounded, cited web research.
+4. Consolidate successful evidence, preserving partial failures as a degraded result.
+5. Produce a structured experience draft from biller input plus untrusted research evidence.
+6. Validate policy and accessibility concurrently, then merge findings deterministically.
+7. Render a live preview.
+8. Wait for explicit biller approval.
+9. Persist an immutable experience revision.
+10. Request publication idempotently using biller ID and revision.
+11. Write immutable versioned artifacts to private Blob Storage.
+12. Verify the artifact, atomically replace the active pointer, and mark the revision published.
 
 An API or worker restart must not lose a workflow. Every step records its checkpoint and can be
 retried without duplicating the deployment.
@@ -168,6 +190,7 @@ Contracts are versioned under `Pronto.BillerExperience.Contracts/V1` and grouped
 - `Experiences`: editable definitions, immutable revisions, approval, and publication.
 - `Deployments`: publication status and failure information.
 - `Events`: business events emitted by the onboarding and publication processes.
+- `Research`: cited facts, sources, warnings, and completed/degraded/failed outcomes.
 
 `BillerExperienceDefinition` is the contract between agent-assisted onboarding, preview, storage,
 and the customer PWA. It contains a schema version, brand tokens, content, PWA configuration,
@@ -193,6 +216,13 @@ small, typed seams:
 The biller workflow is deterministic. Models help interpret and synthesize; normal code validates,
 authorizes, persists, deploys, and verifies.
 
+The Research Coordinator uses these same orchestration seams. It discovers persisted Foundry
+agents at request time, requires approval/capability metadata, applies an optional ID allowlist,
+fans out with bounded concurrency and per-agent timeouts, and consolidates cited results through a
+configured coordinator agent. Without a configured coordinator, successful worker results are
+merged deterministically. Individual agent failures are logged and surfaced as a degraded workflow
+event rather than making the Studio silently lose the page.
+
 ## Persistence
 
 Azure Cosmos DB for NoSQL is the store defined by the original design. Biller Experience follows
@@ -203,7 +233,7 @@ the existing entity-container model and adds a separate container only for orche
 | `billers` | `/id` | tenant-root `BillerAccount` documents |
 | `configs` | `/biller_id` | versioned biller experience configuration |
 | `deployments` | `/biller_id` | published deployment records (target: includes the blob container/prefix a revision was published to, for shared-tier billers) |
-| `orchestration_runs` | `/biller_id` | sessions, checkpoints, sanitized interactions, publish jobs |
+| `orchestration_runs` | `/biller_id` | sessions, checkpoints, sanitized interactions, append-only agent activity, publish jobs |
 
 Invoice, payment, purchase, payer-account, and notification containers remain owned by their
 supporting services exactly as described in [`design/entities.md`](design/entities.md).

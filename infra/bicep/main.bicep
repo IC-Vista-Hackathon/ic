@@ -13,6 +13,10 @@ param publisherServiceAccountName string = 'biller-publisher'
 param aksNodeCountMin int = 2
 param aksNodeCountMax int = 4
 param aksVmSize string = 'Standard_D2s_v3'
+param mcpConnectionEnabled bool = false
+param mcpServerUrl string = 'http://pronto.eastus2.cloudapp.azure.com/api/mcp'
+@secure()
+param mcpApiKey string = ''
 
 // Optional service principals granted Blob access in addition to the dedicated publisher writer
 // and API workload reader identities below.
@@ -114,6 +118,9 @@ module aiFoundry 'modules/aiFoundry.bicep' = {
     workloadIdentityPrincipalId: workloadIdentity.outputs.principalId
     appInsightsId: appInsights.outputs.id
     appInsightsConnectionString: appInsights.outputs.connectionString
+    mcpConnectionEnabled: mcpConnectionEnabled
+    mcpServerUrl: mcpServerUrl
+    mcpApiKey: mcpApiKey
   }
 }
 
@@ -183,3 +190,5 @@ output publisherIdentityClientId string = publisherIdentity.outputs.clientId
 output appInsightsConnectionString string = appInsights.outputs.connectionString
 output monitorWorkspaceId string = monitorWorkspace.outputs.id
 output grafanaEndpoint string = grafana.outputs.endpoint
+output sharedContextMcpConnectionName string = aiFoundry.outputs.sharedContextMcpConnectionName
+output sharedContextMcpTool object = aiFoundry.outputs.sharedContextMcpTool

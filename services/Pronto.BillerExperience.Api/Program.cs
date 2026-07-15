@@ -1,6 +1,7 @@
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using Azure.AI.OpenAI;
+using Azure.Core;
 using Azure.Identity;
 using Azure.Monitor.OpenTelemetry.AspNetCore;
 using Azure.Storage.Blobs;
@@ -10,7 +11,9 @@ using Pronto.BillerExperience.Api.Configuration;
 using Pronto.BillerExperience.Api.Infrastructure;
 using Pronto.BillerExperience.Api.Infrastructure.AI;
 using Pronto.BillerExperience.Api.Infrastructure.Persistence;
+using Pronto.BillerExperience.Api.Infrastructure.Mcp;
 using Pronto.BillerExperience.Api.Infrastructure.Publication;
+using Pronto.BillerExperience.Api.Infrastructure.Research;
 using Pronto.BillerExperience.Api.Infrastructure.SupportingServices;
 using Pronto.Agentic.Orchestration.Abstractions;
 using Pronto.Agentic.Orchestration.Execution;
@@ -38,7 +41,47 @@ builder.Services.Configure<BillerExperienceOptions>(builder.Configuration.GetSec
 builder.Services.Configure<MaintenanceOptions>(builder.Configuration.GetSection(MaintenanceOptions.SectionName));
 builder.Services.AddSingleton<IOrchestrationRunner, OrchestrationRunner>();
 builder.Services.AddSingleton<BillerOnboardingService>();
+builder.Services.AddSingleton<AgentContextService>();
+builder.Services.AddSingleton(TimeProvider.System);
+builder.Services.AddSingleton<AgentContextCapabilityService>();
+builder.Services.AddSingleton<IAgentContextCapabilityIssuer>(services =>
+    services.GetRequiredService<AgentContextCapabilityService>());
+builder.Services.AddMcpServer()
+    .WithHttpTransport(transport => transport.Stateless = true)
+    .WithTools<AgentContextMcpTools>();
 builder.Services.AddSingleton<DeterministicExperienceDraftGenerator>();
+builder.Services.AddSingleton<IDestinationAddressResolver, SystemDestinationAddressResolver>();
+builder.Services.AddHttpClient<IBillerWebsiteResearcher, HttpBillerWebsiteResearcher>(client =>
+    client.Timeout = Timeout.InfiniteTimeSpan)
+    .ConfigurePrimaryHttpMessageHandler(ResearchHttpHandler.Create);
+if (!string.IsNullOrWhiteSpace(options.Research.FoundryProjectEndpoint))
+{
+    builder.Services.AddSingleton<TokenCredential>(_ => new DefaultAzureCredential());
+    builder.Services.AddSingleton<IFoundryAgentServiceGateway, FoundryAgentServiceGateway>();
+    builder.Services.AddSingleton<FoundryResearchAgentAdapter>();
+    builder.Services.AddSingleton<IResearchAgentCatalog>(services => services.GetRequiredService<FoundryResearchAgentAdapter>());
+    builder.Services.AddSingleton<IResearchAgentDispatcher>(services => services.GetRequiredService<FoundryResearchAgentAdapter>());
+    builder.Services.AddSingleton<IBillerResearchCoordinator>(services => new BillerResearchCoordinator(
+        services.GetRequiredService<IResearchAgentCatalog>(),
+        services.GetRequiredService<IResearchAgentDispatcher>(),
+        services.GetRequiredService<Microsoft.Extensions.Options.IOptions<BillerExperienceOptions>>(),
+        services.GetRequiredService<ILogger<BillerResearchCoordinator>>(),
+        string.IsNullOrWhiteSpace(options.Research.CoordinatorAgentId)
+            ? null
+            : services.GetRequiredService<FoundryResearchAgentAdapter>(),
+        services.GetRequiredService<IAgentContextCapabilityIssuer>()));
+}
+else
+{
+    builder.Services.AddSingleton<IResearchAgentCatalog, LocalResearchAgentCatalog>();
+    builder.Services.AddSingleton<IResearchAgentDispatcher, SameSiteResearchAgentDispatcher>();
+    builder.Services.AddSingleton<IBillerResearchCoordinator>(services => new BillerResearchCoordinator(
+        services.GetRequiredService<IResearchAgentCatalog>(),
+        services.GetRequiredService<IResearchAgentDispatcher>(),
+        services.GetRequiredService<Microsoft.Extensions.Options.IOptions<BillerExperienceOptions>>(),
+        services.GetRequiredService<ILogger<BillerResearchCoordinator>>(),
+        capabilityIssuer: services.GetRequiredService<IAgentContextCapabilityIssuer>()));
+}
 if (Uri.TryCreate(options.SupportingServices.InvoiceBaseUrl, UriKind.Absolute, out var invoiceBaseUri))
 {
     builder.Services.AddHttpClient("invoice-seeder", client => client.BaseAddress = invoiceBaseUri);
@@ -129,7 +172,8 @@ var openTelemetry = builder.Services.AddOpenTelemetry()
     .ConfigureResource(resource => resource.AddService("Pronto.BillerExperience.Api"))
     .WithTracing(tracing => tracing
         .AddSource(BillerExperienceTelemetry.SourceName)
-        .AddSource(OrchestrationTelemetry.ActivitySourceName))
+        .AddSource(OrchestrationTelemetry.ActivitySourceName)
+        .AddSource("Azure.AI.Projects.*"))
     .WithMetrics(metrics => metrics
         .AddMeter(BillerExperienceTelemetry.MeterName)
         .AddMeter(OrchestrationTelemetry.MeterName));
@@ -141,11 +185,13 @@ if (!string.IsNullOrWhiteSpace(builder.Configuration["APPLICATIONINSIGHTS_CONNEC
 var app = builder.Build();
 
 app.UseMiddleware<RequestObservabilityMiddleware>();
+app.UseMiddleware<McpApiKeyMiddleware>();
 app.UseExceptionHandler();
 app.UseCors();
 app.MapControllers();
 app.MapHealthChecks("/health/live");
 app.MapHealthChecks("/health/ready");
+app.MapMcp("/mcp");
 
 app.Run();
 

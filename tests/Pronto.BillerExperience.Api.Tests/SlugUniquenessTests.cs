@@ -2,6 +2,7 @@ using Pronto.BillerExperience.Api.Application;
 using Pronto.BillerExperience.Api.Infrastructure.AI;
 using Pronto.BillerExperience.Api.Infrastructure.Persistence;
 using Pronto.BillerExperience.Contracts.V1.Billers;
+using Pronto.Agentic.Orchestration.Execution;
 using Microsoft.Extensions.Logging.Abstractions;
 using Xunit;
 
@@ -78,6 +79,7 @@ public sealed class SlugUniquenessTests
     private static BillerOnboardingService CreateService() => new(
         new InMemoryBillerExperienceRepository(),
         new DeterministicExperienceDraftGenerator(NullLogger<DeterministicExperienceDraftGenerator>.Instance),
+        new OrchestrationRunner(),
         NullLogger<BillerOnboardingService>.Instance,
         invoiceSeeder: null);
 

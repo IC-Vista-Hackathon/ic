@@ -24,6 +24,22 @@ az deployment sub create \
   --template-file main.bicep
 ```
 
+To provision the demo Foundry project connection for shared agent context, pass the same API key
+used by `BillerExperience__Mcp__ApiKey`:
+
+```sh
+az deployment sub create \
+  --name ic-hack \
+  --location eastus2 \
+  --template-file main.bicep \
+  --parameters mcpConnectionEnabled=true mcpApiKey='<at-least-32-characters>'
+```
+
+The module outputs the reviewed MCP tool definition for agent-version provisioning. It allowlists
+only `get_goal_context` and `append_context`. Agent versions are Foundry data-plane objects, so ARM
+Bicep creates their authenticated project connection and publishes the tool definition, while the
+agent provisioning code attaches that definition to each approved agent.
+
 Re-run the same command to apply changes; Bicep is idempotent (ARM incremental deployment).
 
 ## What this creates
@@ -35,7 +51,7 @@ Re-run the same command to apply changes; Bicep is idempotent (ARM incremental d
 | ACR (Basic) | Single registry, no promotion tiers |
 | Storage account (Standard_LRS, StorageV2) + `payer-experiences` blob container | Holds every biller's immutable experience artifacts and active pointer. The publisher identity gets `Storage Blob Data Contributor`; the API workload identity gets `Storage Blob Data Reader`; optional service principals can receive contributor/reader access through `payerExperienceBlobContributorPrincipalIds`/`payerExperienceBlobReaderPrincipalIds`; keys and anonymous access are disabled |
 | Cosmos DB (serverless), two accounts | `cosmos-ic-hack-<suffix>` (prod) and `cosmos-ic-hack-nonprod-<suffix>` (per-PR nonprod) — same containers per entities.md, partitioned `/biller_id` (`/id` for `billers`), so nonprod smoke tests never touch prod data |
-| AI Foundry account + project | Hosts agents (services.md's "AI Foundry" plane) |
+| AI Foundry account + project | Hosts agents and an optional authenticated `ic-shared-context-mcp` project connection (services.md's "AI Foundry" plane) |
 | AKS (2-4 node autoscale, kubenet) | Runs services + agents |
 | User-assigned managed identities | `ic-workload` authenticates to Cosmos, AI Foundry, and Blob read; `biller-publisher` authenticates to Cosmos and Blob write with no secrets |
 | Application Insights (workspace-based, on `log-ic-hack`) | Correlated traces/logs for services using the Azure Monitor OpenTelemetry Distro — just needs the `appInsightsConnectionString` output, no in-cluster OTEL collector |

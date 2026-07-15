@@ -14,4 +14,8 @@ public static class OrchestrationTelemetry
     public static readonly Counter<long> WorkflowCompleted = Meter.CreateCounter<long>("ic.orchestration.workflow.completed");
     public static readonly Counter<long> WorkflowFailed = Meter.CreateCounter<long>("ic.orchestration.workflow.failed");
     public static readonly Histogram<double> WorkflowDuration = Meter.CreateHistogram<double>("ic.orchestration.workflow.duration", "ms");
+    public static readonly Counter<long> StepStarted = Meter.CreateCounter<long>("ic.orchestration.step.started");
+    public static readonly Counter<long> StepCompleted = Meter.CreateCounter<long>("ic.orchestration.step.completed");
+    public static readonly Counter<long> StepFailed = Meter.CreateCounter<long>("ic.orchestration.step.failed");
+    public static readonly Histogram<double> StepDuration = Meter.CreateHistogram<double>("ic.orchestration.step.duration", "ms");
 }

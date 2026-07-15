@@ -9,6 +9,7 @@ using Pronto.BillerExperience.Contracts.V1.Onboarding;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
+using Pronto.Agentic.Orchestration.Execution;
 using Xunit;
 
 namespace Pronto.BillerExperience.Api.Tests;
@@ -82,6 +83,7 @@ public sealed class BillersControllerTests
         var onboarding = new BillerOnboardingService(
             new InMemoryBillerExperienceRepository(),
             new DeterministicExperienceDraftGenerator(NullLogger<DeterministicExperienceDraftGenerator>.Instance),
+            new OrchestrationRunner(),
             NullLogger<BillerOnboardingService>.Instance,
             invoiceSeeder: null);
         return new BillersController(
