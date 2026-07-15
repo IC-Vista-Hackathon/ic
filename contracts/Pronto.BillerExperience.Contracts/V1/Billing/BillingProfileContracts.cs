@@ -79,3 +79,11 @@ public sealed record BillingDiscoveryProgress(
     bool IsComplete);
 
 public sealed record ReopenBillingQuestionRequest(string QuestionId);
+
+/// <summary>
+/// A biller-authored answer captured by a guided UI. Dimension is explicit so the server can
+/// reject reordered or stale answers instead of applying them to the wrong required question.
+/// </summary>
+public sealed record BillingDiscoveryAnswer(
+    BillingDiscoveryDimension Dimension,
+    string Answer);

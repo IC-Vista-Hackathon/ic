@@ -6,6 +6,7 @@ using Pronto.BillerExperience.Api.Infrastructure.Persistence;
 using Pronto.BillerExperience.Contracts.V1.Billers;
 using Pronto.BillerExperience.Contracts.V1.Billing;
 using Pronto.BillerExperience.Contracts.V1.Experiences;
+using Pronto.BillerExperience.Contracts.V1.Onboarding;
 using Xunit;
 
 namespace Pronto.BillerExperience.Api.Tests;
@@ -135,5 +136,32 @@ public sealed class BillingDiscoveryEngineTests
 
         Assert.Contains(blocked.Findings, finding => finding.Code == "BILLING_DISCOVERY_INCOMPLETE");
         Assert.Equal("billing.categories", created.Session.CurrentQuestion?.QuestionId);
+    }
+
+    [Fact]
+    public async Task GuidedStudioAnswersAreAppliedInOrderInOneChatTurn()
+    {
+        var repository = new InMemoryBillerExperienceRepository();
+        var generator = new DeterministicExperienceDraftGenerator(NullLogger<DeterministicExperienceDraftGenerator>.Instance);
+        var service = new BillerOnboardingService(repository, generator, new OrchestrationRunner(),
+            NullLogger<BillerOnboardingService>.Instance, billingDiscovery: _engine);
+        var created = await service.CreateAsync(
+            new CreateBillerRequest("Association", "guided-association", "Other", "10001"), CancellationToken.None);
+
+        var response = await service.SendMessageAsync(created.Biller.BillerId, new SendOnboardingMessageRequest(
+            "Build the requested association experience.",
+            [
+                new(BillingDiscoveryDimension.Categories, "Dues, special assessment, and fines."),
+                new(BillingDiscoveryDimension.Cadence, "Dues are quarterly; special assessment is one-time; fines are ad hoc."),
+                new(BillingDiscoveryDimension.StateRules, "Dues become delinquent after 10 days; no state change applies to special assessment; fines are late after each notice due date."),
+                new(BillingDiscoveryDimension.PaymentTerms, "Special assessment allows up to 4 installments; dues and fines are pay-in-full.")
+            ]), CancellationToken.None);
+
+        Assert.Equal(3, response.Session.BillingProfile?.Categories.Count);
+        Assert.All(response.Session.BillingProfile!.Categories, category => Assert.NotEmpty(category.StateRules!));
+        var assessment = Assert.Single(response.Session.BillingProfile.Categories, category => category.DisplayName == "Special Assessment");
+        Assert.Equal(SettlementMode.InstallmentsAllowed, assessment.PaymentTerms?.Mode);
+        Assert.Equal(4, assessment.PaymentTerms?.MaximumInstallments);
+        Assert.Equal(BillingDiscoveryDimension.Confirmation, response.Session.CurrentQuestion?.Dimension);
     }
 }

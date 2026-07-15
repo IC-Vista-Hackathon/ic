@@ -149,31 +149,39 @@ public sealed partial class BillingDiscoveryEngine(ILogger<BillingDiscoveryEngin
     {
         var text = message.Trim();
         if (text.Length < 2) return profile;
-        var explicitlyNone = Regex.IsMatch(text, @"\b(no|none|not applicable|does not change|no change)\b", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
-        var hasRuleLanguage = explicitlyNone || Regex.IsMatch(text, @"\b(late|past due|delinquent|delinquency|lapse|grace|suspend|cancel|state|after|due date)\b", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
-        if (!hasRuleLanguage) return profile;
-        int? days = null;
-        var grace = GracePeriod.Match(text);
-        if (grace.Success) days = int.Parse(grace.Groups["days"].Value, CultureInfo.InvariantCulture);
-        var resultingState = Regex.Match(text, @"\b(lapsed|lapse|delinquent|late|past due|suspended|cancelled|canceled|inactive)\b", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant) is { Success: true } state
-            ? state.Value.ToLowerInvariant()
-            : null;
         if (current.QuestionId.EndsWith(".resulting_state", StringComparison.Ordinal))
         {
-            if (resultingState is null) return profile;
+            if (!TryStateRule(text, out var clarification) || clarification.ResultingState is null) return profile;
             return UpdateCategory(profile with { Confirmed = false }, current.CategoryId!, category =>
             {
                 var existing = category.StateRules is { Count: > 0 } ? category.StateRules[0] : null;
                 return existing is null ? category : category with
                 {
-                    StateRules = [existing with { ResultingState = resultingState, Description = $"{existing.Description} Resulting state: {resultingState}." }],
+                    StateRules = [existing with { ResultingState = clarification.ResultingState, Description = $"{existing.Description} Resulting state: {clarification.ResultingState}." }],
                     Confirmed = false
                 };
             });
         }
-        var description = explicitlyNone ? "No late or account-state change rule applies." : text;
-        return UpdateCategory(profile with { Confirmed = false }, current.CategoryId!, category =>
-            category with { StateRules = [new AccountStateRule(description, days, resultingState)], Confirmed = false });
+
+        var assignments = new Dictionary<string, AccountStateRule>(StringComparer.Ordinal);
+        foreach (var clause in Regex.Split(text, @"[;.\n]", RegexOptions.CultureInvariant))
+        {
+            if (!TryStateRule(clause, out var rule)) continue;
+            var matched = profile.Categories.Where(category =>
+                clause.Contains(category.DisplayName, StringComparison.OrdinalIgnoreCase) ||
+                category.DisplayName.Split(' ', StringSplitOptions.RemoveEmptyEntries)
+                    .Any(word => word.Length > 3 && clause.Contains(word, StringComparison.OrdinalIgnoreCase))).ToArray();
+            foreach (var category in matched) assignments[category.Id] = rule;
+        }
+        if (assignments.Count == 0 && TryStateRule(text, out var single)) assignments[current.CategoryId!] = single;
+        if (assignments.Count == 0) return profile;
+        return profile with
+        {
+            Confirmed = false,
+            Categories = profile.Categories.Select(category => assignments.TryGetValue(category.Id, out var rule)
+                ? category with { StateRules = [rule], Confirmed = false }
+                : category).ToArray()
+        };
     }
 
     private static BillingProfile ApplyPaymentTerms(BillingProfile profile, BillingDiscoveryQuestion current, string message)
@@ -304,6 +312,34 @@ public sealed partial class BillingDiscoveryEngine(ILogger<BillingDiscoveryEngin
         }
         terms = null!;
         return false;
+    }
+
+    private static bool TryStateRule(string text, out AccountStateRule rule)
+    {
+        var value = text.Trim();
+        var explicitlyNone = Regex.IsMatch(value, @"\b(no|none|not applicable|does not change|no change)\b", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+        var hasRuleLanguage = explicitlyNone || Regex.IsMatch(value,
+            @"\b(late|past due|delinquent|delinquency|lapse|lapsed|grace|suspend|suspended|cancel|cancelled|canceled|state|after|due date|inactive)\b",
+            RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+        if (!hasRuleLanguage)
+        {
+            rule = null!;
+            return false;
+        }
+
+        int? days = null;
+        var grace = GracePeriod.Match(value);
+        if (grace.Success) days = int.Parse(grace.Groups["days"].Value, CultureInfo.InvariantCulture);
+        var resultingState = Regex.Match(value,
+            @"\b(lapsed|lapse|delinquent|late|past due|suspended|cancelled|canceled|inactive)\b",
+            RegexOptions.IgnoreCase | RegexOptions.CultureInvariant) is { Success: true } state
+            ? state.Value.ToLowerInvariant()
+            : null;
+        rule = new AccountStateRule(
+            explicitlyNone ? "No late or account-state change rule applies." : value,
+            days,
+            resultingState);
+        return true;
     }
 
     private static string Summarize(BillingProfile profile) => string.Join("; ", profile.Categories.Select(category =>

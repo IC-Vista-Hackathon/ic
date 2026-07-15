@@ -2,7 +2,9 @@ namespace Pronto.BillerExperience.Contracts.V1.Onboarding;
 
 public sealed record StartOnboardingRequest(string? BillerId = null);
 
-public sealed record SendOnboardingMessageRequest(string Message);
+public sealed record SendOnboardingMessageRequest(
+    string Message,
+    IReadOnlyList<Billing.BillingDiscoveryAnswer>? BillingAnswers = null);
 
 public sealed record OnboardingChatMessage(
     string Role,

@@ -193,7 +193,44 @@ public sealed partial class BillerOnboardingService(
 
         var userMessage = new OnboardingChatMessage("user", request.Message.Trim(), DateTimeOffset.UtcNow);
         var messages = run.Messages.Append(userMessage).ToArray();
-        var discoveryTurn = billingDiscovery?.ApplyAnswer(billerId, run.BillingProfile, request.Message.Trim());
+        BillingDiscoveryTurn? discoveryTurn = null;
+        if (billingDiscovery is not null)
+        {
+            if (request.BillingAnswers is { Count: > 0 })
+            {
+                if (request.BillingAnswers.Count > 4)
+                {
+                    LogValidationError(logger, billerId, "billing_answers", "At most four guided billing answers are accepted per request.");
+                    throw new ArgumentException("At most four guided billing answers are accepted per request.", nameof(request));
+                }
+
+                var profile = run.BillingProfile;
+                foreach (var answer in request.BillingAnswers)
+                {
+                    if (string.IsNullOrWhiteSpace(answer.Answer) || answer.Answer.Length > 4000)
+                    {
+                        LogValidationError(logger, billerId, "billing_answers", "Every guided billing answer must contain 1 to 4000 characters.");
+                        throw new ArgumentException("Every guided billing answer must contain 1 to 4000 characters.", nameof(request));
+                    }
+
+                    var expected = billingDiscovery.Inspect(profile).CurrentQuestion;
+                    if (expected is null || expected.Dimension != answer.Dimension)
+                    {
+                        var expectedName = expected?.Dimension.ToString() ?? "none";
+                        LogValidationError(logger, billerId, "billing_answers", $"Expected {expectedName}, received {answer.Dimension}.");
+                        throw new ArgumentException($"The guided billing answers are stale or out of order. Expected {expectedName}.", nameof(request));
+                    }
+
+                    discoveryTurn = billingDiscovery.ApplyAnswer(billerId, profile, answer.Answer.Trim());
+                    profile = discoveryTurn.State.Profile;
+                    if (!discoveryTurn.AnswerAccepted) break;
+                }
+            }
+            else
+            {
+                discoveryTurn = billingDiscovery.ApplyAnswer(billerId, run.BillingProfile, request.Message.Trim());
+            }
+        }
         var orchestrationContext = new OrchestrationContext(
             run.Id,
             Activity.Current?.TraceId.ToString() ?? Guid.NewGuid().ToString("N"),

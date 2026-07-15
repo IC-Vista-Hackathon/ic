@@ -866,16 +866,16 @@ export function App() {
       events.onerror = () => patch({ activityConnection: 'disconnected' });
 
       trackEvent('studio.chat_message_sent', { biller_id: billerId }); // count only; message text never leaves the page
-      const onboardingAnswers = CHAT_QUESTIONS
-        .map((q, i) => (s.chatAnswers[i]?.trim() ? `${q} ${s.chatAnswers[i].trim()}` : ''))
-        .filter(Boolean)
-        .join(' ');
+      const answerDimensions = ['categories', 'cadence', 'state_rules', 'payment_terms'] as const;
+      const billingAnswers = s.chatAnswers
+        .map((answer, index) => ({ dimension: answerDimensions[index], answer: answer.trim() }))
+        .filter(answer => !!answer.answer);
       const chat = await api.chat(
         billerId,
         `Build a ${s.vertical ?? 'custom'} payment experience for ${s.bizName}. ` +
         `Serve ${s.selectedStates.join(', ') || 'the selected market'}; methods: ${s.acceptedMethods.join(', ')}. ` +
-        `Use the supplied website and preserve the existing payment rails.` +
-        (onboardingAnswers ? ` Onboarding answers: ${onboardingAnswers}` : ''),
+        `Use the supplied website and preserve the existing payment rails.`,
+        billingAnswers,
       );
       await new Promise(resolve => window.setTimeout(resolve, 500));
       logEvent('studio.orchestration.completed', { biller_id: billerId, revision: chat.draft.revision });
