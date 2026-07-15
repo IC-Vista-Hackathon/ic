@@ -97,11 +97,10 @@ spec:
         - path:
             type: PathPrefix
             value: /api
-      # Long-running agent orchestration must not inherit Envoy's 15s default,
-      # but a hung backend must not hold gateway connections forever either:
-      # 300s matches the agent invocation ceiling and the Studio browser budget.
+      # Match production: long-running agent orchestration must not inherit Envoy's
+      # 15-second default request timeout.
       timeouts:
-        request: "300s"
+        request: "0s"
       filters:
         - type: URLRewrite
           urlRewrite:
