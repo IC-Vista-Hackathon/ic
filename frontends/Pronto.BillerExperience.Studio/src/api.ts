@@ -6,7 +6,7 @@ const baseUrl = import.meta.env.VITE_API_URL ?? (import.meta.env.PROD ? '/api' :
 const supportingServicesBaseUrl = import.meta.env.VITE_SUPPORTING_SERVICES_URL ?? '';
 // Three research workers run in bounded waves, followed by consolidation and draft generation.
 // Keep the browser budget above the backend's combined agent budgets while SSE reports progress.
-export const CHAT_REQUEST_TIMEOUT_MS = 120_000;
+export const CHAT_REQUEST_TIMEOUT_MS = 300_000;
 export const activityUrl = (billerId: string) => `${baseUrl}/billers/${billerId}/events`;
 
 async function request<T>(path: string, init?: RequestInit, billerId?: string, timeoutMs?: number): Promise<T> {
