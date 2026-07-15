@@ -12,5 +12,7 @@
   </ItemGroup>
   <ItemGroup>
     <ProjectReference Include="..\..\services\Pronto.BillerExperience.Api\Pronto.BillerExperience.Api.csproj" />
+    <ProjectReference Include="..\..\contracts\Pronto.Payment.Contracts\Pronto.Payment.Contracts.csproj" />
+    <ProjectReference Include="..\..\contracts\Pronto.PayerAccount.Contracts\Pronto.PayerAccount.Contracts.csproj" />
   </ItemGroup>
 </Project>
