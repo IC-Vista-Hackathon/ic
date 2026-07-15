@@ -117,11 +117,12 @@ public sealed partial class PublicationProcessor(
         _ => "PUBLICATION_FAILED"
     };
 
-    private static string SafeFailureMessage(Exception exception)
+    private static string SafeFailureMessage(Exception exception) => exception switch
     {
-        var message = exception.Message.ReplaceLineEndings(" ");
-        return message.Length <= 500 ? message : message[..500];
-    }
+        BundleBuildException => "The payer site could not be built. Please try publishing again.",
+        InvalidOperationException => "The payer site configuration could not be published. Please review it and try again.",
+        _ => "The payer site could not be published. Please try again."
+    };
 
     [LoggerMessage(1002, LogLevel.Information, "Publishing config version {ConfigVersion} for biller {BillerId}, deployment {DeploymentId}; trace {TraceId}")]
     private static partial void LogPublicationStarted(ILogger logger, string billerId, string deploymentId, int configVersion, string? traceId);

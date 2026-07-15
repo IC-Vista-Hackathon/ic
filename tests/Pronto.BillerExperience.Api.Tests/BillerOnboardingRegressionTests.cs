@@ -43,6 +43,31 @@ public sealed class BillerOnboardingRegressionTests
     }
 
     [Fact]
+    public async Task PublishedRevisionCannotBeChangedThroughChat()
+    {
+        var repository = new InMemoryBillerExperienceRepository();
+        var service = CreateService(repository);
+        var created = await service.CreateAsync(Request(), CancellationToken.None);
+        var current = await repository.GetLatestExperienceAsync(
+            created.Biller.BillerId,
+            CancellationToken.None);
+        var published = await repository.SaveExperienceAsync(
+            current! with { State = ExperienceRevisionState.Published },
+            current.ETag,
+            CancellationToken.None);
+
+        await Assert.ThrowsAsync<ArgumentException>(() => service.SendMessageAsync(
+            created.Biller.BillerId,
+            new("Change the primary color to red"),
+            CancellationToken.None).AsTask());
+
+        var unchanged = await service.GetDraftAsync(created.Biller.BillerId, CancellationToken.None);
+        Assert.Equal(ExperienceRevisionState.Published, unchanged.State);
+        Assert.Equal(published.ETag, unchanged.ETag);
+        Assert.Equal(published.Definition, unchanged.Definition);
+    }
+
+    [Fact]
     public async Task ExperienceRecordMapsDocumentETag()
     {
         var repository = new InMemoryBillerExperienceRepository();
