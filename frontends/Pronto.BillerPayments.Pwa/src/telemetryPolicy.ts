@@ -35,6 +35,7 @@ const paymentAttempt: Record<string, Validator> = {
 const EVENTS: Record<string, Record<string, Validator>> = {
   'pwa.session_started': {},
   'pwa.bill_lookup': { outcome: oneOf('found', 'no_open_bill', 'failed'), error_category: errorCategory },
+  'pwa.assistant_recommended': { method, scheduled: boolean },
   'pwa.payment_method_selected': { method },
   'pwa.review_opened': { method, scheduled: boolean },
   'pwa.payment_submitted': paymentAttempt,

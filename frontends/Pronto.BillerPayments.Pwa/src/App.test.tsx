@@ -7,6 +7,7 @@ import type { Invoice, PayerProfile, PaymentHistory, PaymentReceipt } from './ty
 const pay = vi.fn<() => Promise<PaymentReceipt>>();
 const getPayments = vi.fn<() => Promise<PaymentHistory[]>>();
 const findPayer = vi.fn<() => Promise<PayerProfile | undefined>>();
+const askAssistant = vi.fn();
 
 vi.mock('./provider', () => ({
   ServicePaymentExperienceProvider: class {
@@ -15,6 +16,7 @@ vi.mock('./provider', () => ({
     findPayer = findPayer;
     getPayments = getPayments;
     updatePreferences = vi.fn();
+    askAssistant = askAssistant;
     pay = pay;
   },
 }));
@@ -51,6 +53,7 @@ describe('payment success followed by history refresh failure', () => {
     findPayer.mockResolvedValue(payer);
     getPayments.mockResolvedValue([]);
     pay.mockResolvedValue(receipt);
+    askAssistant.mockResolvedValue({ reply: 'ACH is cheaper.', method: 'ach', scheduledFor: '2026-08-01', feeCents: 150, totalCents: 5150, rationale: 'ACH is cheaper.' });
     vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify(config), { status: 200 })));
   });
   afterEach(() => { cleanup(); vi.clearAllMocks(); vi.unstubAllGlobals(); });
@@ -83,5 +86,41 @@ describe('payment success followed by history refresh failure', () => {
 
     await waitFor(() => expect(screen.getByTestId('error')).toBeDefined());
     expect(screen.queryByTestId('payment-confirmation')).toBeNull();
+  });
+});
+
+describe('payment assistant surface', () => {
+  beforeEach(() => {
+    findPayer.mockResolvedValue(payer);
+    getPayments.mockResolvedValue([]);
+    pay.mockResolvedValue(receipt);
+    vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify(config), { status: 200 })));
+  });
+  afterEach(() => { cleanup(); vi.clearAllMocks(); vi.unstubAllGlobals(); });
+
+  it('renders the recommendation after lookup and applies it to the method selection', async () => {
+    askAssistant.mockResolvedValue({ reply: 'ACH beats card on this bill.', method: 'ach', scheduledFor: '2026-08-01', feeCents: 150, totalCents: 5150, rationale: 'ACH beats card on this bill.' });
+    const { App } = await import('./App');
+    const user = userEvent.setup();
+    render(<App />);
+    await user.click(await screen.findByTestId('lookup-submit'));
+
+    expect((await screen.findByTestId('assistant-reply')).textContent).toContain('ACH beats card');
+    expect(askAssistant).toHaveBeenCalledWith('inv-1', '4421');
+
+    await user.click(await screen.findByTestId('assistant-apply'));
+    expect(screen.getByTestId('method-ach').className).toContain('selected');
+  });
+
+  it('keeps the manual flow usable when the assistant fails', async () => {
+    askAssistant.mockRejectedValue(new Error('assistant down'));
+    const { App } = await import('./App');
+    const user = userEvent.setup();
+    render(<App />);
+    await user.click(await screen.findByTestId('lookup-submit'));
+
+    // Assistant errors, but the bill + method choices still render so the payer can proceed.
+    expect(await screen.findByTestId('method-ach')).toBeDefined();
+    expect(screen.queryByTestId('assistant-apply')).toBeNull();
   });
 });

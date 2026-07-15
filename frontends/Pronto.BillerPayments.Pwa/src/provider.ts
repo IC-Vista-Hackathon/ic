@@ -4,12 +4,25 @@ import { fetchWithTimeout, requestError } from './http';
 
 export interface PaymentQuote { feeCents: number; totalCents: number; }
 
+// One turn of the payer-side agent pipeline (Bill Intelligence → Financial Planning). The reply is
+// the assistant's payer-facing message; the recommendation is the deterministic plan it selected —
+// method, timing, and the server-authoritative fee/total the payer would confirm.
+export interface AssistantRecommendation {
+  reply: string;
+  method: string;
+  scheduledFor?: string;
+  feeCents: number;
+  totalCents: number;
+  rationale: string;
+}
+
 export interface PaymentExperienceProvider {
   getInvoices(accountNumber: string): Promise<Invoice[]>;
   findPayer(accountNumber: string): Promise<PayerProfile | undefined>;
   updatePreferences(payerId: string, preferences: PayerProfile['preferences']): Promise<PayerProfile['preferences']>;
   getPayments(payerId: string): Promise<PaymentHistory[]>;
   quote(invoiceId: string, method: string): Promise<PaymentQuote>;
+  askAssistant(invoiceId: string, accountNumber: string): Promise<AssistantRecommendation>;
   pay(request: PaymentRequest): Promise<PaymentReceipt>;
 }
 
@@ -29,6 +42,20 @@ export class ServicePaymentExperienceProvider implements PaymentExperienceProvid
   quote(invoiceId: string, method: string) { return observed('pwa.payment.quote', async () => {
     const payload = await read<{ fee_cents: number; total_cents: number }>(await fetchWithTimeout(`/payments/quote?biller_id=${encodeURIComponent(this.billerId)}&invoice_id=${encodeURIComponent(invoiceId)}&method=${encodeURIComponent(method)}`, { headers: this.headers() }));
     return { feeCents: payload.fee_cents, totalCents: payload.total_cents };
+  }); }
+
+  // Runs one turn of the payer-side agent pipeline through the Biller Experience API (which reaches
+  // the services via the MCP router). The biller is bound server-side; the browser never passes it
+  // as an identity argument beyond the correlation header.
+  askAssistant(invoiceId: string, accountNumber: string) { return observed('pwa.assistant.turn', async () => {
+    const payload = await read<{ reply: string; artifacts: { payment_plan: { method: string; when: string; fee_cents: number; total_cents: number; rationale: string } } }>(
+      await fetchWithTimeout(`/api/billers/${encodeURIComponent(this.billerId)}/payer-chat`, {
+        method: 'POST',
+        headers: this.headers(true),
+        body: JSON.stringify({ invoice_id: invoiceId, account_number: accountNumber }),
+      }));
+    const plan = payload.artifacts.payment_plan;
+    return { reply: payload.reply, method: plan.method, scheduledFor: plan.when === 'now' ? undefined : plan.when, feeCents: plan.fee_cents, totalCents: plan.total_cents, rationale: plan.rationale };
   }); }
 
   async findPayer(accountNumber: string) {

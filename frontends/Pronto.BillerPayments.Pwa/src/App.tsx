@@ -3,7 +3,7 @@ import { billerSlug } from './billerSlug';
 import { NoOpenBillError } from './errors';
 import { randomId } from './id';
 import { trackEvent } from './insights';
-import { ServicePaymentExperienceProvider, type PaymentQuote } from './provider';
+import { ServicePaymentExperienceProvider, type PaymentQuote, type AssistantRecommendation } from './provider';
 import { Header, Intro, Footer } from './skin';
 import { logError, logEvent, observed } from './telemetry';
 import { categorizeError } from './telemetryPolicy';
@@ -35,6 +35,9 @@ export function App() {
   const [quotes, setQuotes] = useState<Record<string, PaymentQuote>>({});
   const [quoteErrors, setQuoteErrors] = useState<Partial<Record<PaymentMethod, string>>>({});
   const [quoteAttempt, setQuoteAttempt] = useState(0);
+  const [recommendation, setRecommendation] = useState<AssistantRecommendation>();
+  const [assistantState, setAssistantState] = useState<'idle'|'thinking'|'ready'|'error'>('idle');
+  const [assistantAttempt, setAssistantAttempt] = useState(0);
   const paymentInFlight = useRef(false);
   const paymentIdempotencyKey = useRef<string | undefined>(undefined);
 
@@ -71,6 +74,17 @@ export function App() {
         }));
     return () => { cancelled = true; };
   }, [acceptedMethods, provider, invoice, quoteAttempt]);
+  // Payer-side agent turn: once a bill is in hand, ask the assistant to read it and recommend a
+  // method + timing. Advisory only — it never moves money and the payer stays in control below.
+  useEffect(() => {
+    if (!provider || !invoice) { setRecommendation(undefined); setAssistantState('idle'); return; }
+    let cancelled = false;
+    setAssistantState('thinking'); setRecommendation(undefined);
+    provider.askAssistant(invoice.id, invoice.accountNumber)
+      .then(result => { if (!cancelled) { setRecommendation(result); setAssistantState('ready'); trackEvent('pwa.assistant_recommended', { method: isPaymentMethod(result.method) ? result.method : 'card', scheduled: !!result.scheduledFor }); } })
+      .catch(caught => { if (!cancelled) { setAssistantState('error'); logError('pwa.assistant.failed', caught); } });
+    return () => { cancelled = true; };
+  }, [provider, invoice, assistantAttempt]);
   const primaryAction = config?.ui?.actions.find(action => action.id === 'primary-payment-action');
   const schedulesPayment = primaryAction?.action === 1 || primaryAction?.action === 'schedule_payment';
 
@@ -125,6 +139,7 @@ export function App() {
   async function savePreferences() { if (!provider || !payer) return; setBusy(true); setError(''); try { const updated = await provider.updatePreferences(payer.payer_id, { ...payer.preferences, autopay: autoPay, paperless, channels: payer.preferences.channels.length ? payer.preferences.channels : ['email'], payment_day: autoPay ? (payer.preferences.payment_day ?? 15) : payer.preferences.payment_day }); setPayer({ ...payer, preferences: updated }); logEvent('pwa.preferences.saved', { outcome: 'saved' }); trackEvent('pwa.preferences_saved', { outcome: 'saved' }); } catch (caught) { setError(`Save preferences: ${errorMessage(caught)}`); logError('pwa.preferences.save_failed', caught); trackEvent('pwa.preferences_saved', { outcome: 'failed', error_category: categorizeError(caught) }); } finally { setBusy(false); } }
   function navigate(next: Page) { setPage(next); }
   function selectMethod(next: PaymentMethod) { if (next !== method) trackEvent('pwa.payment_method_selected', { method: next }); paymentIdempotencyKey.current = undefined; setMethod(next); }
+  function applyRecommendation() { if (recommendation && isPaymentMethod(recommendation.method) && acceptedMethods.includes(recommendation.method)) selectMethod(recommendation.method); }
   function openReview() { trackEvent('pwa.review_opened', { method, scheduled: schedulesPayment }); setStep('review'); }
   function changeAutoPay(enabled: boolean) { setAutoPay(enabled); trackEvent('pwa.autopay_changed', { enabled }); }
   function changePaperless(enabled: boolean) { setPaperless(enabled); trackEvent('pwa.paperless_changed', { enabled }); }
@@ -137,6 +152,14 @@ export function App() {
       {page === 'payment' && <>
         {config.billing?.categories.length ? <section className="card" aria-label="Billing options"><h2>Billing options</h2>{config.billing.categories.map(category => <div className="history-row" key={category.id}><span><strong>{category.display_name}</strong><small>{category.cadence_label} · {category.state_summary}</small></span><strong>{paymentTermsLabel(category.payment_mode, category.maximum_installments)}</strong></div>)}</section> : null}
         {step === 'lookup' && <form className="card" onSubmit={lookup}><h2>{preferences.guest_checkout_allowed ? 'Find your bill' : 'Access your account'}</h2><p className="card-copy">{preferences.guest_checkout_allowed ? 'No sign-in required. Enter the account number shown on your bill.' : 'Enter your account number to continue to the secure payment experience.'}</p><label>Account number<input name="account" data-testid="account-input" required defaultValue="4421" autoComplete="off" /></label><button data-testid="lookup-submit" disabled={busy}>{busy ? 'Finding Bill…' : 'Continue'}</button></form>}
+        {step === 'method' && invoice && assistantState !== 'idle' && <section className="card assistant" data-testid="assistant" aria-label="Payment assistant">
+          <div className="assistant-head"><span className="assistant-avatar" aria-hidden="true">✦</span><div><strong>Payment assistant</strong><small>Reviews your bill and suggests a way to pay. You decide.</small></div></div>
+          {assistantState === 'thinking' && <p className="assistant-reply" aria-live="polite">Reviewing your bill and comparing payment options…</p>}
+          {assistantState === 'error' && <div className="alert" role="alert">The assistant is unavailable right now — you can still choose a method below. <button type="button" onClick={() => setAssistantAttempt(value => value + 1)}>Retry</button></div>}
+          {assistantState === 'ready' && recommendation && <><p className="assistant-reply" aria-live="polite" data-testid="assistant-reply">{recommendation.reply}</p>
+            <div className="assistant-plan"><span>Recommended</span><strong>{methodLabel(recommendation.method)} · {money(recommendation.totalCents)}{recommendation.scheduledFor ? ` · scheduled ${new Date(recommendation.scheduledFor).toLocaleDateString()}` : ' · pay now'}</strong></div>
+            {isPaymentMethod(recommendation.method) && acceptedMethods.includes(recommendation.method) && method !== recommendation.method && <button type="button" data-testid="assistant-apply" onClick={applyRecommendation}>Use {methodLabel(recommendation.method)}</button>}</>}
+        </section>}
         {step === 'method' && invoice && <section className="card"><Bill invoice={invoice}/><h2>Choose how to pay</h2><div className="choices">{acceptedMethods.includes('card') && <button data-testid="method-card" className={method === 'card' ? 'selected' : 'option'} onClick={() => selectMethod('card')}>Card <small>{quoteFeeText(quotes.card, invoice.amountCents)}</small></button>}{acceptedMethods.includes('ach') && <button data-testid="method-ach" className={method === 'ach' ? 'selected' : 'option'} onClick={() => selectMethod('ach')}>Bank Account <small>{quoteFeeText(quotes.ach, invoice.amountCents)}</small></button>}</div>
           {quoteErrors[method] && <div className="alert" role="alert" data-testid="quote-error">We couldn’t prepare this payment method. {quoteErrors[method]} <button type="button" onClick={() => setQuoteAttempt(value => value + 1)}>Retry quote</button></div>}
           {(preferences.offer_autopay || preferences.offer_paperless) && <fieldset><legend>Optional preferences</legend>{preferences.offer_autopay && preferences.enroll_during_payment && <label className="check"><input type="checkbox" checked={autoPay} onChange={event => changeAutoPay(event.target.checked)}/><span><strong>Enroll in AutoPay</strong><small>Use this method for future bills. Cancel anytime.</small></span></label>}{preferences.offer_paperless && <label className="check"><input type="checkbox" checked={paperless} onChange={event => changePaperless(event.target.checked)}/><span><strong>Switch to Paperless Billing</strong><small>Receive bills electronically instead of by mail.</small></span></label>}{(autoPay || paperless) && <><label>Name<input value={payerName} onChange={event => setPayerName(event.target.value)} required/></label><label>Email<input type="email" value={payerEmail} onChange={event => setPayerEmail(event.target.value)} required/></label></>}</fieldset>}
@@ -159,6 +182,7 @@ function quoteFeeText(quote: PaymentQuote | undefined, amountCents: number) {
 }
 function reminderLabel(value: number | string) { return typeof value === 'number' ? ['Email', 'Text (SMS)', 'Both', 'None'][value] : humanize(value); }
 function humanize(value: string) { return value.replaceAll('_', ' ').replace(/\b\w/g, match => match.toUpperCase()); }
+function methodLabel(method: string) { return method === 'ach' ? 'Bank account (ACH)' : method === 'card' ? 'Card' : humanize(method); }
 function paymentTermsLabel(mode: string | number | null | undefined, maximum?: number | null) { const installments = mode === 'installments_allowed' || mode === 1; if (!installments) return 'Pay in full'; return maximum ? `Up to ${maximum} installments` : 'Installments available'; }
 function money(cents: number) { return new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' }).format(cents / 100); }
 function validateConfig(value: unknown): ExperienceDefinition {

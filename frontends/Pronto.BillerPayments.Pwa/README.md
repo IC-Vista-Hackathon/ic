@@ -9,8 +9,35 @@ npm run dev
 
 The shared renderer extracts the biller slug from `/pay/{slug}/` and loads
 `/api/public/experiences/{slug}`. Set `VITE_CONFIG_URL=/config.json` for standalone local UI work.
-Invoice lookup and payment execution use a typed demo adapter until the supporting services
-implement the documented contracts.
+Invoice lookup, quotes, and payment execution go through `ServicePaymentExperienceProvider`
+(`src/provider.ts`), which calls the Invoice / Payment / Payer Account services.
+
+## Payment assistant
+
+After a bill is looked up, the app shows a "Payment assistant" panel above the manual payment
+flow. It calls the Biller Experience API's `POST /billers/{billerId}/payer-chat`, which runs the
+deterministic payer-side agent pipeline (Bill Intelligence → Financial Planning) and returns a
+payer-facing message plus a recommended method, timing, fee, and total. The panel is advisory —
+it never moves money; the payer still chooses a method and confirms below. "Use <method>" applies
+the recommendation to the method selector. If the assistant call fails, the panel shows an inline
+error and the manual flow stays fully usable.
+
+## Local end-to-end demo
+
+`../../scripts/payer-agent-demo.sh` boots the four backend services in-memory, seeds a demo biller
+(`demo-water`) with invoices + a payer for account `4421`, and writes `public/config.local.json`.
+Then start the PWA against that config:
+
+```bash
+../../scripts/payer-agent-demo.sh                       # boot + seed (leave running)
+VITE_CONFIG_URL=/pay/config.local.json npm run dev      # in this directory
+# open http://localhost:5174/pay/demo-water/ and enter account 4421
+```
+
+`vite.config.ts` proxies `/api`, `/invoices`, `/payments`, and `/payers` to those local hosts,
+mirroring the production gateway prefixes. No Azure credentials are needed — the services default
+to in-memory persistence and the deterministic model provider. Stop the services with
+`../../scripts/payer-agent-demo.sh --stop`.
 
 ## Browser observability
 

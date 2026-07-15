@@ -67,6 +67,7 @@ describe('sanitizeEvent', () => {
 
   it('allowlists exactly the semantic event set', () => {
     expect(ALLOWED_EVENT_NAMES.sort()).toEqual([
+      'pwa.assistant_recommended',
       'pwa.autopay_changed',
       'pwa.bill_lookup',
       'pwa.paperless_changed',
