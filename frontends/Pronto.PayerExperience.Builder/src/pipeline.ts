@@ -1,9 +1,10 @@
 import { mkdir, writeFile } from 'node:fs/promises';
-import { join, resolve } from 'node:path';
+import { join } from 'node:path';
 import { assembleBrief } from './brief';
 import { buildBundle } from './build';
 import { createGenerator, type GeneratorMode } from './generators';
 import { publishBundle } from './publish';
+import { resolveUnderRoot, validateRevision, validateSlug } from './paths';
 import { validateBundle } from './validate';
 import type { DesignBrief, ExperienceDefinition } from './types';
 
@@ -35,14 +36,16 @@ export interface PipelineResult {
 // generate -> persist -> build (typecheck gate) -> validate (Playwright gate) -> publish.
 export async function runPipeline(options: PipelineOptions): Promise<PipelineResult> {
   const log = options.log ?? (() => {});
-  const brief = assembleBrief(options.definition, options.slug, options.briefOverrides);
+  const slug = validateSlug(options.slug);
+  const revision = validateRevision(options.revision);
+  const brief = assembleBrief(options.definition, slug, options.briefOverrides);
 
   const generator = createGenerator(options.mode);
-  log(`[generate] ${generator.name} skin for ${options.slug}`);
+  log(`[generate] ${generator.name} skin for ${slug}`);
   const skin = await generator.generate(brief);
 
   // Persist the brief + generated skin for provenance and revision linkage.
-  const artifactsDir = resolve(options.artifactsRoot, options.slug, options.revision);
+  const artifactsDir = resolveUnderRoot(options.artifactsRoot, slug, revision);
   await mkdir(artifactsDir, { recursive: true });
   await writeFile(join(artifactsDir, 'design-brief.json'), JSON.stringify(brief, null, 2));
   await writeFile(join(artifactsDir, 'theme.css'), skin.themeCss);
@@ -53,16 +56,16 @@ export async function runPipeline(options: PipelineOptions): Promise<PipelineRes
   const { distDir } = await buildBundle({
     pwaDir: options.pwaDir,
     workRoot: options.workRoot,
-    slug: options.slug,
+    slug,
     skin,
   });
 
   let validated = false;
   if (options.validate !== false) {
     log('[validate] Playwright happy-path gate');
-    const result = await validateBundle({ distDir, slug: options.slug, definitionPath: options.definitionPath });
+    const result = await validateBundle({ distDir, slug, definitionPath: options.definitionPath });
     if (!result.passed) {
-      throw new Error(`Validation gate failed for ${options.slug}:\n${result.output}`);
+      throw new Error(`Validation gate failed for ${slug}:\n${result.output}`);
     }
     validated = true;
   }
@@ -72,8 +75,8 @@ export async function runPipeline(options: PipelineOptions): Promise<PipelineRes
     log('[publish] uploading dist to Blob Storage');
     const result = await publishBundle({
       distDir,
-      slug: options.slug,
-      revision: options.revision,
+      slug,
+      revision,
       storageEndpoint: options.publish.storageEndpoint,
       containerName: options.publish.containerName,
       writeActive: options.publish.writeActive,
@@ -82,8 +85,8 @@ export async function runPipeline(options: PipelineOptions): Promise<PipelineRes
   }
 
   return {
-    slug: options.slug,
-    revision: options.revision,
+    slug,
+    revision,
     generator: generator.name,
     distDir,
     artifactsDir,

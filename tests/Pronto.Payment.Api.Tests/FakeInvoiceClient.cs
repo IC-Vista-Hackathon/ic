@@ -13,6 +13,7 @@ public sealed class FakeInvoiceClient : IInvoiceClient
 {
     private readonly object gate = new();
     private readonly Dictionary<(string BillerId, string InvoiceId), Entry> invoices = new();
+    private int updateStatusCalls;
 
     /// <summary>When set, invoked on every <see cref="UpdateStatusAsync"/> before applying it —
     /// throw from here to simulate an Invoice Service failure.</summary>
@@ -20,6 +21,10 @@ public sealed class FakeInvoiceClient : IInvoiceClient
 
     /// <summary>Count of applied (successful) status transitions, for asserting idempotency.</summary>
     public int AppliedTransitions { get; private set; }
+
+    public int UpdateStatusCalls => Volatile.Read(ref updateStatusCalls);
+
+    public Exception? UpdateStatusFault { get; set; }
 
     public InvoiceResponse AddDueInvoice(string billerId, int amountCents)
     {
@@ -78,6 +83,13 @@ public sealed class FakeInvoiceClient : IInvoiceClient
         // Check-and-set under one lock, matching the real repository's atomicity guarantee.
         lock (gate)
         {
+            Interlocked.Increment(ref updateStatusCalls);
+            if (UpdateStatusFault is { } fault)
+            {
+                UpdateStatusFault = null;
+                throw fault;
+            }
+
             var key = (billerId, invoiceId);
             if (!invoices.TryGetValue(key, out var entry))
             {

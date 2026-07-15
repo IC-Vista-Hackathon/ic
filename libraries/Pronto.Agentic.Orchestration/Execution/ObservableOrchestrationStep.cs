@@ -11,7 +11,9 @@ public sealed class ObservableOrchestrationStep<TInput, TOutput>(
     string summary,
     Func<TInput, OrchestrationContext, CancellationToken, ValueTask<TOutput>> execute,
     IOrchestrationEventSink eventSink,
-    ILogger? logger = null) : IOrchestrationStep<TInput, TOutput>
+    ILogger? logger = null,
+    Func<TOutput, (OrchestrationEventStatus Status, string Summary, string? ErrorCode)>? completion = null)
+    : IOrchestrationStep<TInput, TOutput>
 {
     private static readonly Action<ILogger, string, string, string?, string, string?, Exception> LogStepFailure =
         LoggerMessage.Define<string, string, string?, string, string?>(
@@ -43,7 +45,9 @@ public sealed class ObservableOrchestrationStep<TInput, TOutput>(
             activity?.SetStatus(ActivityStatusCode.Ok);
             OrchestrationTelemetry.StepCompleted.Add(1, tags);
             OrchestrationTelemetry.StepDuration.Record(durationMs, tags);
-            await eventSink.PublishAsync(Event(OrchestrationEventStatus.Completed, "Completed", sequence + 1, activity, durationMs: durationMs), cancellationToken);
+            var outcome = completion?.Invoke(result) ?? (OrchestrationEventStatus.Completed, "Completed", null);
+            await eventSink.PublishAsync(Event(outcome.Item1, outcome.Item2, sequence + 1, activity,
+                errorCode: outcome.Item3, durationMs: durationMs), cancellationToken);
             return result;
         }
         catch (Exception exception)

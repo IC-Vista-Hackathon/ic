@@ -27,6 +27,7 @@ public interface IBillerExperienceRepository
     ValueTask<AgentContextRecord> SaveAgentContextAsync(AgentContextRecord context, string? expectedETag, CancellationToken cancellationToken);
     ValueTask<DeploymentRecord?> GetDeploymentAsync(string billerId, string deploymentId, CancellationToken cancellationToken);
     ValueTask<DeploymentRecord> CreateDeploymentAsync(DeploymentRecord deployment, CancellationToken cancellationToken);
+    ValueTask<DeploymentRecord> SaveDeploymentAsync(DeploymentRecord deployment, string? expectedETag, CancellationToken cancellationToken);
 
     /// <summary>
     /// Delete a biller and all of its experiences, runs, and deployments. Test-cleanup support
@@ -36,3 +37,14 @@ public interface IBillerExperienceRepository
 }
 
 public sealed class ConcurrencyException(string message) : Exception(message);
+
+/// <summary>
+/// Thrown by <see cref="IBillerExperienceRepository.CreateBillerAsync"/> when the biller's slug
+/// was reserved by another creation between the availability check and the atomic reservation.
+/// Callers pick the next free slug and retry.
+/// </summary>
+public sealed class SlugConflictException(string slug)
+    : Exception($"The slug '{slug}' was reserved by another request.")
+{
+    public string Slug { get; } = slug;
+}

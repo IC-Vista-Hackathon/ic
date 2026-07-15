@@ -24,5 +24,6 @@ public enum OrchestrationEventStatus
     NeedsInput,
     Failed,
     Retrying,
-    Degraded
+    Degraded,
+    Skipped
 }

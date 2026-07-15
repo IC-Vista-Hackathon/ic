@@ -21,6 +21,7 @@ namespace Pronto.Payment.Api.Controllers;
 public sealed partial class PaymentsController : ControllerBase
 {
     private const string ConfirmationAlphabet = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
+    private const int MaxIdempotencyKeyLength = 200;
 
     private readonly IPaymentStore store;
     private readonly IInvoiceClient invoices;
@@ -79,6 +80,13 @@ public sealed partial class PaymentsController : ControllerBase
             throw ServiceException.BadRequest(
                 "idempotency_key_required",
                 "Idempotency-Key header or idempotency_key body field is required.");
+        }
+
+        if (idempotencyKey.Length > MaxIdempotencyKeyLength)
+        {
+            throw ServiceException.BadRequest(
+                "idempotency_key_too_long",
+                $"Idempotency keys must be at most {MaxIdempotencyKeyLength} characters.");
         }
 
         var paymentId = PaymentRecord.DeriveId(request.BillerId, idempotencyKey);

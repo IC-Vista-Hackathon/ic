@@ -104,6 +104,25 @@ public sealed class PaymentWorkflowApiTests : IClassFixture<WebApplicationFactor
     }
 
     [Fact]
+    public async Task OverlongIdempotencyKeyIsRejected()
+    {
+        var client = CreateClient();
+        var biller = Guid.NewGuid().ToString();
+        var invoice = fakeInvoices.AddDueInvoice(biller, 5000);
+
+        var response = await PostRawAsync(
+            client,
+            new CreatePaymentRequest(biller, invoice.Id, "card"),
+            new string('k', 201));
+
+        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+        Assert.Contains(
+            "idempotency_key_too_long",
+            await response.Content.ReadAsStringAsync(),
+            StringComparison.Ordinal);
+    }
+
+    [Fact]
     public async Task RetryWithSameIdempotencyKeyReturnsSamePaymentOnce()
     {
         var client = CreateClient();

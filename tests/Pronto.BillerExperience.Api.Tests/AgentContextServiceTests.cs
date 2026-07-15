@@ -85,6 +85,34 @@ public sealed class AgentContextServiceTests
         Assert.Throws<UnauthorizedAccessException>(() => service.Validate(token, writeRequired: false));
     }
 
+    [Fact]
+    public void PayerBoundCapabilityIsRequiredForPayerScopedTools()
+    {
+        var time = new ManualTimeProvider(new DateTimeOffset(2026, 7, 14, 20, 0, 0, TimeSpan.Zero));
+        var options = Options.Create(new BillerExperienceOptions
+        {
+            Mcp = new McpOptions
+            {
+                Enabled = true,
+                ApiKey = new string('a', 32),
+                CapabilitySigningKey = new string('s', 48),
+                CapabilityLifetimeMinutes = 10
+            }
+        });
+        var service = new AgentContextCapabilityService(options, time, NullLogger<AgentContextCapabilityService>.Instance);
+
+        var billerToken = service.Issue("biller-1", "run-1", "policy-agent", canWrite: false);
+        // A biller-scoped token has no payer binding, so payer-scoped tools must refuse it.
+        Assert.Null(service.Validate(billerToken, writeRequired: false).PayerId);
+        Assert.Throws<UnauthorizedAccessException>(() =>
+            service.Validate(billerToken, writeRequired: false, payerRequired: true));
+
+        var payerToken = service.Issue("biller-1", "run-1", "policy-agent", canWrite: false, payerId: "payer-9");
+        var payerScope = service.Validate(payerToken, writeRequired: false, payerRequired: true);
+        Assert.Equal("payer-9", payerScope.PayerId);
+        Assert.Equal("biller-1", payerScope.BillerId);
+    }
+
     private static async Task SeedRunAsync(InMemoryBillerExperienceRepository repository)
     {
         await repository.SaveRunAsync(new OnboardingRunRecord(
