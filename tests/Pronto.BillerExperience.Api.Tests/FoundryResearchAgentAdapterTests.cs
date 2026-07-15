@@ -59,7 +59,7 @@ public sealed class FoundryResearchAgentAdapterTests
     }
 
     [Fact]
-    public async Task DispatchFailsClosedForUncitedOutput()
+    public async Task DispatchSkipsValidEmptyEvidenceWithoutAcceptingUncitedFacts()
     {
         var gateway = new StubGateway
         {
@@ -69,9 +69,28 @@ public sealed class FoundryResearchAgentAdapterTests
 
         var response = await adapter.DispatchAsync(Descriptor(), Request(), null, CancellationToken.None);
 
+        Assert.Equal(ResearchOutcome.Skipped, response.Outcome);
+        Assert.Equal("research.no_cited_facts", response.ErrorCode);
+        Assert.False(response.Retryable);
+        Assert.Empty(response.Facts);
+    }
+
+    [Fact]
+    public async Task DispatchFailsClosedWhenCandidateFactsHaveInvalidCitations()
+    {
+        var gateway = new StubGateway
+        {
+            Output = new FoundryAgentOutput(
+                """{"facts":[{"name":"brand","value":"Unsupported","sourceUrl":"not-a-url","confidence":0.9}],"sources":[],"warnings":[]}""",
+                [])
+        };
+        var adapter = Create(gateway);
+
+        var response = await adapter.DispatchAsync(Descriptor(), Request(), null, CancellationToken.None);
+
         Assert.Equal(ResearchOutcome.Failed, response.Outcome);
         Assert.Equal("research.foundry_invalid_output", response.ErrorCode);
-        Assert.False(response.Retryable);
+        Assert.Empty(response.Facts);
     }
 
     [Fact]
