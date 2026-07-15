@@ -39,7 +39,7 @@ public sealed partial class ServiceMcpTools(
         [Description("Short-lived biller capability issued by IC orchestration.")] string capabilityToken,
         CancellationToken cancellationToken)
     {
-        var capability = capabilities.Validate(capabilityToken, writeRequired: false);
+        var capability = ValidateCapability(ServiceToolRegistry.ToolNames.GetBillerConfiguration, capabilityToken);
         return await InvokeAsync(ServiceToolRegistry.ToolNames.GetBillerConfiguration, capability, async () =>
         {
             var revision = await onboarding.GetDraftAsync(capability.BillerId, cancellationToken);
@@ -55,7 +55,7 @@ public sealed partial class ServiceMcpTools(
         [Description("Include paid/closed invoices in addition to open ones.")] bool includeClosed,
         CancellationToken cancellationToken)
     {
-        var capability = capabilities.Validate(capabilityToken, writeRequired: false);
+        var capability = ValidateCapability(ServiceToolRegistry.ToolNames.ListInvoices, capabilityToken);
         return await InvokeAsync(ServiceToolRegistry.ToolNames.ListInvoices, capability, () =>
             invoices.ListAsync(capability.BillerId, RequireArgument(accountNumber, nameof(accountNumber)), includeClosed, cancellationToken).AsTask());
     }
@@ -67,7 +67,7 @@ public sealed partial class ServiceMcpTools(
         [Description("The invoice id to read.")] string invoiceId,
         CancellationToken cancellationToken)
     {
-        var capability = capabilities.Validate(capabilityToken, writeRequired: false);
+        var capability = ValidateCapability(ServiceToolRegistry.ToolNames.GetInvoice, capabilityToken);
         return await InvokeAsync(ServiceToolRegistry.ToolNames.GetInvoice, capability, async () =>
             await invoices.GetAsync(capability.BillerId, RequireArgument(invoiceId, nameof(invoiceId)), cancellationToken)
                 ?? throw new KeyNotFoundException($"Invoice {invoiceId} was not found for this biller."));
@@ -81,7 +81,7 @@ public sealed partial class ServiceMcpTools(
         [Description("The payment method token (must be enabled for the biller).")] string method,
         CancellationToken cancellationToken)
     {
-        var capability = capabilities.Validate(capabilityToken, writeRequired: false);
+        var capability = ValidateCapability(ServiceToolRegistry.ToolNames.GetPaymentQuote, capabilityToken);
         return await InvokeAsync(ServiceToolRegistry.ToolNames.GetPaymentQuote, capability, () =>
             payments.GetQuoteAsync(
                 capability.BillerId,
@@ -97,7 +97,7 @@ public sealed partial class ServiceMcpTools(
         [Description("The account number the payer supplied to prove ownership.")] string accountNumber,
         CancellationToken cancellationToken)
     {
-        var capability = capabilities.Validate(capabilityToken, writeRequired: false);
+        var capability = ValidateCapability(ServiceToolRegistry.ToolNames.VerifyPayerAccount, capabilityToken);
         return await InvokeAsync(ServiceToolRegistry.ToolNames.VerifyPayerAccount, capability, async () =>
         {
             var payer = await payers.FindByAccountAsync(capability.BillerId, RequireArgument(accountNumber, nameof(accountNumber)), cancellationToken);
@@ -120,7 +120,7 @@ public sealed partial class ServiceMcpTools(
         [Description("Payer-bound capability returned by verify_payer_account.")] string capabilityToken,
         CancellationToken cancellationToken)
     {
-        var capability = capabilities.Validate(capabilityToken, writeRequired: false, payerRequired: true);
+        var capability = ValidateCapability(ServiceToolRegistry.ToolNames.GetPayerProfile, capabilityToken, payerRequired: true);
         return await InvokeAsync(ServiceToolRegistry.ToolNames.GetPayerProfile, capability, async () =>
             await payers.GetAsync(capability.BillerId, capability.PayerId!, cancellationToken)
                 ?? throw new KeyNotFoundException("The verified payer profile was not found."));
@@ -132,7 +132,7 @@ public sealed partial class ServiceMcpTools(
         [Description("Payer-bound capability returned by verify_payer_account.")] string capabilityToken,
         CancellationToken cancellationToken)
     {
-        var capability = capabilities.Validate(capabilityToken, writeRequired: false, payerRequired: true);
+        var capability = ValidateCapability(ServiceToolRegistry.ToolNames.GetPaymentHistory, capabilityToken, payerRequired: true);
         return await InvokeAsync(ServiceToolRegistry.ToolNames.GetPaymentHistory, capability, async () =>
         {
             var history = await payments.ListAsync(capability.BillerId, capability.PayerId!, cancellationToken);
@@ -149,7 +149,11 @@ public sealed partial class ServiceMcpTools(
         [Description("Day of month (1-28) to run autopay. Omit to leave unchanged.")] int? paymentDay,
         CancellationToken cancellationToken)
     {
-        var capability = capabilities.Validate(capabilityToken, writeRequired: true, payerRequired: true);
+        var capability = ValidateCapability(
+            ServiceToolRegistry.ToolNames.UpdatePayerPreferences,
+            capabilityToken,
+            writeRequired: true,
+            payerRequired: true);
         return await InvokeAsync(ServiceToolRegistry.ToolNames.UpdatePayerPreferences, capability, () =>
             payers.UpdatePreferencesAsync(
                 capability.BillerId,
@@ -167,7 +171,11 @@ public sealed partial class ServiceMcpTools(
         [Description("Optional future date (yyyy-MM-dd) to schedule the payment; omit to pay now.")] DateOnly? scheduledFor,
         CancellationToken cancellationToken)
     {
-        var capability = capabilities.Validate(capabilityToken, writeRequired: true, payerRequired: true);
+        var capability = ValidateCapability(
+            ServiceToolRegistry.ToolNames.CreatePaymentIntent,
+            capabilityToken,
+            writeRequired: true,
+            payerRequired: true);
         return await InvokeAsync(ServiceToolRegistry.ToolNames.CreatePaymentIntent, capability, async () =>
         {
             var requiredInvoiceId = RequireArgument(invoiceId, nameof(invoiceId));
@@ -197,21 +205,24 @@ public sealed partial class ServiceMcpTools(
         [Description("Optional schedule date from the approved intent; omit to pay now.")] DateOnly? scheduledFor,
         CancellationToken cancellationToken)
     {
-        var capability = capabilities.Validate(capabilityToken, writeRequired: true, payerRequired: true);
-
-        // Money movement is Execution-Agent-only (design/services.md), enforced server-side here.
-        if (!string.Equals(capability.AgentId, executionAgentId, StringComparison.Ordinal))
+        var capability = ValidateCapability(
+            ServiceToolRegistry.ToolNames.SubmitPayment,
+            capabilityToken,
+            writeRequired: true,
+            payerRequired: true);
+        return await InvokeAsync(ServiceToolRegistry.ToolNames.SubmitPayment, capability, async () =>
         {
-            throw new UnauthorizedAccessException("Only the Execution Agent may submit a payment.");
-        }
+            if (!string.Equals(capability.AgentId, executionAgentId, StringComparison.Ordinal))
+            {
+                throw new UnauthorizedAccessException("Only the Execution Agent may submit a payment.");
+            }
 
-        if (!payerConfirmed)
-        {
-            throw new UnauthorizedAccessException("A payment can only be submitted after explicit payer confirmation.");
-        }
+            if (!payerConfirmed)
+            {
+                throw new UnauthorizedAccessException("A payment can only be submitted after explicit payer confirmation.");
+            }
 
-        return await InvokeAsync(ServiceToolRegistry.ToolNames.SubmitPayment, capability, () =>
-            payments.CreateAsync(
+            return await payments.CreateAsync(
                 new CreatePaymentRequest(
                     capability.BillerId,
                     RequireArgument(invoiceId, nameof(invoiceId)),
@@ -219,7 +230,8 @@ public sealed partial class ServiceMcpTools(
                     capability.PayerId,
                     scheduledFor),
                 RequireArgument(intentId, nameof(intentId)),
-                cancellationToken).AsTask());
+                cancellationToken);
+        });
     }
 
     [McpServerTool(Name = ServiceToolRegistry.ToolNames.SeedInvoices, ReadOnly = false, Idempotent = false, OpenWorld = false, UseStructuredContent = true)]
@@ -231,29 +243,59 @@ public sealed partial class ServiceMcpTools(
         [Description("Optional bill type label for the seeded set.")] string? billType,
         CancellationToken cancellationToken)
     {
-        var capability = capabilities.Validate(capabilityToken, writeRequired: true);
-        if (!maintenance.Value.SeedingEnabled)
+        var capability = ValidateCapability(
+            ServiceToolRegistry.ToolNames.SeedInvoices,
+            capabilityToken,
+            writeRequired: true);
+        return await InvokeAsync(ServiceToolRegistry.ToolNames.SeedInvoices, capability, async () =>
         {
-            // Uniform "unavailable" — seeding is invisible in prod, same discipline as the REST gate.
-            throw new InvalidOperationException("The seed_invoices tool is not available in this environment.");
-        }
+            if (!maintenance.Value.SeedingEnabled)
+            {
+                throw new InvalidOperationException("The seed_invoices tool is not available in this environment.");
+            }
 
-        return await InvokeAsync(ServiceToolRegistry.ToolNames.SeedInvoices, capability, () =>
-            invoices.SeedAsync(
+            return await invoices.SeedAsync(
                 capability.BillerId,
                 new SeedInvoicesRequest(count, accountNumber, billType),
-                cancellationToken).AsTask());
+                cancellationToken);
+        });
     }
 
     private async ValueTask<T> InvokeAsync<T>(string toolName, AgentContextCapability capability, Func<Task<T>> action)
     {
+        using var activity = McpTelemetry.StartToolActivity(toolName, capability);
+        var startedAt = Stopwatch.GetTimestamp();
+        McpTelemetry.RecordInvoked(toolName, capability, activity);
         try
         {
-            return await action();
+            var result = await action();
+            McpTelemetry.RecordCompleted(
+                toolName, capability, Stopwatch.GetElapsedTime(startedAt).TotalMilliseconds, activity);
+            return result;
         }
         catch (Exception exception) when (exception is not OperationCanceledException)
         {
-            LogToolFailed(logger, toolName, capability.BillerId, capability.AgentId, Activity.Current?.TraceId.ToString(), exception);
+            var (category, statusCode) = McpTelemetry.Categorize(exception);
+            McpTelemetry.RecordFailed(
+                toolName, capability, Stopwatch.GetElapsedTime(startedAt).TotalMilliseconds,
+                category, statusCode, activity);
+            LogToolFailed(
+                logger, toolName, capability.BillerId, capability.AgentId, category, statusCode,
+                Activity.Current?.TraceId.ToString());
+            throw;
+        }
+    }
+
+    private AgentContextCapability ValidateCapability(
+        string toolName, string capabilityToken, bool writeRequired = false, bool payerRequired = false)
+    {
+        try
+        {
+            return capabilities.Validate(capabilityToken, writeRequired, payerRequired);
+        }
+        catch (UnauthorizedAccessException)
+        {
+            McpTelemetry.RecordDenied(toolName);
             throw;
         }
     }
@@ -268,8 +310,10 @@ public sealed partial class ServiceMcpTools(
     [LoggerMessage(2800, LogLevel.Information, "MCP verify_payer_account matched payer {PayerId} for biller {BillerId}, agent {AgentId}; trace {TraceId}")]
     private static partial void LogPayerVerified(ILogger logger, string billerId, string payerId, string agentId, string? traceId);
 
-    [LoggerMessage(2801, LogLevel.Error, "MCP service tool {ToolName} failed for biller {BillerId}, agent {AgentId}; trace {TraceId}")]
-    private static partial void LogToolFailed(ILogger logger, string toolName, string billerId, string agentId, string? traceId, Exception exception);
+    [LoggerMessage(2801, LogLevel.Error, "MCP service tool {ToolName} failed for biller {BillerId}, agent {AgentId}; category {FailureCategory}, status {StatusCode}, trace {TraceId}")]
+    private static partial void LogToolFailed(
+        ILogger logger, string toolName, string billerId, string agentId,
+        string failureCategory, int statusCode, string? traceId);
 }
 
 /// <summary>Agent-facing projection of a biller's current experience configuration.</summary>

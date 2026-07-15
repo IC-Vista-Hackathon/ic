@@ -5,6 +5,7 @@ import { toBillerSlug } from './slug';
 import { trackEvent } from './insights';
 import { categorizeError } from './telemetryPolicy';
 import { logError, logEvent } from './telemetry';
+import { agentActivityMeta } from './agentActivityMeta';
 import type { AgentActivity, Deployment, ExperienceDefinition, ExperienceRevision } from './types';
 
 const PUBLISH_FAILURE_MESSAGE = 'We could not publish your payer site. Please try again. If the problem continues, contact support.';
@@ -229,6 +230,12 @@ interface State {
   previewAutopaySource: 'existing' | 'new';
   previewAutopayMethodType: 'card' | 'bank';
   previewPaperlessEnrolled: boolean;
+  payCardNumber: string;
+  payCardExpiry: string;
+  payCardCvc: string;
+  payBankRouting: string;
+  payBankAccount: string;
+  payError: string | null;
   backendBillerId: string | null;
   backendDraft: ExperienceRevision | null;
   deployment: Deployment | null;
@@ -288,6 +295,22 @@ const STATEMENTS: Statement[] = [
 ];
 
 const STATE_OPTIONS = ['Alabama', 'Alaska', 'Arizona', 'Arkansas', 'California', 'Colorado', 'Connecticut', 'Delaware', 'Florida', 'Georgia', 'Hawaii', 'Idaho', 'Illinois', 'Indiana', 'Iowa', 'Kansas', 'Kentucky', 'Louisiana', 'Maine', 'Maryland', 'Massachusetts', 'Michigan', 'Minnesota', 'Mississippi', 'Missouri', 'Montana', 'Nebraska', 'Nevada', 'New Hampshire', 'New Jersey', 'New Mexico', 'New York', 'North Carolina', 'North Dakota', 'Ohio', 'Oklahoma', 'Oregon', 'Pennsylvania', 'Rhode Island', 'South Carolina', 'South Dakota', 'Tennessee', 'Texas', 'Utah', 'Vermont', 'Virginia', 'Washington', 'West Virginia', 'Wisconsin', 'Wyoming'];
+
+// Representative postal code per operating state, used to seed the biller record so downstream
+// compliance/jurisdiction checks reflect where the biller actually operates instead of a fixed
+// out-of-state default.
+const STATE_POSTAL_CODE: Record<string, string> = {
+  Alabama: '35203', Alaska: '99501', Arizona: '85001', Arkansas: '72201', California: '94103',
+  Colorado: '80202', Connecticut: '06103', Delaware: '19801', Florida: '33101', Georgia: '30303',
+  Hawaii: '96813', Idaho: '83702', Illinois: '60601', Indiana: '46204', Iowa: '50309',
+  Kansas: '66603', Kentucky: '40202', Louisiana: '70112', Maine: '04101', Maryland: '21201',
+  Massachusetts: '02108', Michigan: '48226', Minnesota: '55401', Mississippi: '39201', Missouri: '63101',
+  Montana: '59601', Nebraska: '68102', Nevada: '89101', 'New Hampshire': '03301', 'New Jersey': '07102',
+  'New Mexico': '87501', 'New York': '10001', 'North Carolina': '27601', 'North Dakota': '58501', Ohio: '43215',
+  Oklahoma: '73102', Oregon: '97201', Pennsylvania: '19103', 'Rhode Island': '02903', 'South Carolina': '29201',
+  'South Dakota': '57501', Tennessee: '37219', Texas: '78701', Utah: '84101', Vermont: '05601',
+  Virginia: '23219', Washington: '98101', 'West Virginia': '25301', Wisconsin: '53703', Wyoming: '82001',
+};
 
 /** Lazily load a Google font for the biller's chosen brand font so the
  *  payer preview renders in that typeface. */
@@ -353,11 +376,44 @@ const RESTRICTION_BY_STATE: Record<string, string> = {
 
 function matchScenario(text: string): ScenarioResult {
   const t = (text || '').toLowerCase();
-  if (/(delinquent|past due|past-due|late)/.test(t)) return { title: 'Past-Due Account', intent: 'warning', lines: ['Account is 45 days past due.', 'Outstanding balance: $342.18 across 2 unpaid statements.', 'A service suspension warning has been triggered.'] };
+  if (/(delinquent|delinquency|past due|past-due|overdue|late)/.test(t)) {
+    const daysMatch = t.match(/(\d+)\s*(?:day|days)/);
+    const days = daysMatch ? Number(daysMatch[1]) : 45;
+    const mentionsLateFee = /(late fee|late charge|late-fee|penalty)/.test(t);
+    const baseBalance = 342.18;
+    const lateFee = 25.00;
+    const lines = [`Account is ${days} days past due.`];
+    if (mentionsLateFee) {
+      lines.push(`A late fee of $${lateFee.toFixed(2)} has been applied.`);
+      lines.push(`Outstanding balance: $${(baseBalance + lateFee).toFixed(2)} across 2 unpaid statements (includes late fee).`);
+    } else {
+      lines.push(`Outstanding balance: $${baseBalance.toFixed(2)} across 2 unpaid statements.`);
+    }
+    lines.push(days >= 60 ? 'A service suspension warning has been triggered.' : 'A past-due reminder has been sent to the payer.');
+    return { title: 'Past-Due Account', intent: 'warning', lines };
+  }
   if (/refund/.test(t)) return { title: 'Refund Issued', intent: 'success', lines: ['A refund of $128.42 was issued to the card on file.', 'Funds typically arrive in 3-5 business days.', 'A confirmation email was sent to the payer.'] };
   if (/(dispute|chargeback)/.test(t)) return { title: 'Payment Disputed', intent: 'danger', lines: ['The cardholder has disputed a $98.00 charge.', 'The payment is under review and temporarily held.', 'The biller has 10 days to respond with evidence.'] };
   if (/(large|high balance|big balance)/.test(t)) return { title: 'High Outstanding Balance', intent: 'warning', lines: ['Outstanding balance of $4,820.00 across 3 unpaid statements.', 'Payer may be offered a payment plan.', 'AutoPay enrollment is recommended to prevent recurrence.'] };
   return { title: 'Standard Billing Snapshot', intent: 'info', lines: [`No canned scenario matched "${text.slice(0, 60)}" - showing a standard snapshot instead.`, 'Try keywords like "delinquent", "refund", "dispute", or "large balance".'] };
+}
+
+// Validate the payer checkout before reporting a successful (mock) payment. Wallet methods
+// redirect to their provider, so only card/bank details are checked here.
+function validatePayment(st: State): string | null {
+  const isWallet = (['applepay', 'googlepay', 'paypal'] as MethodType[]).includes(st.methodType);
+  if (!isWallet && st.methodType === 'card') {
+    const digits = st.payCardNumber.replace(/\D/g, '');
+    if (digits.length < 13 || digits.length > 19) return 'Enter a valid card number.';
+    if (!/^\d{2}\s*\/\s*\d{2}$/.test(st.payCardExpiry.trim())) return 'Enter the card expiry as MM/YY.';
+    if (!/^\d{3,4}$/.test(st.payCardCvc.trim())) return 'Enter the 3- or 4-digit security code.';
+  } else if (!isWallet && st.methodType === 'bank') {
+    if (!/^\d{9}$/.test(st.payBankRouting.replace(/\D/g, ''))) return 'Enter a valid 9-digit routing number.';
+    if (st.payBankAccount.replace(/\D/g, '').length < 4) return 'Enter a valid account number.';
+  }
+  if (st.accountPassword && !st.accountEmail.trim()) return 'Enter an email to create your account, or clear the password to pay as a guest.';
+  if (st.accountPassword && st.accountPassword.length < MIN_PASSWORD_LENGTH) return `Password must be at least ${MIN_PASSWORD_LENGTH} characters.`;
+  return null;
 }
 
 interface AiRecommendations { values: Partial<State>; rationale: Record<string, string>; }
@@ -450,6 +506,7 @@ const INITIAL_STATE: State = {
   statementTab: 'current', accountEmail: '', accountPassword: '',
   previewAutopayEnrolled: false, previewAutopayEnrolling: false, previewAutopaySource: 'existing', previewAutopayMethodType: 'card',
   previewPaperlessEnrolled: false,
+  payCardNumber: '', payCardExpiry: '', payCardCvc: '', payBankRouting: '', payBankAccount: '', payError: null,
   backendBillerId: null, backendDraft: null, deployment: null, publishing: false, publishError: null,
   agentActivity: [], activityConnection: 'idle', orchestrationError: null, analysisComplete: false,
   previewChatInput: '', previewChatBusy: false, previewChatError: null, previewProposal: null, previewChatReply: null, previewGenerationMode: null,
@@ -512,7 +569,7 @@ function AgentActivityPanel({
                 <div style={css('display:flex;align-items:center;gap:8px')}><b style={css(`color:${color(status)}`)}>{icon(status)}</b><strong>{item.display_name}</strong></div>
                 <code title={item.agent_id} style={css('display:block;margin:5px 0;font-size:11px;overflow:hidden;text-overflow:ellipsis')}>{item.agent_id}</code>
                 <small>{settled ? 'Agent did not report a result before the run finished.' : item.summary}</small>
-                <small style={css('display:block;margin-top:5px;color:var(--invoicecloud-utility-neutral-70)')}>{status}{!settled && item.duration_ms !== undefined ? ` · ${Math.round(item.duration_ms)} ms` : ''}{item.error_code ? ` · ${item.error_code}` : ''}</small>
+                <small style={css('display:block;margin-top:5px;color:var(--invoicecloud-utility-neutral-70)')}>{agentActivityMeta(item, status, !settled)}</small>
               </article>
             );
           })}
@@ -744,11 +801,12 @@ export function App() {
         const website = s.website.trim()
           ? (/^https?:\/\//i.test(s.website.trim()) ? s.website.trim() : `https://${s.website.trim()}`)
           : undefined;
+        const primaryState = s.selectedStates[0] ?? 'California';
         const created = await api.create({
           display_name: s.bizName,
           slug,
           bill_type: vertical,
-          postal_code: '10001',
+          postal_code: STATE_POSTAL_CODE[primaryState] ?? '10001',
           website,
         });
         billerId = created.biller.biller_id;
@@ -812,7 +870,7 @@ export function App() {
   const saveLocationSection = () => patch((st) => ({ reviewEditingSection: null, compliance: recomputeCompliance(st) }));
   const closeSaveErrorModal = () => { patch({ reviewSaveError: false }); setTimeout(() => { saveBtnRef.current?.focus(); }, 0); };
 
-  const confirmPreview = () => { if (s.reviewEditingSection) { patch({ reviewSaveError: true }); return; } trackEvent('studio.preview_opened', { device: s.previewDevice, biller_id: s.backendBillerId ?? undefined }); patch({ screen: 'preview', payerStep: 0, methodType: 'card', autopayOptIn: false, paperlessOptIn: false, processing: false, statementTab: 'current', accountEmail: '', accountPassword: '', previewAutopayEnrolled: false, previewAutopayEnrolling: false, previewAutopaySource: 'existing', previewAutopayMethodType: 'card', previewPaperlessEnrolled: false }); };
+  const confirmPreview = () => { if (s.reviewEditingSection) { patch({ reviewSaveError: true }); return; } trackEvent('studio.preview_opened', { device: s.previewDevice, biller_id: s.backendBillerId ?? undefined }); patch({ screen: 'preview', payerStep: 0, methodType: 'card', autopayOptIn: false, paperlessOptIn: false, processing: false, statementTab: 'current', accountEmail: '', accountPassword: '', payCardNumber: '', payCardExpiry: '', payCardCvc: '', payBankRouting: '', payBankAccount: '', payError: null, previewAutopayEnrolled: false, previewAutopayEnrolling: false, previewAutopaySource: 'existing', previewAutopayMethodType: 'card', previewPaperlessEnrolled: false }); };
   const redoWizard = () => patch({ screen: 'wizard', wizardStep: 0 });
   const reviewCompletedResearch = () => patch({ screen: 'analyzing' });
   const backToResults = () => patch({ screen: 'results', payerStep: 0, processing: false });
@@ -879,11 +937,21 @@ export function App() {
 
   const payerGoPay = () => patch({ payerStep: 1 });
   const payerBack = () => patch((st) => ({ payerStep: Math.max(0, st.payerStep - 1) }));
-  const selectMethodType = (t: MethodType) => patch({ methodType: t });
-  const toggleAutopay = () => patch((st) => { const turningOn = !st.autopayOptIn; const isFL = !!st.compliance?.states.includes('Florida'); return { autopayOptIn: turningOn, methodType: turningOn && isFL ? 'bank' : st.methodType }; });
+  const selectMethodType = (t: MethodType) => patch({ methodType: t, payError: null });
+  const toggleAutopay = () => patch((st) => { const turningOn = !st.autopayOptIn; const isFL = !!st.compliance?.states.includes('Florida'); return { autopayOptIn: turningOn, methodType: turningOn && isFL ? 'bank' : st.methodType, paperlessOptIn: turningOn && st.offerPaperless ? true : st.paperlessOptIn, payError: null }; });
   const togglePaperless = () => patch((st) => ({ paperlessOptIn: !st.paperlessOptIn }));
-  const submitPayment = () => { patch({ processing: true }); later(() => patch({ processing: false, payerStep: 2 }), 900); };
-  const payerRestart = () => patch({ payerStep: 0, methodType: 'card', autopayOptIn: false, paperlessOptIn: false, processing: false, viewingStatementId: null, statementTab: 'current', accountEmail: '', accountPassword: '', previewAutopayEnrolled: false, previewAutopayEnrolling: false, previewAutopaySource: 'existing', previewAutopayMethodType: 'card', previewPaperlessEnrolled: false });
+  const setPayCardNumber = (e: React.ChangeEvent<HTMLInputElement>) => patch({ payCardNumber: e.target.value, payError: null });
+  const setPayCardExpiry = (e: React.ChangeEvent<HTMLInputElement>) => patch({ payCardExpiry: e.target.value, payError: null });
+  const setPayCardCvc = (e: React.ChangeEvent<HTMLInputElement>) => patch({ payCardCvc: e.target.value, payError: null });
+  const setPayBankRouting = (e: React.ChangeEvent<HTMLInputElement>) => patch({ payBankRouting: e.target.value, payError: null });
+  const setPayBankAccount = (e: React.ChangeEvent<HTMLInputElement>) => patch({ payBankAccount: e.target.value, payError: null });
+  const submitPayment = () => {
+    const err = validatePayment(s);
+    if (err) { patch({ payError: err }); return; }
+    patch({ processing: true, payError: null });
+    later(() => patch({ processing: false, payerStep: 2 }), 900);
+  };
+  const payerRestart = () => patch({ payerStep: 0, methodType: 'card', autopayOptIn: false, paperlessOptIn: false, processing: false, viewingStatementId: null, statementTab: 'current', accountEmail: '', accountPassword: '', payCardNumber: '', payCardExpiry: '', payCardCvc: '', payBankRouting: '', payBankAccount: '', payError: null, previewAutopayEnrolled: false, previewAutopayEnrolling: false, previewAutopaySource: 'existing', previewAutopayMethodType: 'card', previewPaperlessEnrolled: false });
   const selectScenario = (name: string) => patch({ previewScenario: name, payerStep: 0 });
   const setStatementTab = (tab: 'current' | 'past') => patch({ statementTab: tab });
   const setAccountEmail = (e: React.ChangeEvent<HTMLInputElement>) => patch({ accountEmail: e.target.value });
@@ -2222,19 +2290,19 @@ export function App() {
                       {s.methodType === 'card' && (
                         <>
                           <label style={css('display:block;font-size:13px;font-weight:500;margin-bottom:4px')}>Card number</label>
-                          <input type="text" placeholder="4242 4242 4242 4242" style={css('width:100%;padding:12px 14px;border-radius:4px;border:1px solid var(--invoicecloud-surface-default-border);font-family:var(--invoicecloud-font-family-mono);margin-bottom:var(--invoicecloud-spacing-s)')} />
+                          <input type="text" inputMode="numeric" autoComplete="cc-number" value={s.payCardNumber} onChange={setPayCardNumber} placeholder="4242 4242 4242 4242" style={css('width:100%;padding:12px 14px;border-radius:4px;border:1px solid var(--invoicecloud-surface-default-border);font-family:var(--invoicecloud-font-family-mono);margin-bottom:var(--invoicecloud-spacing-s)')} />
                           <div style={css('display:flex;gap:var(--invoicecloud-spacing-s);margin-bottom:var(--invoicecloud-spacing-m)')}>
-                            <input type="text" placeholder="MM/YY" style={css('width:100%;padding:12px 14px;border-radius:4px;border:1px solid var(--invoicecloud-surface-default-border);font-family:var(--invoicecloud-font-family-mono)')} />
-                            <input type="text" placeholder="CVC" style={css('width:100%;padding:12px 14px;border-radius:4px;border:1px solid var(--invoicecloud-surface-default-border);font-family:var(--invoicecloud-font-family-mono)')} />
+                            <input type="text" inputMode="numeric" autoComplete="cc-exp" value={s.payCardExpiry} onChange={setPayCardExpiry} placeholder="MM/YY" style={css('width:100%;padding:12px 14px;border-radius:4px;border:1px solid var(--invoicecloud-surface-default-border);font-family:var(--invoicecloud-font-family-mono)')} />
+                            <input type="text" inputMode="numeric" autoComplete="cc-csc" value={s.payCardCvc} onChange={setPayCardCvc} placeholder="CVC" style={css('width:100%;padding:12px 14px;border-radius:4px;border:1px solid var(--invoicecloud-surface-default-border);font-family:var(--invoicecloud-font-family-mono)')} />
                           </div>
                         </>
                       )}
                       {s.methodType === 'bank' && (
                         <>
                           <label style={css('display:block;font-size:13px;font-weight:500;margin-bottom:4px')}>Routing number</label>
-                          <input type="text" placeholder="021000021" style={css('width:100%;padding:12px 14px;border-radius:4px;border:1px solid var(--invoicecloud-surface-default-border);font-family:var(--invoicecloud-font-family-mono);margin-bottom:var(--invoicecloud-spacing-s)')} />
+                          <input type="text" inputMode="numeric" value={s.payBankRouting} onChange={setPayBankRouting} placeholder="021000021" style={css('width:100%;padding:12px 14px;border-radius:4px;border:1px solid var(--invoicecloud-surface-default-border);font-family:var(--invoicecloud-font-family-mono);margin-bottom:var(--invoicecloud-spacing-s)')} />
                           <label style={css('display:block;font-size:13px;font-weight:500;margin-bottom:4px')}>Account number</label>
-                          <input type="text" placeholder="000123456789" style={css('width:100%;padding:12px 14px;border-radius:4px;border:1px solid var(--invoicecloud-surface-default-border);font-family:var(--invoicecloud-font-family-mono);margin-bottom:var(--invoicecloud-spacing-m)')} />
+                          <input type="text" inputMode="numeric" value={s.payBankAccount} onChange={setPayBankAccount} placeholder="000123456789" style={css('width:100%;padding:12px 14px;border-radius:4px;border:1px solid var(--invoicecloud-surface-default-border);font-family:var(--invoicecloud-font-family-mono);margin-bottom:var(--invoicecloud-spacing-m)')} />
                         </>
                       )}
                       <h4 style={css('font-size:15px;margin-bottom:var(--invoicecloud-spacing-s);margin-top:var(--invoicecloud-spacing-m)')}>2. AutoPay &amp; Paperless enrollment</h4>
@@ -2260,6 +2328,9 @@ export function App() {
                       <input type="email" value={s.accountEmail} onChange={setAccountEmail} placeholder="Email address" style={css('width:100%;padding:12px 14px;border-radius:4px;border:1px solid var(--invoicecloud-surface-default-border);margin-bottom:var(--invoicecloud-spacing-s)')} />
                       <input type="password" value={s.accountPassword} onChange={setAccountPassword} placeholder="Create a password (optional)" style={css('width:100%;padding:12px 14px;border-radius:4px;border:1px solid var(--invoicecloud-surface-default-border);margin-bottom:var(--invoicecloud-spacing-m)')} />
                       <div style={css('font-size:12px;color:var(--invoicecloud-utility-neutral-60);margin:var(--invoicecloud-spacing-m) 0')}>By selecting the button below, you agree to the <a href={asset('legal/terms.html')} target="_blank" rel="noopener noreferrer" style={css('color:var(--invoicecloud-primary)')}>Pronto Terms and Conditions</a> and <a href={asset('legal/fee-disclosure.html')} target="_blank" rel="noopener noreferrer" style={css('color:var(--invoicecloud-primary)')}>Fee Disclosure</a>.</div>
+                      {s.payError && (
+                        <div role="alert" style={css('background:var(--invoicecloud-intent-error-background);border:1px solid var(--invoicecloud-intent-error-border);color:var(--invoicecloud-intent-error);border-radius:8px;padding:10px 12px;font-size:13px;margin-bottom:var(--invoicecloud-spacing-s)')}>{s.payError}</div>
+                      )}
                       <div style={css('display:flex;justify-content:space-between;align-items:center')}>
                         <button type="button" onClick={payerBack} style={css('background:none;border:none;color:var(--invoicecloud-primary);font-weight:700;cursor:pointer')}>&larr; Back</button>
                         <button type="button" onClick={submitPayment} disabled={s.processing} style={css('background:var(--invoicecloud-intent-success-hover);color:#fff;border:none;border-radius:10px;padding:14px 32px;font-weight:700;cursor:pointer;font-size:15px')}>{s.processing ? 'Processing...' : 'Pay Now'}</button>
@@ -2374,7 +2445,7 @@ export function App() {
                 <div style={css('background:var(--invoicecloud-surface-default-background);border:1px solid var(--invoicecloud-surface-default-border);border-radius:14px;padding:var(--invoicecloud-spacing-m) var(--invoicecloud-spacing-l)')}>
                   {settingsRow('Lines of business', String(s.lobs.length))}
                   {settingsRow('Live lines of business', String(liveLobCount))}
-                  {settingsRow('Billing contact', `demo@${siteSlug}.com`)}
+                  {settingsRow('Billing contact', accountEmail)}
                   {settingsRow('Payment method', s.purchased ? 'Card ending 4242 (demo)' : 'None on file')}
                 </div>
                 <p style={css('font-size:12px;color:var(--invoicecloud-utility-neutral-60);margin-top:var(--invoicecloud-spacing-s)')}>Demo placeholder - billing reflects your current session state; no real charges are made.</p>
@@ -2387,7 +2458,7 @@ export function App() {
                 <div style={css('background:var(--invoicecloud-surface-default-background);border:1px solid var(--invoicecloud-surface-default-border);border-radius:14px;padding:var(--invoicecloud-spacing-m) var(--invoicecloud-spacing-l);margin-bottom:var(--invoicecloud-spacing-m)')}>
                   <div style={css('font-weight:700;font-size:14px;margin-bottom:4px')}>Business profile</div>
                   {settingsRow('Business name', s.bizName || 'Not set')}
-                  {settingsRow('Account email', `demo@${siteSlug}.com`)}
+                  {settingsRow('Account email', accountEmail)}
                   {settingsRow('Primary vertical', verticalSummaryLabel)}
                   {settingsRow('Operating states', s.selectedStates.length ? s.selectedStates.join(', ') : 'None selected')}
                 </div>

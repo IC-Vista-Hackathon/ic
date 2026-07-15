@@ -47,7 +47,7 @@ public sealed partial class FoundryResearchAgentAdapter(
         try
         {
             var output = await gateway.InvokeAsync(agent.Id, BuildResearchPrompt(request, invocationContext), cancellationToken);
-            return Parse(output);
+            return Parse(agent.Id, output);
         }
         catch (FoundryResearchException exception)
         {
@@ -81,7 +81,7 @@ public sealed partial class FoundryResearchAgentAdapter(
                 _options.CoordinatorAgentId,
                 BuildConsolidationPrompt(request, payload),
                 cancellationToken);
-            return Parse(output);
+            return Parse(_options.CoordinatorAgentId, output);
         }
         catch (FoundryResearchException exception)
         {
@@ -152,13 +152,14 @@ public sealed partial class FoundryResearchAgentAdapter(
         {"facts":[{"name":"string","value":"string","sourceUrl":"https://...","confidence":0.0}],"sources":[{"url":"https://...","title":"string"}],"warnings":["string"]}
         """;
 
-    private static BillerResearchResponse Parse(FoundryAgentOutput output)
+    private BillerResearchResponse Parse(string agentId, FoundryAgentOutput output)
     {
         var json = ExtractJson(output.Text);
         var document = JsonSerializer.Deserialize<FoundryResearchDocument>(json, JsonOptions)
             ?? throw new JsonException("Foundry output was empty.");
         var now = DateTimeOffset.UtcNow;
-        var facts = (document.Facts ?? [])
+        var candidateFacts = document.Facts ?? [];
+        var facts = candidateFacts
             .Where(fact => !string.IsNullOrWhiteSpace(fact.Name) && !string.IsNullOrWhiteSpace(fact.Value))
             .Where(fact => Uri.TryCreate(fact.SourceUrl, UriKind.Absolute, out var uri) && uri.Scheme == Uri.UriSchemeHttps)
             .Select(fact => new ResearchFact(fact.Name!, fact.Value!, new Uri(fact.SourceUrl!), Math.Clamp(fact.Confidence, 0, 1)))
@@ -172,9 +173,22 @@ public sealed partial class FoundryResearchAgentAdapter(
             .Select(group => group.First())
             .ToArray();
 
+        if (candidateFacts.Count == 0)
+        {
+            LogNoCitedFacts(logger, agentId, output.Citations.Count, Activity.Current?.TraceId.ToString());
+            return new BillerResearchResponse(
+                ResearchOutcome.Skipped,
+                [],
+                [],
+                (document.Warnings ?? []).Append("research.no_cited_facts").Distinct(StringComparer.Ordinal).ToArray(),
+                "research.no_cited_facts",
+                false);
+        }
+
         if (facts.Length == 0 || sources.Length == 0)
         {
-            throw new JsonException("Foundry output contained no cited research facts.");
+            throw new JsonException(
+                $"Foundry output contained {candidateFacts.Count} candidate facts but none had valid HTTPS citations.");
         }
 
         return new BillerResearchResponse(ResearchOutcome.Completed, facts, sources, document.Warnings ?? []);
@@ -197,6 +211,9 @@ public sealed partial class FoundryResearchAgentAdapter(
 
     [LoggerMessage(2672, LogLevel.Error, "Foundry research adapter failed for agent {AgentId} with {ErrorCode}; trace {TraceId}")]
     private static partial void LogAdapterFailure(ILogger logger, string agentId, string errorCode, string? traceId, Exception exception);
+
+    [LoggerMessage(2677, LogLevel.Warning, "Foundry agent {AgentId} returned no citable research facts with {CitationCount} SDK citations; trace {TraceId}")]
+    private static partial void LogNoCitedFacts(ILogger logger, string agentId, int citationCount, string? traceId);
 
     private sealed record FoundryResearchDocument(
         IReadOnlyList<FoundryFactDocument>? Facts,

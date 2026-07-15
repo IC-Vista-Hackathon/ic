@@ -15,12 +15,16 @@ public static class CheckpointedExecution
         JsonSerializerOptions? jsonOptions = null,
         CancellationToken cancellationToken = default)
     {
-        var current = await store.ReadAsync(partitionKey, runId, cancellationToken);
-        if (current is { State: "completed" } && current.Step >= step)
-            return JsonSerializer.Deserialize<TOutput>(current.Payload, jsonOptions)
-                ?? throw new InvalidOperationException("Completed orchestration checkpoint had no output.");
+        // Each step of a run owns its own checkpoint document. A single checkpoint per run
+        // could only hold the latest step's payload, so resuming an earlier step would return
+        // the wrong step's output (deserialized into the wrong type). Scoping the persistence
+        // key by step keeps every step's output independently resumable.
+        var checkpointId = CheckpointId(runId, step);
+        var current = await store.ReadAsync(partitionKey, checkpointId, cancellationToken);
+        if (current is { State: "completed" })
+            return JsonSerializer.Deserialize<TOutput>(current.Payload, jsonOptions)!;
 
-        var running = await store.SaveAsync(new(runId, partitionKey, workflow, "running", step,
+        var running = await store.SaveAsync(new(checkpointId, partitionKey, workflow, "running", step,
             current?.Payload ?? "null", DateTimeOffset.UtcNow), current?.ETag, cancellationToken);
         var output = await operation(cancellationToken);
         var completed = running with
@@ -32,4 +36,6 @@ public static class CheckpointedExecution
         await store.SaveAsync(completed, running.ETag, cancellationToken);
         return output;
     }
+
+    private static string CheckpointId(string runId, int step) => $"{runId}#step={step}";
 }

@@ -77,14 +77,19 @@ public sealed partial class BillerResearchCoordinator(
             Math.Max(1, _options.MaxParallelAgents),
             (agent, _, token) => new ValueTask<AgentResult>(DispatchAsync(agent, request, executionContext, token)),
             cancellationToken: cancellationToken);
-        var results = fanOut.Select(item => item.Output ?? new AgentResult(null, "research.agent_failed")).ToArray();
+        var results = fanOut.Select(item => item.Output ?? new AgentResult(null, "research.agent_failed", true)).ToArray();
         var successful = results.Where(result => result.Response is not null).Select(result => result.Response!).ToArray();
-        var warnings = results.Where(result => result.ErrorCode is not null).Select(result => result.ErrorCode!).ToList();
+        var warnings = results.Where(result => result.ErrorCode is not null)
+            .Select(result => result.ErrorCode!)
+            .Distinct(StringComparer.Ordinal)
+            .ToList();
 
         if (successful.Length == 0)
         {
-            activity?.SetStatus(ActivityStatusCode.Error, "research.all_agents_failed");
-            return new BillerResearchResponse(ResearchOutcome.Failed, [], [], warnings, "research.all_agents_failed", true);
+            var errorCode = warnings.Count == 1 ? warnings[0] : "research.all_agents_failed";
+            var retryable = results.Any(result => result.Retryable);
+            activity?.SetStatus(ActivityStatusCode.Error, errorCode);
+            return new BillerResearchResponse(ResearchOutcome.Failed, [], [], warnings, errorCode, retryable);
         }
 
         if (successful.All(response => response.Outcome == ResearchOutcome.Skipped))
@@ -206,8 +211,8 @@ public sealed partial class BillerResearchCoordinator(
                     CancellationToken.None);
 
                 return response.Outcome == ResearchOutcome.Failed
-                    ? new AgentResult(null, response.ErrorCode ?? "research.agent_failed")
-                    : new AgentResult(response, null);
+                    ? new AgentResult(null, response.ErrorCode ?? "research.agent_failed", response.Retryable)
+                    : new AgentResult(response, null, false);
             }
             catch (OperationCanceledException exception) when (!cancellationToken.IsCancellationRequested)
             {
@@ -215,7 +220,7 @@ public sealed partial class BillerResearchCoordinator(
                 await PublishActivityAsync(executionContext, agent, OrchestrationEventStatus.Failed,
                     "Agent research timed out.", "research.agent_timeout", true,
                     Stopwatch.GetElapsedTime(startedAt).TotalMilliseconds, CancellationToken.None);
-                return new AgentResult(null, "research.agent_timeout");
+                return new AgentResult(null, "research.agent_timeout", true);
             }
             catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
             {
@@ -227,7 +232,7 @@ public sealed partial class BillerResearchCoordinator(
                 await PublishActivityAsync(executionContext, agent, OrchestrationEventStatus.Failed,
                     "Agent research failed unexpectedly.", "research.agent_failed", true,
                     Stopwatch.GetElapsedTime(startedAt).TotalMilliseconds, CancellationToken.None);
-                return new AgentResult(null, "research.agent_failed");
+                return new AgentResult(null, "research.agent_failed", true);
         }
     }
 
@@ -301,7 +306,7 @@ public sealed partial class BillerResearchCoordinator(
         }
     }
 
-    private sealed record AgentResult(BillerResearchResponse? Response, string? ErrorCode);
+    private sealed record AgentResult(BillerResearchResponse? Response, string? ErrorCode, bool Retryable);
 
     [LoggerMessage(2650, LogLevel.Error, "Research agent catalog discovery failed; trace {TraceId}")]
     private static partial void LogCatalogFailure(ILogger logger, Exception exception, string? traceId);

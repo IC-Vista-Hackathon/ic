@@ -40,41 +40,116 @@ orchestration can evolve without renaming the API used by billers and other Pron
 
 ## Architecture
 
-```text
-Biller
-  │ chat + preview + approval
-  ▼
-Pronto Biller Studio
-  │ HTTPS / server-sent events
-  ▼
-Pronto.BillerExperience.Api
-  │
-  ├── Pronto.Agentic.Orchestration
-  │     Discover → Draft → Validate → Preview → Approve
-  │
-  ├── Azure Cosmos DB for NoSQL
-  │     billers, sessions, revisions, checkpoints, deployments
-  │
-  └── durable publication request
-          ▼
-Pronto.BillerExperience.Worker
-  │ immutable revision + atomic active pointer
-  ▼
-Private Azure Blob Storage
-  │ versioned public-safe biller artifacts
-  ▼
-Pronto.BillerExperience.Api
-  │ private artifact reader
-  ▼
-Shared Pronto.BillerPayments.Pwa deployment
-  │ /pay/{slug}/
-          │
-          ▼
-Branded installable PWA
-          │
-          ▼
-Existing Pronto payment APIs and rails
+```mermaid
+flowchart TB
+    Biller([Biller])
+    Payer([Payer])
+    Gateway["kgateway + Gateway API<br/>pronto.eastus2.cloudapp.azure.com"]
+
+    subgraph Delivery["Delivery and infrastructure as code"]
+        Actions["GitHub Actions<br/>CI, trusted nonprod, serialized prod deploy"]
+        ACR[("Azure Container Registry<br/>immutable commit-SHA images")]
+        Bicep["Subscription-scope Bicep"]
+        Actions -->|"az acr build"| ACR
+    end
+
+    Biller -->|"/studio"| Gateway
+    Payer -->|"/pay/:slug"| Gateway
+
+    subgraph AKS["AKS: aks-ic-hack / namespace ic"]
+        Studio["Biller Experience Studio<br/>chat, live preview, approval"]
+
+        subgraph ExperienceAPI["Pronto.BillerExperience.Api"]
+            Controllers["Controller APIs + SSE activity"]
+            Orchestration["Pronto.Agentic.Orchestration<br/>discover, bounded fan-out, checkpoint, validate"]
+            MCP["MCP service router<br/>capability validation + typed tools"]
+            Controllers --> Orchestration
+        end
+
+        Worker["Biller Experience Worker<br/>durable publication processor"]
+        Builder["Ephemeral Payer Builder Job<br/>generate, build, validate, publish"]
+        Router["Payer Site Router<br/>shared multi-biller static delivery"]
+        Invoice["Invoice API"]
+        Payment["Payment API<br/>payments + purchases"]
+        Account["Payer Account API"]
+
+        Worker -->|"creates and observes"| Builder
+        MCP -->|"typed service calls"| Invoice
+        MCP -->|"typed service calls"| Payment
+        MCP -->|"typed service calls"| Account
+    end
+
+    Gateway --> Studio
+    Gateway --> Controllers
+    Gateway --> Router
+    Gateway --> Invoice
+    Gateway --> Payment
+    Gateway --> Account
+    Studio -->|"HTTP + SSE (TLS planned)"| Controllers
+    ACR -.->|"SHA-pinned workload images"| Controllers
+    Actions -.->|"Kustomize apply + smoke tests"| Gateway
+
+    subgraph FoundryPlane["Microsoft Foundry"]
+        Foundry["Versioned responsible-AI agents<br/>research, design, policy, execution"]
+        Web["Built-in web search"]
+        Foundry --> Web
+    end
+
+    Orchestration -->|"inventory + invoke"| Foundry
+    Foundry -.->|"remote MCP after TLS"| MCP
+
+    subgraph AzureData["Azure data plane"]
+        Cosmos[("Cosmos DB for NoSQL<br/>biller, workflow, invoice, payment, payer state")]
+        Blob[("Private Blob Storage<br/>immutable bundles + atomic active pointer")]
+        Entra["Entra ID + AKS workload identity"]
+    end
+
+    Controllers --> Cosmos
+    Invoice --> Cosmos
+    Payment --> Cosmos
+    Account --> Cosmos
+    Worker -->|"claims publication"| Cosmos
+    Worker -->|"config + active pointer"| Blob
+    Builder -->|"versioned static bundle"| Blob
+    Router -->|"resolve active + stream assets"| Blob
+
+    AKS -.->|"DefaultAzureCredential"| Entra
+    Entra -.-> Cosmos
+    Entra -.-> Blob
+    Entra -.-> Foundry
+    Bicep -.-> Entra
+    Bicep -.-> Cosmos
+    Bicep -.-> Blob
+    Bicep -.-> Foundry
+
+    subgraph Observability["Azure observability"]
+        AppInsights["Application Insights + Log Analytics<br/>correlated logs, traces, dependencies"]
+        Prometheus["Azure Monitor managed Prometheus"]
+        Grafana["Azure Managed Grafana<br/>service, agent, MCP, publication dashboards"]
+        Prometheus --> Grafana
+        AppInsights --> Grafana
+    end
+
+    AKS -.->|"OpenTelemetry + platform metrics"| AppInsights
+    AKS -.-> Prometheus
+    Foundry -.->|"project tracing"| AppInsights
+    Bicep -.-> AppInsights
 ```
+
+Solid arrows are active request, orchestration, publication, and data paths. The dashed Foundry-to-MCP
+path is intentionally gated in the current production environment: the public Gateway is HTTP-only,
+so remote MCP is disabled until TLS is configured. The MCP service router and its deterministic tools
+are deployed, tested, and ready for that connection; agents never access service storage directly.
+
+The shared tier creates no per-biller Deployment. Publication runs a short-lived, locked-down builder
+Job, writes an immutable bundle plus an atomic active pointer to private Blob Storage, and the shared
+Router serves `/pay/:slug`. The reviewed PWA source remains the builder input. Dedicated pods and
+routes are reserved for a future isolated paid tier.
+
+Production service APIs validate Entra bearer tokens and biller claims. MCP tools add short-lived,
+biller-scoped capabilities; payer tools require a server-bound payer verification token. Only the
+Execution Agent can submit an idempotent payment intent, and only after explicit payer confirmation.
+Agents configure and recommend; deterministic services own state transitions and money movement.
 
 The generated artifact is a typed, versioned `BillerExperienceDefinition`. Agents may generate
 content and configuration, but they may not generate executable application code, container build
