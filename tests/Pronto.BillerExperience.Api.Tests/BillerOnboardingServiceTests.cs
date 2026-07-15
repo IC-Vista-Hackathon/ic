@@ -235,6 +235,22 @@ public sealed class BillerOnboardingServiceTests
     }
 
     [Fact]
+    public async Task DeterministicDesignerResolvesNamedPrimaryColorFromChat()
+    {
+        var service = CreateService();
+        var created = await service.CreateAsync(CreateRequest(), CancellationToken.None);
+
+        var response = await service.SendMessageAsync(
+            created.Biller.BillerId,
+            new("change the primary color from blue to red"),
+            CancellationToken.None);
+
+        // The target after "to" wins over the source color, and the fallback maps the name to an
+        // accessible hex instead of ignoring anything that isn't already a hex code.
+        Assert.Equal("#c1121f", response.Draft?.Definition.Brand.PrimaryColor);
+    }
+
+    [Fact]
     public async Task MissingWebsitePassesExplicitSkippedResearchToDesigner()
     {
         var generator = new CapturingDraftGenerator();

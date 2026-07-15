@@ -28,9 +28,7 @@ public sealed partial class DeterministicExperienceDraftGenerator(
         try
         {
             var lastMessage = messages.LastOrDefault(message => message.Role == "user")?.Content ?? string.Empty;
-            var primaryColor = HexColorRegex().Match(lastMessage) is { Success: true } color
-                ? color.Value
-                : current.Definition.Brand.PrimaryColor;
+            var primaryColor = ResolvePrimaryColor(lastMessage, current.Definition.Brand.PrimaryColor);
             var definition = current.Definition with
             {
                 Brand = current.Definition.Brand with { PrimaryColor = primaryColor },
@@ -76,6 +74,46 @@ public sealed partial class DeterministicExperienceDraftGenerator(
 
     [GeneratedRegex("#[0-9a-fA-F]{6}", RegexOptions.CultureInvariant)]
     private static partial Regex HexColorRegex();
+
+    // Accessible, WCAG-AA-against-white brand hexes for the color names a biller is likely to type.
+    // The design flow's real model handles nuance; this keeps the deterministic fallback usable
+    // ("change the primary color to red") instead of silently ignoring anything but a hex code.
+    private static readonly Dictionary<string, string> NamedColors =
+        new(StringComparer.OrdinalIgnoreCase)
+        {
+            ["red"] = "#c1121f", ["crimson"] = "#a4133c", ["orange"] = "#b45309",
+            ["amber"] = "#b45309", ["yellow"] = "#8a6d00", ["gold"] = "#8a6d00",
+            ["green"] = "#197d00", ["emerald"] = "#0f766e", ["teal"] = "#0f766e",
+            ["cyan"] = "#0e7490", ["blue"] = "#1d4ed8", ["navy"] = "#1e3a8a",
+            ["indigo"] = "#4338ca", ["purple"] = "#6d28d9", ["violet"] = "#6d28d9",
+            ["magenta"] = "#a21caf", ["pink"] = "#be185d", ["brown"] = "#7c4a1e",
+            ["gray"] = "#4b5563", ["grey"] = "#4b5563", ["slate"] = "#334155",
+            ["black"] = "#1c1c1c",
+        };
+
+    private static string ResolvePrimaryColor(string message, string current)
+    {
+        // An explicit hex always wins over a color name.
+        if (HexColorRegex().Match(message) is { Success: true } hex) return hex.Value;
+
+        // "from blue to red" -> the target is the color after "to"; otherwise the last color named.
+        string? target = null;
+        foreach (Match token in NamedColorRegex().Matches(message))
+        {
+            var name = token.Groups["name"].Value;
+            if (!NamedColors.ContainsKey(name)) continue;
+            target = name;
+            if (message.AsSpan(0, token.Index).TrimEnd().EndsWith("to", StringComparison.OrdinalIgnoreCase))
+            {
+                break;
+            }
+        }
+
+        return target is not null ? NamedColors[target] : current;
+    }
+
+    [GeneratedRegex(@"\b(?<name>[a-zA-Z]+)\b", RegexOptions.CultureInvariant)]
+    private static partial Regex NamedColorRegex();
 
     private static ExperienceUi ApplyUiRequest(ExperienceUi? current, string message)
     {
