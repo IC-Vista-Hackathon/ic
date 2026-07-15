@@ -13,6 +13,7 @@ using Pronto.BillerExperience.Api.Infrastructure;
 using Pronto.BillerExperience.Api.Infrastructure.AI;
 using Pronto.BillerExperience.Api.Infrastructure.Persistence;
 using Pronto.BillerExperience.Api.Infrastructure.Mcp;
+using Pronto.BillerExperience.Api.Infrastructure.Mcp.ServiceClients;
 using Pronto.BillerExperience.Api.Infrastructure.Publication;
 using Pronto.BillerExperience.Api.Infrastructure.Research;
 using Pronto.BillerExperience.Api.Infrastructure.SupportingServices;
@@ -47,9 +48,11 @@ builder.Services.AddSingleton(TimeProvider.System);
 builder.Services.AddSingleton<AgentContextCapabilityService>();
 builder.Services.AddSingleton<IAgentContextCapabilityIssuer>(services =>
     services.GetRequiredService<AgentContextCapabilityService>());
+builder.Services.AddSingleton<ServiceToolRegistry>();
 builder.Services.AddMcpServer()
     .WithHttpTransport(transport => transport.Stateless = true)
-    .WithTools<AgentContextMcpTools>();
+    .WithTools<AgentContextMcpTools>()
+    .WithTools<ServiceMcpTools>();
 builder.Services.AddSingleton<DeterministicExperienceDraftGenerator>();
 builder.Services.AddTransient<CorrelationPropagationHandler>();
 builder.Services.AddSingleton<IDestinationAddressResolver, SystemDestinationAddressResolver>();
@@ -103,6 +106,45 @@ if (Uri.TryCreate(options.SupportingServices.InvoiceBaseUrl, UriKind.Absolute, o
 else
 {
     builder.Services.AddSingleton<IInvoiceSeeder, NullInvoiceSeeder>();
+}
+
+// Typed service clients behind the MCP service tools. Each is registered only when its
+// downstream base URL is configured; otherwise a fail-fast UnavailableServiceClient stands in so
+// the host still boots (and the corresponding tools return a clear "not configured" error).
+if (Uri.TryCreate(options.SupportingServices.InvoiceBaseUrl, UriKind.Absolute, out var invoiceServiceUri))
+{
+    builder.Services.AddHttpClient("invoice-service", client => client.BaseAddress = invoiceServiceUri)
+        .AddHttpMessageHandler<CorrelationPropagationHandler>();
+    builder.Services.AddSingleton<IInvoiceServiceClient>(services => new HttpInvoiceServiceClient(
+        services.GetRequiredService<IHttpClientFactory>().CreateClient("invoice-service")));
+}
+else
+{
+    builder.Services.AddSingleton<IInvoiceServiceClient>(new UnavailableServiceClient("Invoice service"));
+}
+
+if (Uri.TryCreate(options.SupportingServices.PaymentBaseUrl, UriKind.Absolute, out var paymentServiceUri))
+{
+    builder.Services.AddHttpClient("payment-service", client => client.BaseAddress = paymentServiceUri)
+        .AddHttpMessageHandler<CorrelationPropagationHandler>();
+    builder.Services.AddSingleton<IPaymentServiceClient>(services => new HttpPaymentServiceClient(
+        services.GetRequiredService<IHttpClientFactory>().CreateClient("payment-service")));
+}
+else
+{
+    builder.Services.AddSingleton<IPaymentServiceClient>(new UnavailableServiceClient("Payment service"));
+}
+
+if (Uri.TryCreate(options.SupportingServices.PayerAccountBaseUrl, UriKind.Absolute, out var payerServiceUri))
+{
+    builder.Services.AddHttpClient("payer-account-service", client => client.BaseAddress = payerServiceUri)
+        .AddHttpMessageHandler<CorrelationPropagationHandler>();
+    builder.Services.AddSingleton<IPayerAccountServiceClient>(services => new HttpPayerAccountServiceClient(
+        services.GetRequiredService<IHttpClientFactory>().CreateClient("payer-account-service")));
+}
+else
+{
+    builder.Services.AddSingleton<IPayerAccountServiceClient>(new UnavailableServiceClient("Payer Account service"));
 }
 
 if (!string.IsNullOrWhiteSpace(options.PublishedExperience.StorageEndpoint))
@@ -165,7 +207,8 @@ builder.Services.AddControllers().AddJsonOptions(json =>
 {
     json.JsonSerializerOptions.PropertyNamingPolicy = JsonNamingPolicy.SnakeCaseLower;
     json.JsonSerializerOptions.DictionaryKeyPolicy = JsonNamingPolicy.SnakeCaseLower;
-    json.JsonSerializerOptions.Converters.Add(new JsonStringEnumConverter(JsonNamingPolicy.SnakeCaseLower));
+    json.JsonSerializerOptions.Converters.Add(
+        new JsonStringEnumConverter(JsonNamingPolicy.SnakeCaseLower, allowIntegerValues: false));
 });
 builder.Services.AddProblemDetails();
 builder.Services.AddExceptionHandler<GlobalExceptionHandler>();

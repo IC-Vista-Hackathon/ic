@@ -29,15 +29,15 @@ public sealed partial class DeterministicExperienceDraftGenerator(
         {
             var lastMessage = messages.LastOrDefault(message => message.Role == "user")?.Content ?? string.Empty;
             var primaryColor = ResolvePrimaryColor(lastMessage, current.Definition.Brand.PrimaryColor);
+            // Only touch fields the request actually asks for — the deterministic fallback must not
+            // silently overwrite the heading (or anything else) with a default, or the Studio's
+            // "proposed revision" summary ends up describing changes that were never requested.
             var definition = current.Definition with
             {
                 Brand = current.Definition.Brand with { PrimaryColor = primaryColor },
                 Content = current.Definition.Content with
                 {
-                    Heading = $"Pay your {biller.BillType.ToLowerInvariant()} bill",
-                    Introduction = string.IsNullOrWhiteSpace(lastMessage)
-                        ? current.Definition.Content.Introduction
-                        : $"A simple, secure payment experience for {biller.Name}."
+                    Heading = ResolveHeading(lastMessage, current.Definition.Content.Heading)
                 },
                 Ui = ApplyUiRequest(current.Definition.Ui, lastMessage),
                 Preferences = ApplyPreferenceRequest(current.Definition, lastMessage)
@@ -116,13 +116,79 @@ public sealed partial class DeterministicExperienceDraftGenerator(
     [GeneratedRegex(@"\b(?<name>[a-zA-Z]+)\b", RegexOptions.CultureInvariant)]
     private static partial Regex NamedColorRegex();
 
+    // Honors "change the heading to X" / "make the heading say X" / "heading: X" and returns the
+    // current heading untouched when the request doesn't mention one, so we never fabricate a change.
+    private static string ResolveHeading(string message, string current)
+    {
+        var match = HeadingRequestRegex().Match(message);
+        if (!match.Success) return current;
+        var text = CleanRequestedText(match.Groups["text"].Value);
+        return string.IsNullOrWhiteSpace(text) ? current : text;
+    }
+
+    [GeneratedRegex(
+        @"\b(?:heading|headline|title|header)\b\s*(?:should\s+)?(?:say|says|read|reads|to\s+say|to\s+read|to\s+be|to|be|is|reads?\s+as|[:=-])\s*(?<text>.+)$",
+        RegexOptions.IgnoreCase | RegexOptions.CultureInvariant | RegexOptions.Singleline)]
+    private static partial Regex HeadingRequestRegex();
+
     private static ExperienceUi ApplyUiRequest(ExperienceUi? current, string message)
     {
         var ui = current ?? new ExperienceUi("centered-card", new("comfortable", "rounded", "subtle"), [], []);
-        if (!message.Contains("pay later", StringComparison.OrdinalIgnoreCase)) return ui;
-        var action = new ExperienceAction("primary-payment-action", "Pay Later", ExperienceActionType.SchedulePayment);
-        return ui with { Actions = ui.Actions.Where(item => item.Id != action.Id).Append(action).ToArray() };
+
+        // "pay later" is an explicit intent — it also flips the primary action to a scheduled payment,
+        // so it's handled before the generic label rename below.
+        if (message.Contains("pay later", StringComparison.OrdinalIgnoreCase))
+        {
+            var action = new ExperienceAction("primary-payment-action", "Pay Later", ExperienceActionType.SchedulePayment);
+            return ui with { Actions = ui.Actions.Where(item => item.Id != action.Id).Append(action).ToArray() };
+        }
+
+        // Generic "change the button/primary action to X" — rename the primary call-to-action label
+        // without changing its underlying action type.
+        var label = ResolvePrimaryActionLabel(message);
+        if (label is null) return ui;
+        if (ui.Actions.Count > 0)
+        {
+            var renamed = ui.Actions[0] with { Label = label };
+            return ui with { Actions = ui.Actions.Skip(1).Prepend(renamed).ToArray() };
+        }
+        return ui with { Actions = [new ExperienceAction("primary-payment-action", label, ExperienceActionType.StartPayment)] };
     }
+
+    // Honors "change the button to X" / "make the primary action say X" / "call to action: X".
+    private static string? ResolvePrimaryActionLabel(string message)
+    {
+        var match = ActionLabelRequestRegex().Match(message);
+        if (!match.Success) return null;
+        var text = CleanRequestedText(match.Groups["text"].Value);
+        return string.IsNullOrWhiteSpace(text) ? null : text;
+    }
+
+    [GeneratedRegex(
+        @"\b(?:primary\s+action|call\s*to\s*action|cta|button|primary\s+button|action\s+label)\b\s*(?:label\s+)?(?:should\s+)?(?:say|says|read|reads|to\s+say|to\s+read|to\s+be|to|be|is|[:=-])\s*(?<text>.+)$",
+        RegexOptions.IgnoreCase | RegexOptions.CultureInvariant | RegexOptions.Singleline)]
+    private static partial Regex ActionLabelRequestRegex();
+
+    // Trims a captured request phrase down to just the requested text: strips wrapping quotes,
+    // stops at sentence terminators, and drops a trailing "and <do something else>" clause so a
+    // compound request ("... and change the color to purple") doesn't leak into the value.
+    private static string CleanRequestedText(string raw)
+    {
+        var text = raw.Trim();
+        var terminator = text.IndexOfAny(['.', ';', '\n', '\r']);
+        if (terminator >= 0) text = text[..terminator];
+
+        var clause = TrailingClauseRegex().Match(text);
+        if (clause.Success) text = text[..clause.Index];
+
+        text = text.Trim().Trim('"', '\'', '“', '”', '‘', '’').Trim();
+        return text;
+    }
+
+    [GeneratedRegex(
+        @"\s*,?\s+\b(?:and|but|then|also|plus)\b\s+(?:also\s+|please\s+)?(?:change|make|set|update|use|switch|turn|enable|disable|add|remove|keep)\b",
+        RegexOptions.IgnoreCase | RegexOptions.CultureInvariant)]
+    private static partial Regex TrailingClauseRegex();
 
     private static ExperiencePreferences ApplyPreferenceRequest(BillerExperienceDefinition definition, string message)
     {
