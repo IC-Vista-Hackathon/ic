@@ -346,6 +346,15 @@ const BORDER = 'var(--invoicecloud-surface-default-border)';
 const PRIMARY = 'var(--invoicecloud-primary)';
 const selBg = (on: boolean) => (on ? TINT : '#fff');
 const selBorder = (on: boolean) => (on ? PRIMARY : BORDER);
+// Primary wizard call-to-action ("Continue" / "Build My Preview"). When disabled it renders
+// with a muted grey fill and not-allowed cursor so it never reads as clickable.
+const wizardCtaStyle = (enabled: boolean) =>
+  css(
+    `background:${enabled ? PRIMARY : 'var(--invoicecloud-utility-neutral-20)'};` +
+      `color:${enabled ? '#fff' : 'var(--invoicecloud-utility-neutral-60)'};` +
+      `border:none;border-radius:10px;padding:14px 28px;font-size:16px;font-weight:700;` +
+      `cursor:${enabled ? 'pointer' : 'not-allowed'}`,
+  );
 
 function AgentActivityPanel({
   activity,
@@ -1047,6 +1056,9 @@ export function App() {
                       {st.selected && <img src={asset('assets/icons/Checkmark.svg')} alt="" style={css('width:16px;height:16px')} />}
                     </button>
                   ))}
+                  {stateOptions.length === 0 && (
+                    <div style={css('font-size:13px;color:var(--invoicecloud-utility-neutral-60);text-align:center;padding:14px')}>No matching states</div>
+                  )}
                 </div>
               </>
             )}
@@ -1240,9 +1252,9 @@ export function App() {
             <div style={css('display:flex;justify-content:space-between;margin-top:var(--invoicecloud-spacing-l)')}>
               <button type="button" onClick={prevStep} disabled={s.wizardStep === 0} style={css(`background:none;border:none;color:var(--invoicecloud-primary);font-weight:700;font-size:15px;cursor:pointer;visibility:${s.wizardStep === 0 ? 'hidden' : 'visible'}`)}>&larr; Back</button>
               {isLastWizardStep ? (
-                <button type="button" onClick={runAnalysis} disabled={!wizardCanProceed} style={css(`background:var(--invoicecloud-primary);opacity:${wizardCanProceed ? 1 : 0.5};color:#fff;border:none;border-radius:10px;padding:14px 28px;font-size:16px;font-weight:700;cursor:pointer`)}>Build My Preview</button>
+                <button type="button" onClick={runAnalysis} disabled={!wizardCanProceed} style={wizardCtaStyle(wizardCanProceed)}>Build My Preview</button>
               ) : (
-                <button type="button" onClick={nextStep} disabled={!wizardCanProceed} style={css(`background:var(--invoicecloud-primary);opacity:${wizardCanProceed ? 1 : 0.5};color:#fff;border:none;border-radius:10px;padding:14px 28px;font-size:16px;font-weight:700;cursor:pointer`)}>Continue</button>
+                <button type="button" onClick={nextStep} disabled={!wizardCanProceed} style={wizardCtaStyle(wizardCanProceed)}>Continue</button>
               )}
             </div>
           </div>
@@ -1336,6 +1348,9 @@ export function App() {
                         {st.selected && <img src={asset('assets/icons/Checkmark.svg')} alt="" style={css('width:16px;height:16px')} />}
                       </button>
                     ))}
+                    {stateOptions.length === 0 && (
+                      <div style={css('font-size:13px;color:var(--invoicecloud-utility-neutral-60);text-align:center;padding:14px')}>No matching states</div>
+                    )}
                   </div>
                   <button type="button" ref={saveBtnRef} onClick={saveLocationSection} style={css('background:var(--invoicecloud-primary);color:#fff;border:none;border-radius:8px;padding:10px 20px;font-size:14px;font-weight:700;cursor:pointer')}>Save</button>
                 </div>
