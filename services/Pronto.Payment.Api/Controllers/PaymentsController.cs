@@ -83,6 +83,40 @@ public sealed partial class PaymentsController : ControllerBase
         return Created($"/payments/{payment.PaymentId}?biller_id={payment.BillerId}", payment);
     }
 
+    /// <summary>
+    /// Pre-confirmation quote using the same config + FeeCalculator as payment creation,
+    /// so the displayed total always matches the charged total.
+    /// </summary>
+    [HttpGet("quote")]
+    public async Task<ActionResult<PaymentQuoteResponse>> Quote(
+        [FromQuery(Name = "biller_id")] string? billerId,
+        [FromQuery(Name = "invoice_id")] string? invoiceId,
+        [FromQuery] string? method,
+        CancellationToken cancellationToken)
+    {
+        var requiredBillerId = RequireQueryValue(billerId, "biller_id");
+        var requiredInvoiceId = RequireQueryValue(invoiceId, "invoice_id");
+        var requiredMethod = RequireQueryValue(method, "method");
+        var config = await configs.GetAsync(requiredBillerId, cancellationToken).ConfigureAwait(false);
+        if (!config.PaymentMethods.Contains(requiredMethod))
+        {
+            throw ServiceException.BadRequest(
+                "method_not_enabled", $"payment method '{requiredMethod}' is not enabled for this biller");
+        }
+
+        var invoice = await invoices.GetAsync(requiredBillerId, requiredInvoiceId, cancellationToken).ConfigureAwait(false)
+            ?? throw ServiceException.NotFound("invoice_not_found", $"invoice {requiredInvoiceId} not found");
+
+        if (invoice.Status == InvoiceStatus.Paid)
+        {
+            throw ServiceException.Conflict("already_paid", $"invoice {requiredInvoiceId} is already paid");
+        }
+
+        var (feeCents, totalCents) = FeeCalculator.Calculate(config, requiredMethod, invoice.AmountCents);
+        return new PaymentQuoteResponse(
+            requiredBillerId, requiredInvoiceId, requiredMethod, invoice.AmountCents, feeCents, totalCents);
+    }
+
     [HttpGet("{paymentId}")]
     public async Task<ActionResult<PaymentResponse>> Get(
         string paymentId, [FromQuery(Name = "biller_id")] string billerId, CancellationToken cancellationToken)
@@ -110,6 +144,16 @@ public sealed partial class PaymentsController : ControllerBase
         }
 
         return $"PRONTO-{new string(code)}";
+    }
+
+    private static string RequireQueryValue(string? value, string name)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+        {
+            throw ServiceException.BadRequest($"{name}_required", $"{name} is required");
+        }
+
+        return value.Trim();
     }
 
     [LoggerMessage(4100, LogLevel.Information, "Created payment {PaymentId} for biller {BillerId}, invoice {InvoiceId}, status {Status}, total {TotalCents}; trace {TraceId}")]

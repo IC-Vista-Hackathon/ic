@@ -1,4 +1,4 @@
-import { RequestError } from './errors';
+import { UiRequestError } from './http';
 
 // Strict allowlist for browser telemetry exported to Application Insights. Every event name and
 // every property key AND value must match here or it is dropped before leaving the page. PII has
@@ -67,7 +67,10 @@ export function sanitizeEvent(name: unknown, properties: Record<string, Telemetr
 
 /** Buckets an error for export; the error's own text never leaves the browser. */
 export function categorizeError(error: unknown): 'network' | 'http_4xx' | 'http_5xx' | 'unknown' {
-  if (error instanceof RequestError) return error.status >= 500 ? 'http_5xx' : 'http_4xx';
+  if (error instanceof UiRequestError) {
+    if (typeof error.status === 'number') return error.status >= 500 ? 'http_5xx' : 'http_4xx';
+    return error.code === 'network_error' || error.code === 'request_timeout' ? 'network' : 'unknown';
+  }
   if (error instanceof TypeError) return 'network';
   return 'unknown';
 }

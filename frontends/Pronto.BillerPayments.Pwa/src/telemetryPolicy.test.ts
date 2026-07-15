@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { RequestError } from './errors';
+import { UiRequestError } from './http';
 import { ALLOWED_EVENT_NAMES, categorizeError, sanitizeEvent } from './telemetryPolicy';
 
 describe('sanitizeEvent', () => {
@@ -83,12 +83,14 @@ describe('sanitizeEvent', () => {
 
 describe('categorizeError', () => {
   it('buckets HTTP failures by status without exporting text', () => {
-    expect(categorizeError(new RequestError('secret detail', 404))).toBe('http_4xx');
-    expect(categorizeError(new RequestError('secret detail', 503))).toBe('http_5xx');
+    expect(categorizeError(new UiRequestError('secret detail', 404))).toBe('http_4xx');
+    expect(categorizeError(new UiRequestError('secret detail', 503))).toBe('http_5xx');
   });
 
-  it('buckets fetch network failures', () => {
+  it('buckets fetch network failures and timeouts', () => {
     expect(categorizeError(new TypeError('Failed to fetch'))).toBe('network');
+    expect(categorizeError(new UiRequestError('The service could not be reached.', undefined, 'network_error'))).toBe('network');
+    expect(categorizeError(new UiRequestError('The request timed out.', undefined, 'request_timeout'))).toBe('network');
   });
 
   it('falls back to unknown for anything else', () => {
