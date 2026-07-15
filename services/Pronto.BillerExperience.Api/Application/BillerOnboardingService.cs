@@ -27,14 +27,18 @@ public sealed partial class BillerOnboardingService(
         CancellationToken cancellationToken)
     {
         using var activity = StartActivity("biller.create");
-        ValidateCreateRequest(request);
+        // Forgive-and-normalize: casing/whitespace are fixed for the caller; validation then
+        // rejects only what normalization can't repair (bad characters, bad length).
+        var normalizedSlug = request.Slug.Trim().ToLowerInvariant();
+        ValidateCreateRequest(request with { Slug = normalizedSlug });
         var id = Guid.NewGuid().ToString("N");
         activity?.SetTag("ic.biller_id", id);
         var now = DateTimeOffset.UtcNow;
+        var slug = await ReserveSlugAsync(normalizedSlug, cancellationToken);
         var biller = new BillerRecord(
             id,
             request.DisplayName.Trim(),
-            request.Slug.Trim().ToLowerInvariant(),
+            slug,
             request.BillType.Trim(),
             request.PostalCode.Trim(),
             request.Website,
@@ -63,6 +67,8 @@ public sealed partial class BillerOnboardingService(
             now);
 
         await repository.CreateBillerAsync(biller, cancellationToken);
+        // Note: check-then-create, not an atomic reservation — adequate while onboarding
+        // volume is demo-scale; a slug reservation document makes this race-free later.
         var savedExperience = await repository.SaveExperienceAsync(experience, null, cancellationToken);
         var savedRun = await repository.SaveRunAsync(run, null, cancellationToken);
         await (invoiceSeeder ?? new NullInvoiceSeeder()).SeedAsync(id, biller.BillType, cancellationToken);
@@ -272,6 +278,42 @@ public sealed partial class BillerOnboardingService(
         CancellationToken cancellationToken) =>
         Map(await repository.GetDeploymentAsync(billerId, deploymentId, cancellationToken)
             ?? throw new KeyNotFoundException($"Deployment '{deploymentId}' was not found for biller '{billerId}'."));
+
+    /// <summary>
+    /// Published artifacts and public reads are keyed by slug, so two billers must never
+    /// share one. Appends -2, -3, … until free.
+    /// </summary>
+    private async ValueTask<string> ReserveSlugAsync(string requested, CancellationToken cancellationToken)
+    {
+        var candidate = requested;
+        for (var suffix = 2; await repository.SlugExistsAsync(candidate, cancellationToken); suffix++)
+        {
+            candidate = SuffixSlug(requested, suffix);
+            if (!SlugRegex().IsMatch(candidate))
+            {
+                LogValidationError(logger, null, "slug", "Slug cannot be auto-deduplicated.");
+                throw new ArgumentException(
+                    $"Slug '{requested}' cannot be auto-deduplicated within the 63-character limit.");
+            }
+        }
+
+        return candidate;
+    }
+
+    /// <summary>
+    /// Appends -2, -3, … while keeping the result DNS-safe: the base is truncated so the
+    /// total stays within 63 characters, and a hyphen exposed by the cut is trimmed so the
+    /// suffix never produces a double hyphen or a dangling one.
+    /// </summary>
+    private static string SuffixSlug(string baseSlug, int suffix)
+    {
+        var tail = $"-{suffix}";
+        var maxBaseLength = 63 - tail.Length;
+        var trimmedBase = baseSlug.Length <= maxBaseLength
+            ? baseSlug
+            : baseSlug[..maxBaseLength].TrimEnd('-');
+        return $"{trimmedBase}{tail}";
+    }
 
     private async ValueTask<BillerRecord> GetRequiredBillerAsync(string billerId, CancellationToken cancellationToken) =>
         await repository.GetBillerAsync(billerId, cancellationToken)

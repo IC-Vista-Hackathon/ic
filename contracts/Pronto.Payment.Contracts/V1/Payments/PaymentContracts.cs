@@ -24,6 +24,19 @@ public sealed record PaymentResponse(
     string ReceiptMessage,
     DateTimeOffset CreatedAt);
 
+/// <summary>
+/// Server-side fee quote for <c>GET /payments/quote</c>. The PWA shows these numbers before
+/// confirmation; the subsequent payment computes them identically, so what the payer approves
+/// is what they are charged.
+/// </summary>
+public sealed record PaymentQuoteResponse(
+    string BillerId,
+    string InvoiceId,
+    string Method,
+    int AmountCents,
+    int FeeCents,
+    int TotalCents);
+
 /// <summary>Wire tokens pinned at the type level so serialization is host-independent.</summary>
 [JsonConverter(typeof(PaymentStatusJsonConverter))]
 public enum PaymentStatus
