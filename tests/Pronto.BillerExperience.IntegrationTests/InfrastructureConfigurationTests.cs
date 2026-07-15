@@ -41,7 +41,7 @@ public sealed class InfrastructureConfigurationTests
     }
 
     [Fact]
-    public void McpConnectionRemainsDisabledWhileGatewayIsHttpOnly()
+    public void DemoMcpRouteIsAuthenticatedAndBackedBySecretReferences()
     {
         var root = FindRepositoryRoot();
         foreach (var path in new[]
@@ -50,11 +50,8 @@ public sealed class InfrastructureConfigurationTests
                      Path.Join(root, "infra", "bicep", "modules", "aiFoundry.bicep"),
                  })
         {
-            var bicep = File.ReadAllText(path);
-            Assert.Contains(
-                "@allowed([\n  false\n])\nparam mcpConnectionEnabled bool = false",
-                bicep,
-                StringComparison.Ordinal);
+            var bicep = File.ReadAllText(path).ReplaceLineEndings("\n");
+            Assert.Contains("@allowed([\n  true\n  false\n])", bicep, StringComparison.Ordinal);
         }
 
         var prodEnvironment = File.ReadAllText(
@@ -66,17 +63,18 @@ public sealed class InfrastructureConfigurationTests
                 "prod",
                 "biller-experience-api-env-patch.yaml"));
         Assert.Contains(
-            "BillerExperience__Mcp__Enabled, value: \"false\"",
+            "BillerExperience__Mcp__Enabled, value: \"true\"",
             prodEnvironment,
             StringComparison.Ordinal);
-        Assert.DoesNotContain(
-            "BillerExperience__Mcp__ApiKey",
-            prodEnvironment,
-            StringComparison.Ordinal);
-        Assert.DoesNotContain(
-            "BillerExperience__Mcp__PublicEndpoint",
-            prodEnvironment,
-            StringComparison.Ordinal);
+        Assert.Contains("BillerExperience__Mcp__ApiKey", prodEnvironment, StringComparison.Ordinal);
+        Assert.Contains("BillerExperience__Mcp__CapabilitySigningKey", prodEnvironment, StringComparison.Ordinal);
+        Assert.Contains("name: ic-agent-mcp", prodEnvironment, StringComparison.Ordinal);
+        Assert.Contains("key: api-key", prodEnvironment, StringComparison.Ordinal);
+        Assert.Contains("key: capability-signing-key", prodEnvironment, StringComparison.Ordinal);
+
+        var routes = File.ReadAllText(
+            Path.Join(root, "deploy", "kubernetes", "overlays", "prod", "httproutes.yaml"));
+        Assert.Contains("value: /mcp", routes, StringComparison.Ordinal);
     }
 
     [Fact]

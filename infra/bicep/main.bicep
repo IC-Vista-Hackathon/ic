@@ -16,6 +16,7 @@ param aksNodeCountMin int = 2
 param aksNodeCountMax int = 4
 param aksVmSize string = 'Standard_D2s_v3'
 @allowed([
+  true
   false
 ])
 param mcpConnectionEnabled bool = false

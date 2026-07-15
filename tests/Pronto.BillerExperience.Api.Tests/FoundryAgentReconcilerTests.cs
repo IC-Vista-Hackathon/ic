@@ -48,6 +48,7 @@ public sealed class FoundryAgentReconcilerTests
             FindRepositoryRoot());
 
         var research = Assert.Single(desired, item => item.Name == "biller-research");
+        Assert.DoesNotContain(desired, item => item.Name == "compliance");
         Assert.Contains("built-in web-search tool", research.Instructions);
         Assert.Contains("get_goal_context", research.Instructions);
         Assert.Contains("append_context", research.Instructions);

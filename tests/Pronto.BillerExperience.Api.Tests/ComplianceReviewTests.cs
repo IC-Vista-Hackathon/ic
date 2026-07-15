@@ -91,6 +91,53 @@ public sealed class ComplianceReviewTests
     }
 
     [Fact]
+    public async Task DraftReviewDefersFoundryAndStillRunsDeterministicPolicy()
+    {
+        var gateway = new RecordingFoundryGateway(new FoundryAgentOutput("not invoked", []));
+        var service = new ComplianceReviewService(
+            new CompliancePolicyEngine(Options(true)),
+            Options(true),
+            NullLogger<ComplianceReviewService>.Instance,
+            new FoundryComplianceKnowledgeReviewer(
+                gateway,
+                Options(true),
+                NullLogger<FoundryComplianceKnowledgeReviewer>.Instance));
+        var definition = Definition() with
+        {
+            Content = Definition().Content with { PrivacyPolicyUrl = new Uri("http://example.test/privacy") }
+        };
+
+        var findings = await service.ReviewAsync(
+            Biller(), definition, ComplianceReviewStage.Draft, CancellationToken.None);
+
+        Assert.Equal(0, gateway.InvocationCount);
+        Assert.Contains(findings, finding => finding.Code == "PRIVACY_POLICY_HTTPS_REQUIRED");
+        Assert.DoesNotContain(findings, finding => finding.Code == "COMPLIANCE_KNOWLEDGE_UNAVAILABLE");
+    }
+
+    [Fact]
+    public async Task FoundryRateLimitHasAnActionablePublishMessage()
+    {
+        var reviewer = new FoundryComplianceKnowledgeReviewer(
+            new FailingFoundryGateway("research.foundry_rate_limited"),
+            Options(true),
+            NullLogger<FoundryComplianceKnowledgeReviewer>.Instance);
+        var service = new ComplianceReviewService(
+            new CompliancePolicyEngine(Options(true)),
+            Options(true),
+            NullLogger<ComplianceReviewService>.Instance,
+            reviewer);
+
+        var findings = await service.ReviewAsync(
+            Biller(), Definition(), ComplianceReviewStage.Publish, CancellationToken.None);
+
+        var unavailable = Assert.Single(findings, finding => finding.Code == "COMPLIANCE_KNOWLEDGE_UNAVAILABLE");
+        Assert.Contains("temporarily rate-limited", unavailable.Message, StringComparison.Ordinal);
+        Assert.Contains("try Publish again", unavailable.Message, StringComparison.Ordinal);
+        Assert.DoesNotContain("compliance.research", unavailable.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public async Task FoundryReviewTreatsUnconfirmedLawAsAdvisoryAndPreservesSource()
     {
         var output = JsonSerializer.Serialize(new
@@ -321,6 +368,7 @@ public sealed class ComplianceReviewTests
     private sealed class RecordingFoundryGateway(FoundryAgentOutput output) : IFoundryAgentServiceGateway
     {
         public string Prompt { get; private set; } = string.Empty;
+        public int InvocationCount { get; private set; }
 
         public Task<IReadOnlyList<FoundryAgentDefinition>> ListAgentsAsync(CancellationToken cancellationToken) =>
             Task.FromResult<IReadOnlyList<FoundryAgentDefinition>>([]);
@@ -330,12 +378,13 @@ public sealed class ComplianceReviewTests
             string prompt,
             CancellationToken cancellationToken)
         {
+            InvocationCount++;
             Prompt = prompt;
             return Task.FromResult(output);
         }
     }
 
-    private sealed class FailingFoundryGateway : IFoundryAgentServiceGateway
+    private sealed class FailingFoundryGateway(string code = "agent_request_failed") : IFoundryAgentServiceGateway
     {
         public Task<IReadOnlyList<FoundryAgentDefinition>> ListAgentsAsync(CancellationToken cancellationToken) =>
             Task.FromResult<IReadOnlyList<FoundryAgentDefinition>>([]);
@@ -345,6 +394,6 @@ public sealed class ComplianceReviewTests
             string prompt,
             CancellationToken cancellationToken) =>
             Task.FromException<FoundryAgentOutput>(
-                new FoundryResearchException("agent_request_failed", "Foundry unavailable.", true));
+                new FoundryResearchException(code, "Foundry unavailable.", true));
     }
 }

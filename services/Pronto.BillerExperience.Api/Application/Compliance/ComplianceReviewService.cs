@@ -199,6 +199,14 @@ public sealed partial class ComplianceReviewService(
                 1,
                 new KeyValuePair<string, object?>("scope", "compliance"));
         }
+        // Draft editing can happen many times in one Studio session. Grounded Foundry review is
+        // reserved for approval and publish gates so transient model quota is not consumed by
+        // every autosave; deterministic policy validation still runs on every draft.
+        if (stage == ComplianceReviewStage.Draft)
+        {
+            activity?.SetTag("compliance.knowledge.status", "deferred_to_gate");
+            return policyFindings;
+        }
         if (knowledgeReviewer is null)
         {
             return Merge(
@@ -244,8 +252,10 @@ public sealed partial class ComplianceReviewService(
     private ComplianceFinding Unavailable(string errorCode, bool retryable) =>
         new(
             "COMPLIANCE_KNOWLEDGE_UNAVAILABLE",
-            $"Compliance knowledge review is unavailable ({errorCode}); publication cannot continue safely." +
-            (retryable ? " Retry after the Foundry service recovers." : string.Empty),
+            errorCode.EndsWith("foundry_rate_limited", StringComparison.Ordinal)
+                ? "Compliance review is temporarily rate-limited by Azure AI Foundry; publication is paused. Wait a moment and try Publish again."
+                : $"Compliance knowledge review is unavailable ({errorCode}); publication cannot continue safely." +
+                  (retryable ? " Retry after the Foundry service recovers." : string.Empty),
             ComplianceFindingSeverity.Blocking,
             true,
             PolicyVersion: _options.PolicyVersion);

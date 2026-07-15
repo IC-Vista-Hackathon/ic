@@ -46,14 +46,15 @@ public sealed partial class FoundryComplianceKnowledgeReviewer(
         }
         catch (FoundryResearchException exception)
         {
-            activity?.SetStatus(ActivityStatusCode.Error, exception.Code);
-            LogFoundryFailure(logger, biller.Id, exception.Code, Activity.Current?.TraceId.ToString(), exception);
+            var errorCode = MapErrorCode(exception.Code);
+            activity?.SetStatus(ActivityStatusCode.Error, errorCode);
+            LogFoundryFailure(logger, biller.Id, errorCode, Activity.Current?.TraceId.ToString(), exception);
             return new(
                 ComplianceKnowledgeReviewStatus.Failed,
                 "Foundry compliance review failed.",
                 [],
                 [],
-                $"compliance.{exception.Code}",
+                errorCode,
                 exception.Retryable);
         }
         catch (JsonException exception)
@@ -229,6 +230,14 @@ public sealed partial class FoundryComplianceKnowledgeReviewer(
     private static bool TryHttps(string? value, out Uri? uri) =>
         Uri.TryCreate(value, UriKind.Absolute, out uri) &&
         string.Equals(uri.Scheme, Uri.UriSchemeHttps, StringComparison.OrdinalIgnoreCase);
+
+    private static string MapErrorCode(string code) => code switch
+    {
+        "research.foundry_rate_limited" => "compliance.foundry_rate_limited",
+        "research.foundry_empty_output" => "compliance.foundry_empty_output",
+        "research.foundry_request_failed" => "compliance.foundry_request_failed",
+        _ => code.StartsWith("compliance.", StringComparison.Ordinal) ? code : $"compliance.{code}"
+    };
 
     [LoggerMessage(2860, LogLevel.Error,
         "Foundry compliance review failed for biller {BillerId} with {ErrorCode}; trace {TraceId}")]

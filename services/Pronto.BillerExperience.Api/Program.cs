@@ -47,6 +47,26 @@ var options = builder.Configuration
     .GetSection(BillerExperienceOptions.SectionName)
     .Get<BillerExperienceOptions>() ?? new BillerExperienceOptions();
 
+if (options.AgentProvisioning.Enabled && !options.Mcp.Enabled)
+{
+    throw new InvalidOperationException(
+        "BillerExperience:Mcp:Enabled must be true when Foundry agent provisioning is enabled.");
+}
+if (options.Mcp.Enabled)
+{
+    if (options.Mcp.ApiKey.Length < 32 || options.Mcp.CapabilitySigningKey.Length < 32)
+    {
+        throw new InvalidOperationException(
+            "Enabled MCP requires API key and capability signing key values of at least 32 characters.");
+    }
+    if (!Uri.TryCreate(options.Mcp.PublicEndpoint, UriKind.Absolute, out var mcpEndpoint) ||
+        (mcpEndpoint.Scheme != Uri.UriSchemeHttp && mcpEndpoint.Scheme != Uri.UriSchemeHttps))
+    {
+        throw new InvalidOperationException(
+            "BillerExperience:Mcp:PublicEndpoint must be an absolute HTTP or HTTPS URL.");
+    }
+}
+
 builder.Services.Configure<BillerExperienceOptions>(builder.Configuration.GetSection(BillerExperienceOptions.SectionName));
 builder.Services.Configure<MaintenanceOptions>(builder.Configuration.GetSection(MaintenanceOptions.SectionName));
 builder.Services.AddSingleton<IOrchestrationRunner, OrchestrationRunner>();

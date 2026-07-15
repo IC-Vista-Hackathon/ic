@@ -66,7 +66,10 @@ public sealed partial class FoundryAgentReconciler(
         var primary = new HashSet<string>(["onboarding", "financial-planning", "policy", "execution"], StringComparer.OrdinalIgnoreCase);
         return Directory.GetDirectories(root)
             .Select(path => (Name: Path.GetFileName(path), Instructions: Path.Combine(path, "instructions.md")))
-            .Where(item => File.Exists(item.Instructions))
+            // The grounded compliance agent is provisioned exclusively by the index workflow,
+            // which binds its file-search vector store. It must not become a generic MCP agent.
+            .Where(item => File.Exists(item.Instructions) &&
+                           !string.Equals(item.Name, "compliance", StringComparison.OrdinalIgnoreCase))
             .Select(item =>
             {
                 var instructions = File.ReadAllText(item.Instructions);
