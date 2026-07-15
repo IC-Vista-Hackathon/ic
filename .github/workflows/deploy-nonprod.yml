@@ -58,6 +58,15 @@ jobs:
       - name: Deploy
         run: kubectl apply -k "${OVERLAY}"
 
+      # Wait for the static frontends to finish rolling out before smoke-testing them. The APIs
+      # get their own rollout waits below (after the telemetry env is set); the frontends need an
+      # explicit wait here because the browser smoke otherwise races the rollout and can hit the
+      # previous (pre-change) pod — especially the single-replica Studio.
+      - name: Wait for frontends to roll out
+        run: |
+          kubectl -n ic-nonprod rollout status deployment/ic-biller-experience-studio --timeout=180s
+          kubectl -n ic-nonprod rollout status deployment/ic-biller-payments-pwa --timeout=180s
+
       - name: Configure correlated Azure telemetry
         run: |
           APPINSIGHTS=$(az deployment sub show --name ic-hack --query 'properties.outputs.appInsightsConnectionString.value' -o tsv)
@@ -104,7 +113,8 @@ jobs:
           PF_PID=$!
           trap 'kill $PF_PID 2>/dev/null || true' EXIT
           for _ in $(seq 1 30); do
-            curl -fsS -o /dev/null "http://127.0.0.1:18081/pay/" && break
+            curl -fsS -o /dev/null "http://127.0.0.1:18081/pay/" \
+              && curl -fsS -o /dev/null "http://127.0.0.1:18081/studio/" && break
             sleep 1
           done
 
