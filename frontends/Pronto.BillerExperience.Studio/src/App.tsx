@@ -359,7 +359,7 @@ function AgentActivityPanel({
     .filter((item, index, all) => all.findIndex(candidate => candidate.agent_id === item.agent_id) === index)
     .reverse();
   const color = (status: AgentActivity['status']) =>
-    status === 'completed' ? '#197d00' : status === 'failed' ? '#b42318' : status === 'degraded' ? '#b54708' : '#0b4f6c';
+    status === 'completed' ? '#197d00' : status === 'failed' ? '#b42318' : status === 'degraded' ? '#b54708' : status === 'skipped' ? '#667085' : '#0b4f6c';
   const icon = (status: AgentActivity['status']) =>
     status === 'completed' ? '✓' : status === 'failed' || status === 'degraded' ? '!' : status === 'discovered' ? '⌕' : '•';
 

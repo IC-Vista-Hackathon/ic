@@ -1,9 +1,12 @@
 namespace Pronto.BillerExperience.Contracts.V1.Research;
 
 public sealed record BillerResearchRequest(
-    Uri Website,
+    Uri? Website,
     string Purpose,
-    int MaxPages = 5);
+    int MaxPages = 5,
+    string? BillerName = null,
+    string? BillType = null,
+    string? PostalCode = null);
 
 public sealed record BillerResearchResponse(
     ResearchOutcome Outcome,

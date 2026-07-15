@@ -75,6 +75,28 @@ public sealed class FoundryResearchAgentAdapterTests
     }
 
     [Fact]
+    public async Task DispatchCanResearchFromBillerIdentityWhenWebsiteIsMissing()
+    {
+        var gateway = new StubGateway
+        {
+            Output = new FoundryAgentOutput(
+                """{"facts":[{"name":"brand","value":"Example","sourceUrl":"https://example.com","confidence":0.9}],"sources":[{"url":"https://example.com","title":"Home"}],"warnings":[]}""",
+                [])
+        };
+        var adapter = Create(gateway);
+
+        var response = await adapter.DispatchAsync(
+            Descriptor(),
+            new BillerResearchRequest(null, "Research brand", BillerName: "Example Water", BillType: "Utility", PostalCode: "02110"),
+            null,
+            CancellationToken.None);
+
+        Assert.Equal(ResearchOutcome.Completed, response.Outcome);
+        Assert.Contains("Biller name: Example Water", gateway.Prompt);
+        Assert.Contains("Website: not supplied", gateway.Prompt);
+    }
+
+    [Fact]
     public async Task DispatchRequiresSharedContextToolsWhenOrchestrationSuppliesCapability()
     {
         var gateway = new StubGateway

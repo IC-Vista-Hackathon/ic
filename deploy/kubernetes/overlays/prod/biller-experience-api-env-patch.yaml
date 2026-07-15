@@ -36,7 +36,21 @@ spec:
             - { name: BillerExperience__Model__Endpoint, value: "https://aif-ic-hack-jk4zmntatjem4.cognitiveservices.azure.com/" }
             - { name: BillerExperience__Model__Deployment, value: gpt-5.4-mini }
             - { name: BillerExperience__Research__FoundryProjectEndpoint, value: "https://aif-ic-hack-jk4zmntatjem4.services.ai.azure.com/api/projects/ic" }
+            - { name: BillerExperience__Research__CoordinatorAgentId, value: research-coordinator }
+            - { name: BillerExperience__AgentProvisioning__Enabled, value: "true" }
             - { name: BillerExperience__AgentProvisioning__McpConnectionId, value: ic-shared-context-mcp }
+            - { name: BillerExperience__Mcp__Enabled, value: "true" }
+            - { name: BillerExperience__Mcp__PublicEndpoint, value: "http://ic-hack.eastus2.cloudapp.azure.com/api/mcp" }
+            - name: BillerExperience__Mcp__ApiKey
+              valueFrom:
+                secretKeyRef:
+                  name: ic-agent-mcp
+                  key: api-key
+            - name: BillerExperience__Mcp__CapabilitySigningKey
+              valueFrom:
+                secretKeyRef:
+                  name: ic-agent-mcp
+                  key: capability-signing-key
             - { name: BillerExperience__PublishedExperience__StorageEndpoint, value: "https://stichackjk4zmntatjem4.blob.core.windows.net/" }
             - { name: BillerExperience__PublishedExperience__ContainerName, value: payer-experiences }
             - { name: BillerExperience__SupportingServices__InvoiceBaseUrl, value: "http://ic-invoice-api.ic.svc.cluster.local:8080/" }
