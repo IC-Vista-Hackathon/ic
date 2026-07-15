@@ -209,6 +209,11 @@ spec:
         azure.workload.identity/use: "true"
     spec:
       serviceAccountName: ic-workload
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1654
+        seccompProfile:
+          type: RuntimeDefault
       containers:
         - name: router
           image: acrichackjk4zmntatjem4.azurecr.io/ic-payer-experience-router:latest
