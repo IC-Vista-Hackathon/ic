@@ -3,6 +3,7 @@ using System.Diagnostics.Metrics;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
 using Pronto.Agentic.Orchestration.Abstractions;
@@ -220,7 +221,7 @@ public sealed class McpServiceRouterTests
         services.AddSingleton<IInvoiceServiceClient, FakeInvoiceClient>();
         services.AddSingleton<IPaymentServiceClient, FakePaymentClient>();
         services.AddSingleton<IPayerAccountServiceClient>(payerClient);
-        services.AddSingleton(NullLogger<ServiceMcpTools>.Instance);
+        services.AddSingleton<ILogger<ServiceMcpTools>>(NullLogger<ServiceMcpTools>.Instance);
         using var provider = services.BuildServiceProvider();
         var tools = ActivatorUtilities.CreateInstance<ServiceMcpTools>(provider);
         return (tools, capabilities, payerClient);
@@ -228,6 +229,8 @@ public sealed class McpServiceRouterTests
 
     private sealed class FakeInvoiceClient : IInvoiceServiceClient
     {
+        public SeedInvoicesRequest? LastSeedRequest { get; private set; }
+
         public ValueTask<InvoiceListResponse> ListAsync(
             string billerId, string accountNumber, bool includeClosed, CancellationToken cancellationToken) =>
             ValueTask.FromResult(new InvoiceListResponse([]));
@@ -235,6 +238,13 @@ public sealed class McpServiceRouterTests
         public ValueTask<InvoiceResponse?> GetAsync(
             string billerId, string invoiceId, CancellationToken cancellationToken) =>
             ValueTask.FromResult<InvoiceResponse?>(null);
+
+        public ValueTask<SeedInvoicesResponse> SeedAsync(
+            string billerId, SeedInvoicesRequest request, CancellationToken cancellationToken)
+        {
+            LastSeedRequest = request;
+            return ValueTask.FromResult(new SeedInvoicesResponse(0, request.AccountNumber ?? "account-1", []));
+        }
     }
 
     private sealed class FakePaymentClient : IPaymentServiceClient
@@ -246,6 +256,10 @@ public sealed class McpServiceRouterTests
         public ValueTask<IReadOnlyList<PaymentResponse>> ListAsync(
             string billerId, string payerAccountId, CancellationToken cancellationToken) =>
             ValueTask.FromResult<IReadOnlyList<PaymentResponse>>([]);
+
+        public ValueTask<PaymentResponse> CreateAsync(
+            CreatePaymentRequest request, string idempotencyKey, CancellationToken cancellationToken) =>
+            throw new NotSupportedException();
     }
 
     private sealed class FakePayerClient : IPayerAccountServiceClient
@@ -259,6 +273,13 @@ public sealed class McpServiceRouterTests
         public ValueTask<PayerResponse?> GetAsync(
             string billerId, string payerId, CancellationToken cancellationToken) =>
             ValueTask.FromResult(Payer);
+
+        public ValueTask<PayerPreferences> UpdatePreferencesAsync(
+            string billerId,
+            string payerId,
+            UpdatePayerPreferencesRequest request,
+            CancellationToken cancellationToken) =>
+            ValueTask.FromResult(Payer?.Preferences ?? new PayerPreferences(false, false, [], null));
     }
 
     private sealed class UnusedDraftGenerator : IExperienceDraftGenerator
