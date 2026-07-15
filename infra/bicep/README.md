@@ -3,7 +3,7 @@
 Bicep for the hackathon sandbox: Cosmos DB (containers per [design/entities.md](../../design/entities.md)),
 an AI Foundry account + project, and an AKS cluster to run [services](../../services/) and [agents](../../agents/).
 
-Standalone sandbox subscription, not InvoiceCloud's landing zone — no ADO pipeline, no Terraform,
+Standalone sandbox subscription, not Pronto's landing zone — no ADO pipeline, no Terraform,
 just plain Bicep deployed via `az`.
 
 This is the fast, always-available sandbox path — day-to-day hackathon deploys, public endpoints,

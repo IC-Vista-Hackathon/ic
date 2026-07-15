@@ -17,4 +17,4 @@ spec:
     service:
       type: LoadBalancer
       extraAnnotations:
-        service.beta.kubernetes.io/azure-dns-label-name: ic-hack
+        service.beta.kubernetes.io/azure-dns-label-name: pronto

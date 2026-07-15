@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #
-# Smoke tests for the IC service deployments.
+# Smoke tests for the Pronto service deployments.
 #
 # Three layers:
 #   1. Deployment readiness  (kubectl) — every expected Deployment has all replicas available
@@ -14,7 +14,7 @@
 #   deploy/smoke/smoke-test.sh
 #
 # Config via env vars:
-#   BASE_URL          public gateway base (default: http://ic-hack.eastus2.cloudapp.azure.com)
+#   BASE_URL          public gateway base (default: http://pronto.eastus2.cloudapp.azure.com)
 #   HTTP_TIMEOUT      per-request timeout seconds (default: 10)
 #   SKIP_KUBECTL=1    skip layer 1 (when cluster credentials aren't available)
 #
@@ -22,7 +22,7 @@
 
 set -uo pipefail
 
-BASE_URL="${BASE_URL:-http://ic-hack.eastus2.cloudapp.azure.com}"
+BASE_URL="${BASE_URL:-http://pronto.eastus2.cloudapp.azure.com}"
 HTTP_TIMEOUT="${HTTP_TIMEOUT:-10}"
 SKIP_KUBECTL="${SKIP_KUBECTL:-0}"
 GATEWAY_NS="kgateway-system"
@@ -117,7 +117,7 @@ done
 # Intentionally a READ, not the seed POST: a smoke test that may run on a cron must
 # not accumulate data. Looking up a nonexistent account still exercises the full path
 # (controller -> repository query -> serialization) and returns an empty list. The
-# write/seed path is covered by the IC.Invoice.Api unit tests.
+# write/seed path is covered by the Pronto.Invoice.Api unit tests.
 section "3. Functional — Invoice lookup (read-only)"
 lookup_url="$BASE_URL/invoices/billers/smoke-test/invoices?account_number=smoke-none"
 resp="$(curl -s -m "$HTTP_TIMEOUT" -w $'\n%{http_code}' "$lookup_url" 2>/dev/null)"

@@ -13,7 +13,7 @@ capability for each invocation. Two AI Foundry models are deployed: `gpt-5.4` fo
 money/risk, `gpt-5.4-mini` for narrower single-purpose reads.
 
 Agents do bounded work: perceive the supplied goal context, reason over trade-offs, invoke only
-approved tools, and return typed results with provenance. `IC.Agentic.Orchestration` is the layer
+approved tools, and return typed results with provenance. `Pronto.Agentic.Orchestration` is the layer
 above them: it discovers eligible agents, delegates and sequences work, supplies scoped context,
 controls concurrency/timeouts, passes typed results, records activity, and decides whether the
 workflow can proceed. No prompt-defined agent is the system orchestrator.

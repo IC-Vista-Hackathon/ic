@@ -1,6 +1,6 @@
 # Smoke tests
 
-`smoke-test.sh` verifies the deployed IC services are live and reachable. Three layers:
+`smoke-test.sh` verifies the deployed Pronto services are live and reachable. Three layers:
 
 1. **Deployment readiness** (`kubectl`) — every expected Deployment has all replicas available,
    and the gateway has a public LoadBalancer IP.
@@ -10,7 +10,7 @@
 3. **Functional** (HTTP, read-only) — the Invoice lookup endpoint (`GET .../invoices?account_number=`)
    returns a valid `200` with an `invoices` array. Intentionally a read, not the seed POST, so the
    suite writes no data and is safe to run on a schedule. The seed/write path is covered by the
-   `IC.Invoice.Api` unit tests.
+   `Pronto.Invoice.Api` unit tests.
 
 Exit code is `0` when everything passes, non-zero otherwise — so it drops straight into CI or a cron.
 

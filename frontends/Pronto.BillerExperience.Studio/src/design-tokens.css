@@ -1,0 +1,265 @@
+/* ==============================================================
+   InvoiceCloud Design System — token CSS
+   --------------------------------------------------------------
+   Source of truth: DESIGN.md at the root of the InvoiceCloud
+   UiDesignSystem repository. Every value below is copied directly
+   from the design-system export — no inventions, no overrides.
+   The Pronto brand override lives in theme.css and replaces token
+   VALUES only, never the design system itself. Fonts are loaded from
+   Google Fonts in index.html rather than bundled locally.
+   ============================================================== */
+
+:root {
+    /* ============================================================
+       Utility palette — the raw substrate every semantic token is
+       composed from. Five families × 10 steps. Neutral additionally
+       has -0 (white) and -100 (black) bookends.
+       ============================================================ */
+
+    /* Neutral ramp */
+    --invoicecloud-utility-neutral-0:   #ffffff;
+    --invoicecloud-utility-neutral-05:  #f3f3f3;
+    --invoicecloud-utility-neutral-10:  #e8e8e8;
+    --invoicecloud-utility-neutral-20:  #d1d1d1;
+    --invoicecloud-utility-neutral-30:  #bababa;
+    --invoicecloud-utility-neutral-40:  #a3a3a3;
+    --invoicecloud-utility-neutral-50:  #8c8c8c;
+    --invoicecloud-utility-neutral-60:  #707070;
+    --invoicecloud-utility-neutral-70:  #545454;
+    --invoicecloud-utility-neutral-80:  #383838;
+    --invoicecloud-utility-neutral-90:  #1c1c1c;
+    --invoicecloud-utility-neutral-100: #000000;
+
+    /* Blue (info intent) */
+    --invoicecloud-utility-blue-05: #e9f1fb;
+    --invoicecloud-utility-blue-10: #d9e7f8;
+    --invoicecloud-utility-blue-20: #a5c0e1;
+    --invoicecloud-utility-blue-30: #79a0d1;
+    --invoicecloud-utility-blue-40: #4c81c2;
+    --invoicecloud-utility-blue-50: #1f61b3;
+    --invoicecloud-utility-blue-60: #194e8f;
+    --invoicecloud-utility-blue-70: #133a6b;
+    --invoicecloud-utility-blue-80: #0c2748;
+    --invoicecloud-utility-blue-90: #061324;
+
+    /* Green (success intent) */
+    --invoicecloud-utility-green-05: #f6fbf7;
+    --invoicecloud-utility-green-10: #dbf1de;
+    --invoicecloud-utility-green-20: #b8e3bd;
+    --invoicecloud-utility-green-30: #94d49b;
+    --invoicecloud-utility-green-40: #71c67a;
+    --invoicecloud-utility-green-50: #4db859;
+    --invoicecloud-utility-green-60: #3e9347;
+    --invoicecloud-utility-green-70: #2e6e35;
+    --invoicecloud-utility-green-80: #1f4a24;
+    --invoicecloud-utility-green-90: #0f2512;
+
+    /* Red (danger intent) */
+    --invoicecloud-utility-red-05: #fcf4f4;
+    --invoicecloud-utility-red-10: #f3d4d4;
+    --invoicecloud-utility-red-20: #e7a9a9;
+    --invoicecloud-utility-red-30: #dc7e7d;
+    --invoicecloud-utility-red-40: #d05352;
+    --invoicecloud-utility-red-50: #c42827;
+    --invoicecloud-utility-red-60: #9d201f;
+    --invoicecloud-utility-red-70: #761817;
+    --invoicecloud-utility-red-80: #4e1010;
+    --invoicecloud-utility-red-90: #270808;
+
+    /* Yellow (warning intent) */
+    --invoicecloud-utility-yellow-05: #fbf9e6;
+    --invoicecloud-utility-yellow-10: #f6f2c8;
+    --invoicecloud-utility-yellow-20: #f1ecac;
+    --invoicecloud-utility-yellow-30: #ede690;
+    --invoicecloud-utility-yellow-40: #e8df75;
+    --invoicecloud-utility-yellow-50: #e4d959;
+    --invoicecloud-utility-yellow-60: #beb54a;
+    --invoicecloud-utility-yellow-70: #98913b;
+    --invoicecloud-utility-yellow-80: #726c2c;
+    --invoicecloud-utility-yellow-90: #5b5724;
+
+    /* ============================================================
+       InvoiceCloud (biller) theme — primary teal + secondary cyan + slate
+       ============================================================ */
+    --invoicecloud-primary:           #085368;
+    --invoicecloud-primary-shade:     #074156;
+    --invoicecloud-primary-tint:      #dffbfd;
+    --invoicecloud-primary-border:    #529caf;
+
+    --invoicecloud-secondary:         #18b4e9;
+    --invoicecloud-secondary-shade:   #1188b0;
+    --invoicecloud-secondary-tint:    #baedff;
+    --invoicecloud-secondary-border:  #8cd9f4;
+
+    /* Slate — cool gray-blue accents for SecondaryButton & some surfaces */
+    --invoicecloud-slate-05: #f7f8fa;
+    --invoicecloud-slate-10: #f1f3f6;
+    --invoicecloud-slate-20: #ecf0f4;
+
+    --invoicecloud-neutral: var(--invoicecloud-utility-neutral-90);
+
+    /* ============================================================
+       Surfaces — container-level color compositions.
+       ============================================================ */
+    --invoicecloud-surface-default-background:  var(--invoicecloud-utility-neutral-0);
+    --invoicecloud-surface-default-border:      #e3e7ec;
+    --invoicecloud-surface-default-content:     var(--invoicecloud-utility-neutral-100);
+
+    --invoicecloud-surface-brand-primary-background:  var(--invoicecloud-primary);
+    --invoicecloud-surface-brand-primary-content:     var(--invoicecloud-utility-neutral-0);
+
+    --invoicecloud-surface-brand-secondary-background: var(--invoicecloud-secondary);
+    --invoicecloud-surface-brand-secondary-content:    var(--invoicecloud-utility-neutral-100);
+
+    --invoicecloud-surface-subtle-background:   var(--invoicecloud-primary-tint);
+    --invoicecloud-surface-subtle-content:      var(--invoicecloud-utility-neutral-100);
+
+    --invoicecloud-surface-strong-background:   linear-gradient(90deg, #f5f5f5, #f7f0f8);
+    --invoicecloud-surface-strong-border:       var(--invoicecloud-utility-neutral-20);
+    --invoicecloud-surface-strong-content:      var(--invoicecloud-utility-neutral-100);
+
+    /* ============================================================
+       Intent — info / success / warning / danger / neutral
+       ============================================================ */
+    --invoicecloud-intent-info:                #133a6b;
+    --invoicecloud-intent-info-hover:          #194e8f;
+    --invoicecloud-intent-info-background:     #d9e7f8;
+    --invoicecloud-intent-info-background-hover:#a5c0e1;
+    --invoicecloud-intent-info-border:         #79a0d1;
+
+    --invoicecloud-intent-success:             #1f4a24;
+    --invoicecloud-intent-success-hover:       #2e6e35;
+    --invoicecloud-intent-success-background:  #dbf1de;
+    --invoicecloud-intent-success-background-hover:#b8e3bd;
+    --invoicecloud-intent-success-border:      #b8e3bd;
+
+    --invoicecloud-intent-warning:             #5b5724;
+    --invoicecloud-intent-warning-hover:       #726c2c;
+    --invoicecloud-intent-warning-background:  #f6f2c8;
+    --invoicecloud-intent-warning-background-hover:#f1ecac;
+    --invoicecloud-intent-warning-border:      #ede690;
+
+    --invoicecloud-intent-danger:              #761817;
+    --invoicecloud-intent-danger-hover:        #9d201f;
+    --invoicecloud-intent-danger-background:   #f3d4d4;
+    --invoicecloud-intent-danger-background-hover:#e7a9a9;
+    --invoicecloud-intent-danger-border:       #e7a9a9;
+
+    --invoicecloud-intent-neutral:             #545454;
+    --invoicecloud-intent-neutral-hover:       #707070;
+    --invoicecloud-intent-neutral-background:  #f3f3f3;
+    --invoicecloud-intent-neutral-background-hover:#e8e8e8;
+    --invoicecloud-intent-neutral-border:      #d1d1d1;
+
+    /* Icon fills */
+    --invoicecloud-icon-brand-fill:    var(--invoicecloud-primary);
+    --invoicecloud-icon-neutral-fill:  var(--invoicecloud-utility-neutral-100);
+
+    /* ============================================================
+       Typography — Inter (Roboto Mono for code), heading weight 500
+       ============================================================ */
+    --invoicecloud-font-family-primary: 'Inter', sans-serif;
+    --invoicecloud-font-family-heading: 'Inter', sans-serif;
+    --invoicecloud-font-family-mono:    'Roboto Mono', monospace;
+
+    --invoicecloud-h1-font-size:   32px;
+    --invoicecloud-h2-font-size:   24px;
+    --invoicecloud-h3-font-size:   20px;
+    --invoicecloud-h4-font-size:   18px;
+    --invoicecloud-h5-font-size:   16px;
+    --invoicecloud-h6-font-size:   12px;
+    --invoicecloud-h1-line-height: 1.2;
+    --invoicecloud-h2-line-height: 1.25;
+    --invoicecloud-h3-line-height: 1.3;
+    --invoicecloud-h4-line-height: 1.35;
+    --invoicecloud-h5-line-height: 1.4;
+    --invoicecloud-h6-line-height: 1.4;
+    --invoicecloud-heading-font-weight: 500;
+    --invoicecloud-heading-color: var(--invoicecloud-utility-neutral-100);
+
+    --invoicecloud-body-lg-font-size: 16px;
+    --invoicecloud-body-md-font-size: 14px;
+    --invoicecloud-body-sm-font-size: 14px;
+    --invoicecloud-body-xs-font-size: 12px;
+    --invoicecloud-body-line-height:  1.5;
+    --invoicecloud-body-color:        var(--invoicecloud-utility-neutral-100);
+
+    --invoicecloud-button-text-font-size:   16px;
+    --invoicecloud-button-text-font-weight: 700;
+
+    --invoicecloud-alert-text-font-size:   14px;
+    --invoicecloud-alert-text-line-height: 1.4;
+
+    --invoicecloud-code-font-size: 14px;
+
+    /* Spacing — 7 steps, multiples of 4 (skips 12 + 20) */
+    --invoicecloud-spacing-xxs: 4px;
+    --invoicecloud-spacing-xs:  8px;
+    --invoicecloud-spacing-s:   16px;
+    --invoicecloud-spacing-m:   24px;
+    --invoicecloud-spacing-l:   32px;
+    --invoicecloud-spacing-xl:  40px;
+    --invoicecloud-spacing-xxl: 48px;
+
+    /* Rounded — three named steps */
+    --invoicecloud-rounded-s: 4px;
+    --invoicecloud-rounded-m: 8px;
+    --invoicecloud-rounded-l: 32px;
+
+    /* Focus outline — system-wide, theme-independent */
+    --invoicecloud-focus-outline-color:    var(--invoicecloud-utility-blue-50);
+    --invoicecloud-focus-outline-width:    2.5px;
+    --invoicecloud-focus-outline-style:    solid;
+    --invoicecloud-focus-outline:          2.5px solid var(--invoicecloud-utility-blue-50);
+    --invoicecloud-focus-outline-offset-s: 3px;
+    --invoicecloud-focus-outline-offset-m: 4px;
+
+    /* Elevation */
+    --invoicecloud-elevation-1: 0 4px 8px rgba(0,0,0,.10);
+    --invoicecloud-elevation-2: 0 2px 4px 0 rgba(28,28,28,.16);
+    --invoicecloud-elevation-3: 0 8px 24px rgba(0,0,0,.15);
+    --invoicecloud-card-shadow:        rgba(0,0,0,.1) 0px 1px 3px 0px, rgba(0,0,0,.1) 0px 1px 2px -1px;
+    --invoicecloud-card-hover-shadow:  rgba(0,0,0,.1) 0px 10px 15px -3px, rgba(0,0,0,.1) 0px 4px 6px -4px;
+    --invoicecloud-popover-shadow:     0px 16px 32px 0px rgba(28,28,28,.16);
+    --invoicecloud-toast-shadow:       0 8px 16px rgba(28,28,28,.16);
+    --invoicecloud-drawer-shadow:      -4px 0 24px rgba(0,0,0,.12);
+}
+
+/* ==============================================================
+   Element defaults (prototyping baseline)
+   ============================================================== */
+html, body {
+    font-family: var(--invoicecloud-font-family-primary);
+    font-size: var(--invoicecloud-body-md-font-size);
+    line-height: var(--invoicecloud-body-line-height);
+    color: var(--invoicecloud-body-color);
+    background: var(--invoicecloud-utility-neutral-0);
+    -webkit-font-smoothing: antialiased;
+    text-rendering: optimizeLegibility;
+}
+h1, h2, h3, h4, h5, h6 {
+    font-family: var(--invoicecloud-font-family-heading);
+    font-weight: var(--invoicecloud-heading-font-weight);
+    color: var(--invoicecloud-heading-color);
+    margin: 0;
+}
+h1 { font-size: var(--invoicecloud-h1-font-size); line-height: var(--invoicecloud-h1-line-height); }
+h2 { font-size: var(--invoicecloud-h2-font-size); line-height: var(--invoicecloud-h2-line-height); }
+h3 { font-size: var(--invoicecloud-h3-font-size); line-height: var(--invoicecloud-h3-line-height); }
+h4 { font-size: var(--invoicecloud-h4-font-size); line-height: var(--invoicecloud-h4-line-height); }
+h5 { font-size: var(--invoicecloud-h5-font-size); line-height: var(--invoicecloud-h5-line-height); }
+h6 { font-size: var(--invoicecloud-h6-font-size); line-height: var(--invoicecloud-h6-line-height); }
+p {
+    margin: 0;
+    font-size: var(--invoicecloud-body-lg-font-size);
+    line-height: var(--invoicecloud-body-line-height);
+    color: var(--invoicecloud-body-color);
+}
+code, kbd, pre, samp {
+    font-family: var(--invoicecloud-font-family-mono);
+    font-size: var(--invoicecloud-code-font-size);
+}
+:focus-visible {
+    outline: var(--invoicecloud-focus-outline);
+    outline-offset: var(--invoicecloud-focus-outline-offset-s);
+}

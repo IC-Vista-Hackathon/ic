@@ -1,0 +1,32 @@
+<Solution>
+  <Folder Name="/contracts/">
+    <Project Path="contracts/Pronto.BillerExperience.Contracts/Pronto.BillerExperience.Contracts.csproj" />
+    <Project Path="contracts/Pronto.Invoice.Contracts/Pronto.Invoice.Contracts.csproj" />
+    <Project Path="contracts/Pronto.Payment.Contracts/Pronto.Payment.Contracts.csproj" />
+    <Project Path="contracts/Pronto.PayerAccount.Contracts/Pronto.PayerAccount.Contracts.csproj" />
+  </Folder>
+  <Folder Name="/libraries/">
+    <Project Path="libraries/Pronto.Agentic.Orchestration/Pronto.Agentic.Orchestration.csproj" />
+    <Project Path="libraries/Pronto.Persistence.Cosmos/Pronto.Persistence.Cosmos.csproj" />
+    <Project Path="libraries/Pronto.ServiceDefaults/Pronto.ServiceDefaults.csproj" />
+  </Folder>
+  <Folder Name="/services/">
+    <Project Path="services/Pronto.BillerExperience.Api/Pronto.BillerExperience.Api.csproj" />
+    <Project Path="services/Pronto.BillerExperience.Worker/Pronto.BillerExperience.Worker.csproj" />
+    <Project Path="services/Pronto.Invoice.Api/Pronto.Invoice.Api.csproj" />
+    <Project Path="services/Pronto.Payment.Api/Pronto.Payment.Api.csproj" />
+    <Project Path="services/Pronto.PayerAccount.Api/Pronto.PayerAccount.Api.csproj" />
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/Pronto.Agentic.Orchestration.Tests/Pronto.Agentic.Orchestration.Tests.csproj" />
+    <Project Path="tests/Pronto.BillerExperience.Api.Tests/Pronto.BillerExperience.Api.Tests.csproj" />
+    <Project Path="tests/Pronto.BillerExperience.IntegrationTests/Pronto.BillerExperience.IntegrationTests.csproj" />
+    <Project Path="tests/Pronto.BillerExperience.Worker.Tests/Pronto.BillerExperience.Worker.Tests.csproj" />
+    <Project Path="tests/Pronto.Invoice.Api.Tests/Pronto.Invoice.Api.Tests.csproj" />
+    <Project Path="tests/Pronto.Payment.Api.Tests/Pronto.Payment.Api.Tests.csproj" />
+    <Project Path="tests/Pronto.Payment.Contracts.Tests/Pronto.Payment.Contracts.Tests.csproj" />
+    <Project Path="tests/Pronto.PayerAccount.Api.Tests/Pronto.PayerAccount.Api.Tests.csproj" />
+    <Project Path="tests/Pronto.PayerAccount.Contracts.Tests/Pronto.PayerAccount.Contracts.Tests.csproj" />
+    <Project Path="tests/Pronto.Persistence.Cosmos.Tests/Pronto.Persistence.Cosmos.Tests.csproj" />
+  </Folder>
+</Solution>
