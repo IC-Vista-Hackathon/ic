@@ -3,7 +3,6 @@ using System.Net.Http.Json;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using Pronto.Invoice.Contracts.V1.Invoices;
-using Pronto.ServiceDefaults;
 
 namespace Pronto.BillerExperience.Api.Infrastructure.SupportingServices;
 
@@ -18,8 +17,13 @@ public sealed partial class HttpInvoiceSeeder(HttpClient http, ILogger<HttpInvoi
 
     public async ValueTask SeedAsync(string billerId, string billType, CancellationToken cancellationToken)
     {
+        // Capture the correlation id from the ambient request before the child activity becomes
+        // current, then carry it onto this span so CorrelationPropagationHandler propagates the
+        // x-correlation-id/x-ic-biller-id headers on the outbound seed request.
+        var correlationId = Activity.Current?.GetTagItem("ic.correlation_id")?.ToString();
         using var activity = BillerExperienceTelemetry.Source.StartActivity("invoice.seed");
         activity?.SetTag("ic.biller_id", billerId);
+        if (!string.IsNullOrWhiteSpace(correlationId)) activity?.SetTag("ic.correlation_id", correlationId);
         try
         {
             for (var attempt = 1; attempt <= 3; attempt++)
@@ -31,9 +35,6 @@ public sealed partial class HttpInvoiceSeeder(HttpClient http, ILogger<HttpInvoi
                     {
                         Content = JsonContent.Create(new SeedInvoicesRequest(4, "4421", billType), options: WireOptions)
                     };
-                    request.Headers.TryAddWithoutValidation(RequestObservabilityMiddleware.CorrelationHeader,
-                        Activity.Current?.GetTagItem("ic.correlation_id")?.ToString());
-                    request.Headers.TryAddWithoutValidation(RequestObservabilityMiddleware.BillerHeader, billerId);
                     using var response = await http.SendAsync(request, cancellationToken);
                     response.EnsureSuccessStatusCode();
                     var result = await response.Content.ReadFromJsonAsync<SeedInvoicesResponse>(WireOptions, cancellationToken)

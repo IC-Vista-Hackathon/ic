@@ -3,6 +3,7 @@ using Pronto.Agentic.Orchestration.Abstractions;
 using Pronto.BillerExperience.Api.Configuration;
 using Pronto.BillerExperience.Contracts.V1.Research;
 using Microsoft.Extensions.Options;
+using Pronto.Agentic.Orchestration.Execution;
 
 namespace Pronto.BillerExperience.Api.Infrastructure.Research;
 
@@ -71,9 +72,12 @@ public sealed partial class BillerResearchCoordinator(
         }
 
         activity?.SetTag("research.agent.count", agents.Length);
-        using var gate = new SemaphoreSlim(Math.Max(1, _options.MaxParallelAgents));
-        var tasks = agents.Select(agent => DispatchAsync(agent, request, executionContext, gate, cancellationToken)).ToArray();
-        var results = await Task.WhenAll(tasks);
+        var fanOut = await BoundedFanOut.ExecuteAsync<ResearchAgentDescriptor, AgentResult>(
+            agents,
+            Math.Max(1, _options.MaxParallelAgents),
+            (agent, _, token) => new ValueTask<AgentResult>(DispatchAsync(agent, request, executionContext, token)),
+            cancellationToken: cancellationToken);
+        var results = fanOut.Select(item => item.Output ?? new AgentResult(null, "research.agent_failed")).ToArray();
         var successful = results.Where(result => result.Response is not null).Select(result => result.Response!).ToArray();
         var warnings = results.Where(result => result.ErrorCode is not null).Select(result => result.ErrorCode!).ToList();
 
@@ -142,13 +146,9 @@ public sealed partial class BillerResearchCoordinator(
         ResearchAgentDescriptor agent,
         BillerResearchRequest request,
         ResearchExecutionContext? executionContext,
-        SemaphoreSlim gate,
         CancellationToken cancellationToken)
     {
-        await gate.WaitAsync(cancellationToken);
-        try
-        {
-            await PublishActivityAsync(
+        await PublishActivityAsync(
                 executionContext,
                 agent,
                 OrchestrationEventStatus.Running,
@@ -157,8 +157,8 @@ public sealed partial class BillerResearchCoordinator(
             var startedAt = Stopwatch.GetTimestamp();
             using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
             timeout.CancelAfter(TimeSpan.FromSeconds(Math.Max(1, _options.AgentTimeoutSeconds)));
-            try
-            {
+        try
+        {
                 var invocationContext = CreateInvocationContext(agent, executionContext);
                 var response = await dispatcher.DispatchAsync(agent, request, invocationContext, timeout.Token);
                 if (response.Outcome == ResearchOutcome.Failed)
@@ -211,11 +211,6 @@ public sealed partial class BillerResearchCoordinator(
                     "Agent research failed unexpectedly.", "research.agent_failed", true,
                     Stopwatch.GetElapsedTime(startedAt).TotalMilliseconds, CancellationToken.None);
                 return new AgentResult(null, "research.agent_failed");
-            }
-        }
-        finally
-        {
-            gate.Release();
         }
     }
 

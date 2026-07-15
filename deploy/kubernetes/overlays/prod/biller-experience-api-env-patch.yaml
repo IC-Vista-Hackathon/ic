@@ -39,6 +39,7 @@ spec:
             - { name: BillerExperience__Compliance__FoundryAgentId, value: biller-compliance }
             - { name: BillerExperience__Compliance__RequireFoundryEvidence, value: "true" }
             - { name: BillerExperience__Compliance__PolicyVersion, value: "2026-07-15" }
+            - { name: BillerExperience__AgentProvisioning__McpConnectionId, value: ic-shared-context-mcp }
             - { name: BillerExperience__PublishedExperience__StorageEndpoint, value: "https://stichackjk4zmntatjem4.blob.core.windows.net/" }
             - { name: BillerExperience__PublishedExperience__ContainerName, value: payer-experiences }
             - { name: BillerExperience__SupportingServices__InvoiceBaseUrl, value: "http://ic-invoice-api.ic.svc.cluster.local:8080/" }

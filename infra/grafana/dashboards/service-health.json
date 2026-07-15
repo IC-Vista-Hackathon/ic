@@ -1,0 +1,123 @@
+{
+  "annotations": { "list": [] },
+  "description": "Per-API service health (p95 latency, error rate) and the publish pipeline, sourced from Application Insights (appi-ic-hack). cloud_RoleName is the OpenTelemetry service.name each host sets via AddServiceDefaults.",
+  "editable": true,
+  "graphTooltip": 0,
+  "schemaVersion": 39,
+  "tags": ["ic", "observability", "service", "publish"],
+  "templating": {
+    "list": [
+      {
+        "name": "datasource",
+        "label": "Azure Monitor datasource",
+        "type": "datasource",
+        "query": "grafana-azure-monitor-datasource",
+        "current": {},
+        "hide": 0
+      },
+      {
+        "name": "appInsights",
+        "label": "App Insights resource id",
+        "type": "textbox",
+        "query": "/subscriptions/ca64adec-b195-49fd-a782-15553708c07c/resourceGroups/rg-ic-hack/providers/microsoft.insights/components/appi-ic-hack",
+        "current": {
+          "text": "/subscriptions/ca64adec-b195-49fd-a782-15553708c07c/resourceGroups/rg-ic-hack/providers/microsoft.insights/components/appi-ic-hack",
+          "value": "/subscriptions/ca64adec-b195-49fd-a782-15553708c07c/resourceGroups/rg-ic-hack/providers/microsoft.insights/components/appi-ic-hack"
+        },
+        "hide": 0
+      }
+    ]
+  },
+  "time": { "from": "now-6h", "to": "now" },
+  "timepicker": {},
+  "title": "IC — Service health & publish pipeline",
+  "uid": "ic-service-health",
+  "version": 1,
+  "panels": [
+    {
+      "id": 1,
+      "title": "Request p95 latency per API (ms)",
+      "type": "timeseries",
+      "datasource": { "type": "grafana-azure-monitor-datasource", "uid": "${datasource}" },
+      "gridPos": { "h": 9, "w": 12, "x": 0, "y": 0 },
+      "fieldConfig": { "defaults": { "unit": "ms", "custom": { "drawStyle": "line", "fillOpacity": 10 } }, "overrides": [] },
+      "options": { "legend": { "displayMode": "table", "placement": "bottom", "showLegend": true, "calcs": ["max", "mean"] }, "tooltip": { "mode": "multi" } },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": { "type": "grafana-azure-monitor-datasource", "uid": "${datasource}" },
+          "queryType": "Azure Log Analytics",
+          "azureLogAnalytics": {
+            "resources": ["${appInsights}"],
+            "resultFormat": "time_series",
+            "query": "requests\n| where $__timeFilter(timestamp)\n| summarize p95_ms = percentile(duration, 95) by cloud_RoleName, bin(timestamp, 5m)\n| order by timestamp asc"
+          }
+        }
+      ]
+    },
+    {
+      "id": 2,
+      "title": "Request error rate per API (%)",
+      "type": "timeseries",
+      "datasource": { "type": "grafana-azure-monitor-datasource", "uid": "${datasource}" },
+      "gridPos": { "h": 9, "w": 12, "x": 12, "y": 0 },
+      "fieldConfig": { "defaults": { "unit": "percent", "custom": { "drawStyle": "line", "fillOpacity": 10 }, "thresholds": { "mode": "absolute", "steps": [ { "color": "green", "value": null }, { "color": "red", "value": 5 } ] } }, "overrides": [] },
+      "options": { "legend": { "displayMode": "table", "placement": "bottom", "showLegend": true, "calcs": ["max", "mean"] }, "tooltip": { "mode": "multi" } },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": { "type": "grafana-azure-monitor-datasource", "uid": "${datasource}" },
+          "queryType": "Azure Log Analytics",
+          "azureLogAnalytics": {
+            "resources": ["${appInsights}"],
+            "resultFormat": "time_series",
+            "query": "requests\n| where $__timeFilter(timestamp)\n| summarize total = count(), failures = countif(success == false) by cloud_RoleName, bin(timestamp, 5m)\n| extend error_rate_pct = iff(total == 0, 0.0, round(100.0 * failures / total, 1))\n| project timestamp, cloud_RoleName, error_rate_pct\n| order by timestamp asc"
+          }
+        }
+      ]
+    },
+    {
+      "id": 3,
+      "title": "Publish pipeline duration (ms)",
+      "description": "Available now: worker-side processing duration (claim -> ready) from the ic.biller.publication.duration histogram. The full request-to-worker-ready measurement needs the follow-up publish-lifecycle customEvents linked by a shared deployment_id — see the commented KQL in this panel's query and infra/grafana/README.md.",
+      "type": "timeseries",
+      "datasource": { "type": "grafana-azure-monitor-datasource", "uid": "${datasource}" },
+      "gridPos": { "h": 9, "w": 12, "x": 0, "y": 9 },
+      "fieldConfig": { "defaults": { "unit": "ms", "custom": { "drawStyle": "line", "fillOpacity": 10 } }, "overrides": [] },
+      "options": { "legend": { "displayMode": "list", "placement": "bottom", "showLegend": true }, "tooltip": { "mode": "multi" } },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": { "type": "grafana-azure-monitor-datasource", "uid": "${datasource}" },
+          "queryType": "Azure Log Analytics",
+          "azureLogAnalytics": {
+            "resources": ["${appInsights}"],
+            "resultFormat": "time_series",
+            "query": "// Full request-to-worker-ready duration (needs follow-up publish-lifecycle customEvents\n// carrying a shared deployment_id; not on main yet):\n//   let requested = customEvents | where $__timeFilter(timestamp) | where name == \"biller.publish_requested\"\n//     | project deployment_id = tostring(customDimensions.deployment_id), requested_at = timestamp;\n//   let ready = customEvents | where $__timeFilter(timestamp) | where name == \"biller.publish_ready\"\n//     | project deployment_id = tostring(customDimensions.deployment_id), ready_at = timestamp;\n//   requested | join kind=inner ready on deployment_id\n//   | extend duration_ms = 1000 * datetime_diff('second', ready_at, requested_at)\n//   | summarize p50_ms = percentile(duration_ms, 50), p95_ms = percentile(duration_ms, 95) by bin(requested_at, 15m);\n// Available now: worker processing duration from the publication histogram.\ncustomMetrics\n| where $__timeFilter(timestamp)\n| where name == \"ic.biller.publication.duration\"\n| summarize avg_ms = sum(valueSum) / sum(valueCount), max_ms = max(valueMax) by bin(timestamp, 15m)\n| order by timestamp asc"
+          }
+        }
+      ]
+    },
+    {
+      "id": 4,
+      "title": "Publish outcomes (ready vs failed)",
+      "type": "timeseries",
+      "datasource": { "type": "grafana-azure-monitor-datasource", "uid": "${datasource}" },
+      "gridPos": { "h": 9, "w": 12, "x": 12, "y": 9 },
+      "fieldConfig": { "defaults": { "custom": { "drawStyle": "bars", "stacking": { "mode": "normal" }, "fillOpacity": 60 } }, "overrides": [] },
+      "options": { "legend": { "displayMode": "list", "placement": "bottom", "showLegend": true }, "tooltip": { "mode": "multi" } },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": { "type": "grafana-azure-monitor-datasource", "uid": "${datasource}" },
+          "queryType": "Azure Log Analytics",
+          "azureLogAnalytics": {
+            "resources": ["${appInsights}"],
+            "resultFormat": "time_series",
+            "query": "customMetrics\n| where $__timeFilter(timestamp)\n| where name == \"ic.biller.publication.results\"\n| extend outcome = tostring(customDimensions.outcome)\n| summarize results = sum(value) by outcome, bin(timestamp, 15m)\n| order by timestamp asc"
+          }
+        }
+      ]
+    }
+  ]
+}

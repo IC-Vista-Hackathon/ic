@@ -216,10 +216,18 @@ public sealed partial class BillerOnboardingService(
             experience.Definition,
             ComplianceReviewStage.Approval,
             cancellationToken);
-        if (findings.Any(finding => finding.Severity == ComplianceFindingSeverity.Blocking))
+        var blockingFindings = findings
+            .Where(finding => finding.Severity == ComplianceFindingSeverity.Blocking)
+            .ToArray();
+        if (blockingFindings.Length > 0)
         {
-            LogValidationError(logger, billerId, "compliance", "Blocking validation findings must be resolved.");
-            throw new ArgumentException("Blocking validation findings must be resolved before approval.");
+            foreach (var finding in blockingFindings)
+            {
+                LogBlockingFinding(logger, billerId, experience.Id, finding.Code, finding.Message);
+            }
+            throw new ExperienceValidationException(
+                "This experience is not ready to publish. Resolve the listed validation items and try again.",
+                blockingFindings);
         }
 
         var now = DateTimeOffset.UtcNow;
@@ -271,15 +279,24 @@ public sealed partial class BillerOnboardingService(
             experience.Definition,
             ComplianceReviewStage.Publish,
             cancellationToken);
-        if (findings.Any(finding => finding.Severity == ComplianceFindingSeverity.Blocking))
+        var blockingFindings = findings
+            .Where(finding => finding.Severity == ComplianceFindingSeverity.Blocking)
+            .ToArray();
+        if (blockingFindings.Length > 0)
         {
-            LogValidationError(logger, billerId, "compliance", "Blocking validation findings must be resolved.");
-            throw new ArgumentException("Blocking validation findings must be resolved before publication.");
+            foreach (var finding in blockingFindings)
+            {
+                LogBlockingFinding(logger, billerId, experience.Id, finding.Code, finding.Message);
+            }
+            throw new ExperienceValidationException(
+                "This experience is not ready to publish. Resolve the listed validation items and try again.",
+                blockingFindings);
         }
 
         var now = DateTimeOffset.UtcNow;
         var deployment = await repository.CreateDeploymentAsync(
-            new DeploymentRecord(deploymentId, billerId, experience.Version, "requested", now),
+            new DeploymentRecord(deploymentId, billerId, experience.Version, "requested", now,
+                Traceparent: FormatTraceparent(Activity.Current)),
             cancellationToken);
         await repository.SaveExperienceAsync(
             experience with { State = ExperienceRevisionState.Publishing, Findings = findings },
@@ -475,6 +492,25 @@ public sealed partial class BillerOnboardingService(
 
     private static Activity? StartActivity(string name) => BillerExperienceTelemetry.Source.StartActivity(name);
 
+    // W3C traceparent (00-{trace_id}-{span_id}-{flags}) captured at publish-enqueue so the Worker
+    // can link its asynchronous processing span back to the originating API request.
+    internal static string? FormatTraceparent(Activity? activity)
+    {
+        if (activity is null)
+        {
+            return null;
+        }
+
+        var context = activity.Context;
+        if (context.TraceId == default || context.SpanId == default)
+        {
+            return null;
+        }
+
+        var flags = (context.TraceFlags & ActivityTraceFlags.Recorded) != 0 ? "01" : "00";
+        return $"00-{context.TraceId}-{context.SpanId}-{flags}";
+    }
+
     private static void RecordTransition(OnboardingSessionState from, OnboardingSessionState to) =>
         BillerExperienceTelemetry.StateTransitions.Add(1, new("from", from.ToString()), new("to", to.ToString()));
 
@@ -507,4 +543,12 @@ public sealed partial class BillerOnboardingService(
 
     [LoggerMessage(1902, LogLevel.Error, "Invoice seeding failed for biller {BillerId}; continuing with biller creation")]
     private static partial void LogInvoiceSeedingFailed(ILogger logger, string billerId, Exception exception);
+
+    [LoggerMessage(1903, LogLevel.Error, "Approval blocked for biller {BillerId}, revision {Revision}; finding {FindingCode}: {FindingMessage}")]
+    private static partial void LogBlockingFinding(
+        ILogger logger,
+        string billerId,
+        string revision,
+        string findingCode,
+        string findingMessage);
 }

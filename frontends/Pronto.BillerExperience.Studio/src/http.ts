@@ -5,7 +5,15 @@ export class UiRequestError extends Error {
     readonly code = 'request_failed',
     readonly correlationId?: string,
     readonly retryable = false,
+    readonly findings: ValidationFinding[] = [],
   ) { super(message); this.name = 'UiRequestError'; }
+}
+
+export interface ValidationFinding {
+  code: string;
+  message: string;
+  severity: string | number;
+  requires_review?: boolean;
 }
 
 export async function fetchWithTimeout(input: RequestInfo | URL, init: RequestInit = {}, timeoutMs = 15_000): Promise<Response> {
@@ -24,7 +32,12 @@ export async function requestError(response: Response, fallback = 'The request c
   const code = String(body.code ?? body.error_code ?? nested.code ?? `http_${response.status}`);
   const correlationId = response.headers.get('x-correlation-id') ?? (String(body.correlation_id ?? body.trace_id ?? '') || undefined);
   const message = String(body.detail ?? body.message ?? nested.message ?? fallback);
-  return new UiRequestError(message, response.status, code, correlationId, response.status === 408 || response.status === 429 || response.status >= 500);
+  const findings = Array.isArray(body.findings) ? body.findings.filter((item: unknown): item is ValidationFinding => {
+    if (!item || typeof item !== 'object') return false;
+    const candidate = item as Record<string, unknown>;
+    return typeof candidate.code === 'string' && typeof candidate.message === 'string';
+  }) : [];
+  return new UiRequestError(message, response.status, code, correlationId, response.status === 408 || response.status === 429 || response.status >= 500, findings);
 }
 
 export function errorMessage(error: unknown): string {

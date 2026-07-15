@@ -1,6 +1,7 @@
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using Azure.AI.OpenAI;
+using Azure.AI.Projects;
 using Azure.Core;
 using Azure.Identity;
 using Azure.Monitor.OpenTelemetry.AspNetCore;
@@ -53,6 +54,7 @@ builder.Services.AddMcpServer()
     .WithHttpTransport(transport => transport.Stateless = true)
     .WithTools<AgentContextMcpTools>();
 builder.Services.AddSingleton<DeterministicExperienceDraftGenerator>();
+builder.Services.AddTransient<CorrelationPropagationHandler>();
 builder.Services.AddSingleton<IDestinationAddressResolver, SystemDestinationAddressResolver>();
 builder.Services.AddHttpClient<IBillerWebsiteResearcher, HttpBillerWebsiteResearcher>(client =>
     client.Timeout = Timeout.InfiniteTimeSpan)
@@ -60,6 +62,9 @@ builder.Services.AddHttpClient<IBillerWebsiteResearcher, HttpBillerWebsiteResear
 if (!string.IsNullOrWhiteSpace(options.Research.FoundryProjectEndpoint))
 {
     builder.Services.AddSingleton<TokenCredential>(_ => new DefaultAzureCredential());
+    builder.Services.AddSingleton(services => new AIProjectClient(
+        new Uri(options.Research.FoundryProjectEndpoint),
+        services.GetRequiredService<TokenCredential>()));
     builder.Services.AddSingleton<IFoundryAgentServiceGateway, FoundryAgentServiceGateway>();
     builder.Services.AddSingleton<FoundryResearchAgentAdapter>();
     builder.Services.AddSingleton<IResearchAgentCatalog>(services => services.GetRequiredService<FoundryResearchAgentAdapter>());
@@ -73,6 +78,11 @@ if (!string.IsNullOrWhiteSpace(options.Research.FoundryProjectEndpoint))
             ? null
             : services.GetRequiredService<FoundryResearchAgentAdapter>(),
         services.GetRequiredService<IAgentContextCapabilityIssuer>()));
+    if (options.AgentProvisioning.Enabled)
+    {
+        builder.Services.AddSingleton<IFoundryAgentAdministrationGateway, FoundryAgentAdministrationGateway>();
+        builder.Services.AddHostedService<FoundryAgentReconciler>();
+    }
 }
 else
 {
@@ -101,7 +111,8 @@ builder.Services.AddSingleton<IComplianceReviewService>(services => new Complian
     services.GetService<IComplianceKnowledgeReviewer>()));
 if (Uri.TryCreate(options.SupportingServices.InvoiceBaseUrl, UriKind.Absolute, out var invoiceBaseUri))
 {
-    builder.Services.AddHttpClient("invoice-seeder", client => client.BaseAddress = invoiceBaseUri);
+    builder.Services.AddHttpClient("invoice-seeder", client => client.BaseAddress = invoiceBaseUri)
+        .AddHttpMessageHandler<CorrelationPropagationHandler>();
     builder.Services.AddSingleton<IInvoiceSeeder>(services => new HttpInvoiceSeeder(
         services.GetRequiredService<IHttpClientFactory>().CreateClient("invoice-seeder"),
         services.GetRequiredService<ILogger<HttpInvoiceSeeder>>()));
@@ -185,6 +196,7 @@ builder.Services.AddCors(cors => cors.AddDefaultPolicy(policy =>
         .AllowAnyHeader()
         .AllowAnyMethod()));
 
+builder.Services.FilterHealthProbeTraces();
 var openTelemetry = builder.Services.AddOpenTelemetry()
     .ConfigureResource(resource => resource.AddService("Pronto.BillerExperience.Api"))
     .WithTracing(tracing => tracing

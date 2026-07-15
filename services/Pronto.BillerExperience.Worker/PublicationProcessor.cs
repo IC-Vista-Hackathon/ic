@@ -12,7 +12,17 @@ public sealed partial class PublicationProcessor(
 {
     public async ValueTask ProcessAsync(PublicationDeployment deployment, CancellationToken cancellationToken)
     {
-        using var activity = PublicationTelemetry.Source.StartActivity("publication.process");
+        // Asynchronous publish is queued work: the originating API request's context is attached as
+        // a link, not a parent, so the Worker's processing span is its own root trace (messaging
+        // convention) while remaining correlatable to the request that enqueued it.
+        var links = ActivityContext.TryParse(deployment.Traceparent, null, out var originating)
+            ? new[] { new ActivityLink(originating) }
+            : null;
+        using var activity = PublicationTelemetry.Source.StartActivity(
+            "publication.process",
+            ActivityKind.Consumer,
+            parentContext: default,
+            links: links);
         activity?.SetTag("ic.biller_id", deployment.BillerId);
         activity?.SetTag("ic.deployment_id", deployment.Id);
         var startedAt = Stopwatch.GetTimestamp();
