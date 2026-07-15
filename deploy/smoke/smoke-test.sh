@@ -15,6 +15,7 @@
 #
 # Config via env vars:
 #   BASE_URL          public gateway base (default: http://pronto.eastus2.cloudapp.azure.com)
+#   PUBLISHED_EXPERIENCE_SLUG known published fixture to verify through API + Router
 #   HTTP_TIMEOUT      per-request timeout seconds (default: 10)
 #   SKIP_KUBECTL=1    skip layer 1 (when cluster credentials aren't available)
 #
@@ -25,6 +26,7 @@ set -uo pipefail
 BASE_URL="${BASE_URL:-http://pronto.eastus2.cloudapp.azure.com}"
 HTTP_TIMEOUT="${HTTP_TIMEOUT:-10}"
 SKIP_KUBECTL="${SKIP_KUBECTL:-0}"
+PUBLISHED_EXPERIENCE_SLUG="${PUBLISHED_EXPERIENCE_SLUG:-}"
 GATEWAY_NS="kgateway-system"
 GATEWAY_NAME="ic-gateway"
 
@@ -36,24 +38,32 @@ EXPECTED_DEPLOYMENTS=(
   "ic/ic-biller-experience-api"
   "ic/ic-biller-experience-studio"
   "ic/ic-biller-experience-worker"
+  "ic/ic-payer-experience-router"
   "ic/ic-invoice-api"
   "ic/ic-payment-api"
   "ic/ic-payer-account-api"
 )
 
-# Gateway reachability as "path expected_http_code". 405 = POST-only endpoint that
-# still proved it is alive (the service answered, the method just isn't GET).
+# Gateway reachability as "path expected_http_code". The payment and payer-account
+# collection endpoints return 400 to an incomplete GET, proving the routed service answered.
 HTTP_CHECKS=(
   "/studio/ 200"
   "/api/ 200"
   "/invoices/ 200"
-  "/pay/ 200"
-  "/payments/ 405"
-  "/payers/ 405"
+  "/payments/ 400"
+  "/payers/ 400"
   "/invoices/health/ready 200"
   "/api/health/ready 200"
   "/studio/health/ready 200"
-  "/pay/health/ready 200"
+  "/pay/smoke-no-active-site/ 404"
+  "/api/public/experiences/smoke-no-active-site 404"
+)
+
+EXPECTED_ROUTES=(
+  "ic/ic-biller-experience"
+  "ic/ic-invoice-api"
+  "ic/ic-payment-api"
+  "ic/ic-payer-account-api"
 )
 
 PASS=0
@@ -93,6 +103,19 @@ else
     fi
   done
 
+  for entry in "${EXPECTED_ROUTES[@]}"; do
+    ns="${entry%%/*}"; name="${entry##*/}"
+    accepted="$(kubectl get httproute "$name" -n "$ns" \
+      -o jsonpath='{.status.parents[0].conditions[?(@.type=="Accepted")].status}' 2>/dev/null)"
+    resolved="$(kubectl get httproute "$name" -n "$ns" \
+      -o jsonpath='{.status.parents[0].conditions[?(@.type=="ResolvedRefs")].status}' 2>/dev/null)"
+    if [[ "$accepted" == "True" && "$resolved" == "True" ]]; then
+      pass "$entry — Accepted=True, ResolvedRefs=True"
+    else
+      fail "$entry — Accepted=${accepted:-missing}, ResolvedRefs=${resolved:-missing}"
+    fi
+  done
+
   gw_ip="$(kubectl get svc "$GATEWAY_NAME" -n "$GATEWAY_NS" -o jsonpath='{.status.loadBalancer.ingress[0].ip}' 2>/dev/null)"
   if [[ -n "$gw_ip" ]]; then
     pass "gateway $GATEWAY_NAME — public LB IP $gw_ip"
@@ -113,12 +136,28 @@ for entry in "${HTTP_CHECKS[@]}"; do
   fi
 done
 
-# ---- Layer 3: Functional (Invoice lookup — read-only) ----
+FUNCTIONAL_SECTION=3
+if [[ -n "$PUBLISHED_EXPERIENCE_SLUG" ]]; then
+  section "3. Published experience — API pointer + Router bundle"
+  FUNCTIONAL_SECTION=4
+  for path in \
+    "/api/public/experiences/${PUBLISHED_EXPERIENCE_SLUG}" \
+    "/pay/${PUBLISHED_EXPERIENCE_SLUG}/"; do
+    code="$(http_code "$BASE_URL$path")"
+    if [[ "$code" == "200" ]]; then
+      pass "$path -> 200"
+    else
+      fail "$path -> $code (expected 200)"
+    fi
+  done
+fi
+
+# ---- Functional (Invoice lookup — read-only) ----
 # Intentionally a READ, not the seed POST: a smoke test that may run on a cron must
 # not accumulate data. Looking up a nonexistent account still exercises the full path
 # (controller -> repository query -> serialization) and returns an empty list. The
 # write/seed path is covered by the Pronto.Invoice.Api unit tests.
-section "3. Functional — Invoice lookup (read-only)"
+section "${FUNCTIONAL_SECTION}. Functional — Invoice lookup (read-only)"
 lookup_url="$BASE_URL/invoices/billers/smoke-test/invoices?account_number=smoke-none"
 resp="$(curl -s -m "$HTTP_TIMEOUT" -w $'\n%{http_code}' "$lookup_url" 2>/dev/null)"
 code="${resp##*$'\n'}"

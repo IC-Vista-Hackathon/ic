@@ -21,19 +21,14 @@ az account set --subscription <sandbox-subscription-id>
 az deployment sub create \
   --name ic-hack \
   --location eastus2 \
-  --template-file main.bicep
-```
-
-To provision the demo Foundry project connection for shared agent context, pass the same API key
-used by `BillerExperience__Mcp__ApiKey`:
-
-```sh
-az deployment sub create \
-  --name ic-hack \
-  --location eastus2 \
   --template-file main.bicep \
-  --parameters mcpConnectionEnabled=true mcpApiKey='<at-least-32-characters>'
+  --parameters aksDeploymentPrincipalIds='["<github-deploy-service-principal-object-id>"]'
 ```
+
+The authenticated MCP project connection is fail-closed while the checked-in kgateway listener
+is HTTP-only: `mcpConnectionEnabled` currently permits only `false`. Add the planned TLS ingress,
+change the public endpoint to HTTPS, and then remove that restriction before provisioning an MCP
+API key.
 
 The module outputs the reviewed MCP tool definition for agent-version provisioning. It allowlists
 only `get_goal_context` and `append_context`. Agent versions are Foundry data-plane objects, so ARM
@@ -55,7 +50,7 @@ Re-run the same command to apply changes; Bicep is idempotent (ARM incremental d
 | Storage account (Standard_LRS, StorageV2) + `payer-experiences` blob container | Holds every biller's immutable experience artifacts and active pointer. The publisher identity gets `Storage Blob Data Contributor`; the API workload identity gets `Storage Blob Data Reader`; optional service principals can receive contributor/reader access through `payerExperienceBlobContributorPrincipalIds`/`payerExperienceBlobReaderPrincipalIds`; keys and anonymous access are disabled |
 | Cosmos DB (serverless), two accounts | `cosmos-ic-hack-<suffix>` (prod) and `cosmos-ic-hack-nonprod-<suffix>` (per-PR nonprod) — same containers per entities.md, partitioned `/biller_id` (`/id` for `billers`), so nonprod smoke tests never touch prod data |
 | AI Foundry account + project | Hosts agents and an optional authenticated `ic-shared-context-mcp` project connection (services.md's "AI Foundry" plane) |
-| AKS (2-4 node autoscale, kubenet) | Runs services + agents |
+| AKS (2-4 node autoscale, kubenet, managed Entra ID + Azure RBAC) | Runs services + agents; optional `aksDeploymentPrincipalIds` receive Cluster User + RBAC Writer instead of administrator credentials |
 | User-assigned managed identities | `ic-workload` authenticates to Cosmos, AI Foundry, and Blob read; `biller-publisher` authenticates to Cosmos and Blob write with no secrets |
 | Application Insights (workspace-based, on `log-ic-hack`) | Correlated traces/logs for services using the Azure Monitor OpenTelemetry Distro — just needs the `appInsightsConnectionString` output, no in-cluster OTEL collector |
 | Azure Monitor workspace | Metrics backend for Azure Monitor managed Prometheus |
@@ -65,6 +60,8 @@ Re-run the same command to apply changes; Bicep is idempotent (ARM incremental d
 ## After deploy
 
 - `az aks get-credentials --resource-group rg-ic-hack --name aks-ic-hack` to get `kubectl` access.
+- The deploy workflows use the Entra/Azure RBAC identity supplied through
+  `aksDeploymentPrincipalIds` and never request the AKS `system:masters` administrator certificate.
 - Deployed workloads must run under namespace `ic`, service account `ic-workload` (or pass
   different values via `-p workloadNamespace=... workloadServiceAccountName=...`) to pick up the
   federated identity — annotate that service account with the workload identity's client ID
