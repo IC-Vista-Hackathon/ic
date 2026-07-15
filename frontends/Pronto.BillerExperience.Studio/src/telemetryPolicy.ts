@@ -42,6 +42,7 @@ const EVENTS: Record<string, Record<string, Validator>> = {
   'studio.publish_requested': {},
   'studio.publish_completed': {},
   'studio.publish_failed': { error_category: errorCategory },
+  'studio.client_error': { error_category: errorCategory },
   'studio.purchase_started': {},
   'studio.purchase_completed': {},
 };
