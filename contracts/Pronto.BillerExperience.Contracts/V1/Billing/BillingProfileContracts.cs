@@ -1,16 +1,22 @@
 namespace Pronto.BillerExperience.Contracts.V1.Billing;
 
 /// <summary>
-/// Biller-confirmed billing policy collected by the bounded onboarding conversation.
+/// Billing policy collected by the bounded onboarding conversation. Missing values may be
+/// populated with declared, conservative assumptions that the biller can revise at any time.
 /// This is operational input, not visual experience configuration.
 /// </summary>
 public sealed record BillingProfile(
     string SchemaVersion,
     IReadOnlyList<BillingCategory> Categories,
-    bool Confirmed = false)
+    bool Confirmed = false,
+    IReadOnlyList<BillingPolicyAssumption>? Assumptions = null)
 {
     public static BillingProfile Empty { get; } = new("1.0", []);
 }
+
+public sealed record BillingPolicyAssumption(
+    string QuestionId,
+    string Description);
 
 public sealed record BillingCategory(
     string Id,

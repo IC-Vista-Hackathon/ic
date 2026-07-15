@@ -1,11 +1,12 @@
 import type { Session } from './types';
 
 export function billingInterviewPending(session: Session | null): boolean {
-  if (!session) return false;
-  return !!session.current_question || session.billing_profile?.confirmed === false;
+  // Billing gaps are completed by the orchestration service with visible assumptions.
+  // The Studio must never turn its retired interview UI into a publication gate.
+  return false;
 }
 
 export function billingInterviewPrompt(session: Session | null): string {
   return session?.current_question?.prompt
-    ?? 'Continue the billing interview and confirm each category before publishing.';
+    ?? 'Review the stated billing assumptions when convenient; they do not block publishing.';
 }
