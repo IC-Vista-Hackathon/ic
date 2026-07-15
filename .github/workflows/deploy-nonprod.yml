@@ -78,6 +78,29 @@ jobs:
           sed -i "s/newTag: latest/newTag: ${IMAGE_TAG}/" "${OVERLAY}/kustomization.yaml"
           grep 'newTag' "${OVERLAY}/kustomization.yaml"
 
+      # The nonprod ic-workload service account must annotate the DEDICATED nonprod workload
+      # identity (uami-ic-hack-nonprod-workload) so its pods reach only the nonprod Cosmos
+      # account. The client id is a GUID assigned at identity-creation time, so it's not
+      # committed — resolve it from the Bicep output and substitute the placeholder in the
+      # nonprod overlay before deploying.
+      - name: Inject nonprod workload identity client id
+        run: |
+          NONPROD_CLIENT_ID=$(az deployment sub show --name ic-hack \
+            --query 'properties.outputs.nonprodWorkloadIdentityClientId.value' -o tsv 2>/dev/null || true)
+          if [ -z "$NONPROD_CLIENT_ID" ]; then
+            # The dedicated nonprod identity isn't provisioned yet (its Bicep hasn't been applied).
+            # Drop the SA override so pods fall back to the shared base identity — the current,
+            # pre-isolation behavior — rather than deploying an invalid placeholder client id.
+            # Once the infra is applied and the output exists, this branch stops running and the
+            # dedicated nonprod identity is used automatically.
+            echo "::warning::nonprodWorkloadIdentityClientId output not found; using the shared base identity until infra/bicep is applied."
+            sed -i '/- path: service-account.yaml/d' "${OVERLAY}/kustomization.yaml"
+          else
+            sed -i "s/REPLACE_WITH_NONPROD_WORKLOAD_IDENTITY_CLIENT_ID/${NONPROD_CLIENT_ID}/" \
+              "${OVERLAY}/service-account.yaml"
+            grep 'client-id' "${OVERLAY}/service-account.yaml"
+          fi
+
       - name: Deploy
         run: kubectl apply -k "${OVERLAY}"
 

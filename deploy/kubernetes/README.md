@@ -92,9 +92,13 @@ patches in `Provider=Cosmos`, the endpoint, and the `azure.workload.identity/use
 label (`overlays/{prod,nonprod}/cosmos-persistence.yaml`). The two environments point at
 **separate Cosmos accounts** — prod at `cosmos-ic-hack-<suffix>`, nonprod at
 `cosmos-ic-hack-nonprod-<suffix>` — so per-PR smoke tests exercise real Cosmos without touching
-prod data. The shared `ic-workload` identity is federated to both `system:serviceaccount:ic:ic-workload`
-and `system:serviceaccount:ic-nonprod:ic-workload` (`infra/bicep/modules/aks.bicep`) so pods in
-either namespace can obtain a Cosmos token. With shared Cosmos state each env is safe to scale
+prod data. Each environment has its **own** workload identity: prod's `uami-ic-hack-workload`
+is federated to `system:serviceaccount:ic:ic-workload` and holds data access on prod Cosmos only,
+while `uami-ic-hack-nonprod-workload` is federated to `system:serviceaccount:ic-nonprod:ic-workload`
+and holds data access on nonprod Cosmos only (`infra/bicep/modules/aks.bicep`), so a nonprod pod's
+token can never reach prod Cosmos. The `ic-workload` service account annotation carries the matching
+client id per overlay (prod uses `base/service-account.yaml`; nonprod overrides it via
+`overlays/nonprod/service-account.yaml`). With shared Cosmos state each env is safe to scale
 (kept at 1 for the sandbox). Manifests live under `base/` and deploy through the Kustomize
 overlays above.
 

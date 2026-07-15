@@ -77,6 +77,21 @@ module publisherIdentity 'modules/workloadIdentity.bicep' = {
   }
 }
 
+// Dedicated identity for the nonprod (per-PR) environment. Kept separate from the prod
+// workload identity so a nonprod pod's token can NEVER reach prod Cosmos: this identity is
+// federated only to system:serviceaccount:ic-nonprod:ic-workload and granted data access only
+// on the nonprod Cosmos account. Separate identities also mean each has a single federated
+// credential, avoiding the ConcurrentFederatedIdentityCredentialsWritesForSingleManagedIdentity
+// error that forced serialized writes when both federations lived on one identity.
+module nonprodWorkloadIdentity 'modules/workloadIdentity.bicep' = {
+  name: 'nonprodWorkloadIdentity'
+  scope: rg
+  params: {
+    name: 'uami-${prefix}-nonprod-workload'
+    location: location
+  }
+}
+
 module storage 'modules/storage.bicep' = {
   name: 'storage'
   scope: rg
@@ -105,8 +120,9 @@ module cosmos 'modules/cosmos.bicep' = {
 }
 
 // Separate Cosmos account for the nonprod (per-PR) environment so smoke tests exercise real
-// Cosmos persistence without touching prod data. Same schema; only the workload API reader
-// identity needs data access here (the publisher/worker runs in prod only).
+// Cosmos persistence without touching prod data. Data access is granted ONLY to the dedicated
+// nonprod identity (not the shared prod workload identity), so this is the data-plane isolation
+// boundary: nonprod pods reach nonprod Cosmos, and only nonprod Cosmos.
 module cosmosNonprod 'modules/cosmos.bicep' = {
   name: 'cosmosNonprod'
   scope: rg
@@ -114,7 +130,7 @@ module cosmosNonprod 'modules/cosmos.bicep' = {
     name: 'cosmos-${prefix}-nonprod-${suffix}'
     location: location
     dataContributorPrincipalIds: [
-      workloadIdentity.outputs.principalId
+      nonprodWorkloadIdentity.outputs.principalId
     ]
   }
 }
@@ -166,6 +182,7 @@ module aks 'modules/aks.bicep' = {
     nodeCountMax: aksNodeCountMax
     vmSize: aksVmSize
     uamiName: workloadIdentity.outputs.name
+    nonprodUamiName: nonprodWorkloadIdentity.outputs.name
     workloadNamespace: workloadNamespace
     nonprodWorkloadNamespace: nonprodWorkloadNamespace
     workloadServiceAccountName: workloadServiceAccountName
@@ -207,6 +224,7 @@ output payerExperienceBlobEndpoint string = storage.outputs.blobEndpoint
 output payerExperienceContainer string = storage.outputs.containerName
 output aksClusterName string = aks.outputs.name
 output workloadIdentityClientId string = workloadIdentity.outputs.clientId
+output nonprodWorkloadIdentityClientId string = nonprodWorkloadIdentity.outputs.clientId
 output publisherIdentityClientId string = publisherIdentity.outputs.clientId
 output appInsightsConnectionString string = appInsights.outputs.connectionString
 output monitorWorkspaceId string = monitorWorkspace.outputs.id

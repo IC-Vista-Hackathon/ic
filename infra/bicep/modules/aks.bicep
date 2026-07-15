@@ -7,6 +7,7 @@ param nodeCountMin int
 param nodeCountMax int
 param vmSize string
 param uamiName string
+param nonprodUamiName string
 param workloadNamespace string
 param nonprodWorkloadNamespace string
 param workloadServiceAccountName string
@@ -23,6 +24,10 @@ resource acr 'Microsoft.ContainerRegistry/registries@2023-07-01' existing = {
 
 resource uami 'Microsoft.ManagedIdentity/userAssignedIdentities@2023-01-31' existing = {
   name: uamiName
+}
+
+resource nonprodUami 'Microsoft.ManagedIdentity/userAssignedIdentities@2023-01-31' existing = {
+  name: nonprodUamiName
 }
 
 resource publisherUami 'Microsoft.ManagedIdentity/userAssignedIdentities@2023-01-31' existing = {
@@ -123,19 +128,19 @@ resource federatedCredential 'Microsoft.ManagedIdentity/userAssignedIdentities/f
   }
 }
 
-// Same workload identity, also federated to the nonprod namespace's service account so per-PR
-// (ic-nonprod) pods can authenticate to the nonprod Cosmos account. One identity, two subjects.
-// Azure rejects concurrent federated-credential writes on a single managed identity, so this
-// depends on the prod credential above to force them to be created sequentially.
+// Dedicated nonprod identity, federated to the nonprod namespace's service account so per-PR
+// (ic-nonprod) pods authenticate to the nonprod Cosmos account only. Because this lives on its
+// own identity (not the prod uami), each identity carries a single federated credential and no
+// serialization/dependsOn is needed — this sidesteps the
+// ConcurrentFederatedIdentityCredentialsWritesForSingleManagedIdentity error entirely.
 resource nonprodFederatedCredential 'Microsoft.ManagedIdentity/userAssignedIdentities/federatedIdentityCredentials@2023-01-31' = {
-  parent: uami
+  parent: nonprodUami
   name: 'aks-${nonprodWorkloadNamespace}-${workloadServiceAccountName}'
   properties: {
     issuer: aks.properties.oidcIssuerProfile.issuerURL
     subject: 'system:serviceaccount:${nonprodWorkloadNamespace}:${workloadServiceAccountName}'
     audiences: [ 'api://AzureADTokenExchange' ]
   }
-  dependsOn: [ federatedCredential ]
 }
 
 resource publisherFederatedCredential 'Microsoft.ManagedIdentity/userAssignedIdentities/federatedIdentityCredentials@2023-01-31' = {
