@@ -58,7 +58,7 @@ public sealed partial class FoundryAgentServiceGateway : IFoundryAgentServiceGat
             {
                 var latest = agent.GetLatestVersion();
                 agents.Add(new FoundryAgentDefinition(
-                    agent.Name,
+                    agent.Id,
                     string.IsNullOrWhiteSpace(agent.Name) ? agent.Id : agent.Name,
                     new Dictionary<string, string>(latest.Metadata, StringComparer.OrdinalIgnoreCase)));
             }
