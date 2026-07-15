@@ -1,5 +1,6 @@
+import { RequestError } from './errors';
 import type { Invoice, PayerProfile, PaymentHistory, PaymentReceipt, PaymentRequest } from './types';
-import { createFlowTrace, observed, traceHeaders } from './telemetry';
+import { observed, sharedFlow, traceHeaders } from './telemetry';
 
 export interface PaymentExperienceProvider {
   getInvoices(accountNumber: string): Promise<Invoice[]>;
@@ -10,7 +11,7 @@ export interface PaymentExperienceProvider {
 }
 
 export class ServicePaymentExperienceProvider implements PaymentExperienceProvider {
-  private readonly flow = createFlowTrace();
+  private readonly flow = sharedFlow;
   constructor(private readonly billerId: string) {}
   private headers(json = false) { return { ...(json ? { 'content-type': 'application/json' } : {}), ...traceHeaders(this.flow, this.billerId) }; }
 
@@ -49,4 +50,4 @@ export class ServicePaymentExperienceProvider implements PaymentExperienceProvid
   }); }
 }
 
-async function read<T>(response: Response): Promise<T> { const body = await response.json().catch(() => ({})); if (!response.ok) throw new Error(body.error?.message ?? body.message ?? body.detail ?? `Request failed with ${response.status}.`); return body as T; }
+async function read<T>(response: Response): Promise<T> { const body = await response.json().catch(() => ({})); if (!response.ok) throw new RequestError(body.error?.message ?? body.message ?? body.detail ?? `Request failed with ${response.status}.`, response.status); return body as T; }

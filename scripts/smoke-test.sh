@@ -57,6 +57,16 @@ for target in "${ALL_TARGETS[@]}"; do
   echo "  ok: $target (ready + live)"
 done
 
+echo "== Browser telemetry configuration =="
+start_pf "svc/ic-biller-experience-api"
+telemetry=$($CURL "http://127.0.0.1:${LOCAL_PORT}/public/telemetry")
+echo "  ${telemetry}"
+# Shape check only: connection_string may legitimately be null before the env
+# step injects APPLICATIONINSIGHTS_CONNECTION_STRING; the browser smoke test
+# fails hard on null where telemetry is expected.
+jq -e 'has("connection_string") and has("sampling_percentage")' <<<"$telemetry" >/dev/null \
+  || { echo "ERROR: /public/telemetry is missing expected fields" >&2; exit 1; }
+
 echo "== Functional: Invoice seed + lookup =="
 start_pf "svc/ic-invoice-api"
 BILLER="smoke-$(date +%s)"
