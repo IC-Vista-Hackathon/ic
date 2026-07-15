@@ -21,12 +21,17 @@ using Pronto.Agentic.Orchestration.Abstractions;
 using Pronto.Agentic.Orchestration.Execution;
 using Pronto.Agentic.Orchestration.Telemetry;
 using Pronto.ServiceDefaults;
+using Pronto.ServiceDefaults.Security;
 using Microsoft.Azure.Cosmos;
+using Microsoft.AspNetCore.Authorization;
 using OpenTelemetry.Metrics;
 using OpenTelemetry.Resources;
 using OpenTelemetry.Trace;
 
 var builder = WebApplication.CreateBuilder(args);
+builder.AddServiceAuthentication();
+builder.Services.PostConfigure<AuthorizationOptions>(authorization =>
+    authorization.FallbackPolicy = null);
 builder.Logging.ClearProviders();
 builder.Logging.AddJsonConsole(console =>
 {
@@ -98,7 +103,8 @@ else
 if (Uri.TryCreate(options.SupportingServices.InvoiceBaseUrl, UriKind.Absolute, out var invoiceBaseUri))
 {
     builder.Services.AddHttpClient("invoice-seeder", client => client.BaseAddress = invoiceBaseUri)
-        .AddHttpMessageHandler<CorrelationPropagationHandler>();
+        .AddHttpMessageHandler<CorrelationPropagationHandler>()
+        .AddServiceBearerToken(builder.Configuration, builder.Environment);
     builder.Services.AddSingleton<IInvoiceSeeder>(services => new HttpInvoiceSeeder(
         services.GetRequiredService<IHttpClientFactory>().CreateClient("invoice-seeder"),
         services.GetRequiredService<ILogger<HttpInvoiceSeeder>>()));
@@ -243,6 +249,8 @@ app.UseMiddleware<RequestObservabilityMiddleware>();
 app.UseMiddleware<McpApiKeyMiddleware>();
 app.UseExceptionHandler();
 app.UseCors();
+app.UseAuthentication();
+app.UseAuthorization();
 app.MapControllers();
 app.MapHealthChecks("/health/live");
 app.MapHealthChecks("/health/ready");

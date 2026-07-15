@@ -8,7 +8,7 @@ using Xunit;
 namespace Pronto.Payment.Api.Tests;
 
 /// <summary>Wire must reject integer enum tokens — {"plan":99} used to 201 and echo 99.</summary>
-public sealed class WireStrictnessTests : IClassFixture<WebApplicationFactory<Program>>
+public sealed class WireStrictnessTests : IClassFixture<TestingAppFactory>
 {
     private static readonly JsonSerializerOptions SnakeWire = new(JsonSerializerDefaults.Web)
     {
@@ -17,7 +17,7 @@ public sealed class WireStrictnessTests : IClassFixture<WebApplicationFactory<Pr
 
     private readonly HttpClient client;
 
-    public WireStrictnessTests(WebApplicationFactory<Program> factory)
+    public WireStrictnessTests(TestingAppFactory factory)
     {
         client = factory.CreateClient();
     }

@@ -6,6 +6,8 @@ using Pronto.BillerExperience.Contracts.V1.Billers;
 using Pronto.BillerExperience.Contracts.V1.Deployments;
 using Pronto.BillerExperience.Contracts.V1.Experiences;
 using Pronto.BillerExperience.Contracts.V1.Onboarding;
+using Pronto.ServiceDefaults.Security;
+using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.Extensions.Options;
 
@@ -34,6 +36,21 @@ public sealed partial class BillersController(
     [ProducesResponseType<BillerResponse>(StatusCodes.Status200OK)]
     public async Task<ActionResult<BillerResponse>> Get(string billerId, CancellationToken cancellationToken) =>
         Ok(await onboarding.GetBillerAsync(billerId, cancellationToken));
+
+    [HttpPost("{billerId}/purchase")]
+    [Authorize(Policy = ServiceAuthorization.BillerPurchaseWrite)]
+    [ProducesResponseType<BillerResponse>(StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status400BadRequest)]
+    [ProducesResponseType(StatusCodes.Status404NotFound)]
+    [ProducesResponseType(StatusCodes.Status409Conflict)]
+    public async Task<ActionResult<BillerResponse>> AdvancePurchase(
+        string billerId,
+        [FromBody] AdvanceBillerPurchaseRequest request,
+        CancellationToken cancellationToken)
+    {
+        BillerClaims.RequireBillerAccess(User, billerId);
+        return Ok(await onboarding.AdvancePurchaseAsync(billerId, request, cancellationToken));
+    }
 
     [HttpGet("{billerId}/session")]
     [ProducesResponseType<OnboardingSessionResponse>(StatusCodes.Status200OK)]

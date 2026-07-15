@@ -41,7 +41,7 @@ public sealed partial class CosmosBillerExperienceRepository(
             try
             {
                 var response = await Billers.CreateItemAsync(biller, new PartitionKey(biller.Id), cancellationToken: cancellationToken);
-                return response.Resource;
+                return response.Resource with { ETag = response.ETag };
             }
             catch
             {
@@ -68,7 +68,7 @@ public sealed partial class CosmosBillerExperienceRepository(
             try
             {
                 var response = await Billers.ReadItemAsync<BillerRecord>(billerId, new PartitionKey(billerId), cancellationToken: cancellationToken);
-                return response.Resource;
+                return response.Resource with { ETag = response.ETag };
             }
             catch (CosmosException exception) when (exception.StatusCode == HttpStatusCode.NotFound)
             {
@@ -76,11 +76,26 @@ public sealed partial class CosmosBillerExperienceRepository(
             }
         });
 
-    public ValueTask<BillerRecord> SaveBillerAsync(BillerRecord biller, CancellationToken cancellationToken) =>
-        ObserveAsync("upsert", "billers", biller.Id, async () =>
+    public ValueTask<BillerRecord> SaveBillerAsync(
+        BillerRecord biller,
+        string? expectedETag,
+        CancellationToken cancellationToken) =>
+        ObserveAsync("replace", "billers", biller.Id, async () =>
         {
-            var response = await Billers.UpsertItemAsync(biller, new PartitionKey(biller.Id), cancellationToken: cancellationToken);
-            return response.Resource;
+            try
+            {
+                var response = await Billers.ReplaceItemAsync(
+                    biller,
+                    biller.Id,
+                    new PartitionKey(biller.Id),
+                    new ItemRequestOptions { IfMatchEtag = expectedETag },
+                    cancellationToken);
+                return response.Resource with { ETag = response.ETag };
+            }
+            catch (CosmosException exception) when (exception.StatusCode == HttpStatusCode.PreconditionFailed)
+            {
+                throw new ConcurrencyException("The biller was modified by another request.");
+            }
         });
 
     public ValueTask<bool> SlugExistsAsync(string slug, CancellationToken cancellationToken) =>

@@ -12,7 +12,7 @@ using Xunit;
 
 namespace Pronto.Payment.Api.Tests;
 
-public sealed class PaymentsApiTests : IClassFixture<WebApplicationFactory<Program>>
+public sealed class PaymentsApiTests : IClassFixture<TestingAppFactory>
 {
     private static readonly JsonSerializerOptions Wire = new(JsonSerializerDefaults.Web)
     {
@@ -21,13 +21,17 @@ public sealed class PaymentsApiTests : IClassFixture<WebApplicationFactory<Progr
     };
 
     private readonly FakeInvoiceClient fakeInvoices = new();
+    private readonly FakeBillerAccountClient fakeBillerAccounts = new();
     private readonly HttpClient client;
 
-    public PaymentsApiTests(WebApplicationFactory<Program> factory)
+    public PaymentsApiTests(TestingAppFactory factory)
     {
         client = factory.WithWebHostBuilder(builder =>
             builder.ConfigureServices(services =>
-                services.Replace(ServiceDescriptor.Singleton<IInvoiceClient>(fakeInvoices))))
+            {
+                services.Replace(ServiceDescriptor.Singleton<IInvoiceClient>(fakeInvoices));
+                services.Replace(ServiceDescriptor.Singleton<IBillerAccountClient>(fakeBillerAccounts));
+            }))
             .CreateClient();
     }
 
@@ -38,7 +42,9 @@ public sealed class PaymentsApiTests : IClassFixture<WebApplicationFactory<Progr
         var invoice = fakeInvoices.AddDueInvoice(billerId, amountCents: 8420);
 
         var response = await client.PostAsJsonAsync(
-            "payments", new CreatePaymentRequest(billerId, invoice.Id, "card"), Wire);
+            "payments",
+            new CreatePaymentRequest(billerId, invoice.Id, "card", IdempotencyKey: "card-payment"),
+            Wire);
 
         Assert.Equal(HttpStatusCode.Created, response.StatusCode);
         var payment = await response.Content.ReadFromJsonAsync<PaymentResponse>(Wire);
@@ -61,7 +67,9 @@ public sealed class PaymentsApiTests : IClassFixture<WebApplicationFactory<Progr
         var invoice = fakeInvoices.AddDueInvoice(billerId, amountCents: 10000);
 
         var response = await client.PostAsJsonAsync(
-            "payments", new CreatePaymentRequest(billerId, invoice.Id, "ach"), Wire);
+            "payments",
+            new CreatePaymentRequest(billerId, invoice.Id, "ach", IdempotencyKey: "ach-payment"),
+            Wire);
 
         var payment = await response.Content.ReadFromJsonAsync<PaymentResponse>(Wire);
         Assert.Equal(150, payment!.FeeCents);
@@ -77,7 +85,11 @@ public sealed class PaymentsApiTests : IClassFixture<WebApplicationFactory<Progr
         var response = await client.PostAsJsonAsync(
             "payments",
             new CreatePaymentRequest(
-                billerId, invoice.Id, "ach", ScheduledFor: new DateOnly(2026, 7, 24)),
+                billerId,
+                invoice.Id,
+                "ach",
+                ScheduledFor: new DateOnly(2026, 7, 24),
+                IdempotencyKey: "scheduled-payment"),
             Wire);
 
         var payment = await response.Content.ReadFromJsonAsync<PaymentResponse>(Wire);
@@ -91,10 +103,14 @@ public sealed class PaymentsApiTests : IClassFixture<WebApplicationFactory<Progr
         var billerId = Guid.NewGuid().ToString();
         var invoice = fakeInvoices.AddDueInvoice(billerId, amountCents: 5000);
         await client.PostAsJsonAsync(
-            "payments", new CreatePaymentRequest(billerId, invoice.Id, "card"), Wire);
+            "payments",
+            new CreatePaymentRequest(billerId, invoice.Id, "card", IdempotencyKey: "first-payment"),
+            Wire);
 
         var second = await client.PostAsJsonAsync(
-            "payments", new CreatePaymentRequest(billerId, invoice.Id, "card"), Wire);
+            "payments",
+            new CreatePaymentRequest(billerId, invoice.Id, "card", IdempotencyKey: "second-payment"),
+            Wire);
 
         Assert.Equal(HttpStatusCode.Conflict, second.StatusCode);
         Assert.Contains(
@@ -121,15 +137,43 @@ public sealed class PaymentsApiTests : IClassFixture<WebApplicationFactory<Progr
         var billerId = Guid.NewGuid().ToString();
 
         var first = await client.PostAsJsonAsync(
-            "purchases", new CreatePurchaseRequest(billerId, PurchasePlan.Isolated), Wire);
+            "purchases",
+            new CreatePurchaseRequest(billerId, PurchasePlan.Isolated, "purchase-attempt-1"),
+            Wire);
         Assert.Equal(HttpStatusCode.Created, first.StatusCode);
         var purchase = await first.Content.ReadFromJsonAsync<PurchaseResponse>(Wire);
         Assert.Equal(199900, purchase!.AmountCents);
         Assert.Equal(PurchaseStatus.Paid, purchase.Status);
 
         var second = await client.PostAsJsonAsync(
-            "purchases", new CreatePurchaseRequest(billerId, PurchasePlan.Shared), Wire);
+            "purchases",
+            new CreatePurchaseRequest(billerId, PurchasePlan.Shared, "purchase-attempt-2"),
+            Wire);
         Assert.Equal(HttpStatusCode.Conflict, second.StatusCode);
+    }
+
+    [Fact]
+    public async Task PurchaseRetryResumesPendingWorkflowWithSamePurchaseId()
+    {
+        var billerId = Guid.NewGuid().ToString();
+        fakeBillerAccounts.FailuresBeforeSuccess = 1;
+        var request = new CreatePurchaseRequest(
+            billerId,
+            PurchasePlan.Shared,
+            "retryable-purchase");
+
+        var failed = await client.PostAsJsonAsync("purchases", request, Wire);
+        Assert.Equal(HttpStatusCode.Created, failed.StatusCode);
+        var pending = await failed.Content.ReadFromJsonAsync<PurchaseResponse>(Wire);
+        Assert.Equal(PurchaseStatus.Pending, pending!.Status);
+
+        var retried = await client.PostAsJsonAsync("purchases", request, Wire);
+        Assert.Equal(HttpStatusCode.OK, retried.StatusCode);
+        var purchase = await retried.Content.ReadFromJsonAsync<PurchaseResponse>(Wire);
+        Assert.Equal(PurchaseStatus.Paid, purchase!.Status);
+        Assert.Equal(pending.PurchaseId, purchase.PurchaseId);
+        Assert.Equal(2, fakeBillerAccounts.Attempts.Count);
+        Assert.Single(fakeBillerAccounts.Attempts.Select(attempt => attempt.IdempotencyKey).Distinct(StringComparer.Ordinal));
     }
 
     [Fact]
@@ -138,8 +182,16 @@ public sealed class PaymentsApiTests : IClassFixture<WebApplicationFactory<Progr
         var billerId = Guid.NewGuid().ToString();
         var firstInvoice = fakeInvoices.AddDueInvoice(billerId, amountCents: 4200);
         var secondInvoice = fakeInvoices.AddDueInvoice(billerId, amountCents: 5300);
-        await client.PostAsJsonAsync("payments", new CreatePaymentRequest(billerId, firstInvoice.Id, "card", "payer-1"), Wire);
-        await client.PostAsJsonAsync("payments", new CreatePaymentRequest(billerId, secondInvoice.Id, "ach", "payer-2"), Wire);
+        await client.PostAsJsonAsync(
+            "payments",
+            new CreatePaymentRequest(
+                billerId, firstInvoice.Id, "card", "payer-1", IdempotencyKey: "payer-1-payment"),
+            Wire);
+        await client.PostAsJsonAsync(
+            "payments",
+            new CreatePaymentRequest(
+                billerId, secondInvoice.Id, "ach", "payer-2", IdempotencyKey: "payer-2-payment"),
+            Wire);
 
         var history = await client.GetFromJsonAsync<PaymentResponse[]>(
             $"payments?biller_id={billerId}&payer_account_id=payer-1", Wire);
@@ -148,4 +200,5 @@ public sealed class PaymentsApiTests : IClassFixture<WebApplicationFactory<Progr
         Assert.Equal("payer-1", payment.PayerAccountId);
         Assert.Equal(firstInvoice.Id, payment.InvoiceId);
     }
+
 }

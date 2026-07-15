@@ -17,7 +17,7 @@ namespace Pronto.BillerExperience.IntegrationTests;
 /// against a live cluster. New cross-service and Cosmos-backed integration tests
 /// should be added here.
 /// </summary>
-public sealed class InvoiceApiIntegrationTests : IClassFixture<WebApplicationFactory<Program>>
+public sealed class InvoiceApiIntegrationTests : IClassFixture<TestingAppFactory>
 {
     private static readonly JsonSerializerOptions Wire = new(JsonSerializerDefaults.Web)
     {
@@ -26,9 +26,9 @@ public sealed class InvoiceApiIntegrationTests : IClassFixture<WebApplicationFac
         Converters = { new JsonStringEnumConverter(JsonNamingPolicy.SnakeCaseLower) },
     };
 
-    private readonly WebApplicationFactory<Program> _factory;
+    private readonly TestingAppFactory _factory;
 
-    public InvoiceApiIntegrationTests(WebApplicationFactory<Program> factory) => _factory = factory;
+    public InvoiceApiIntegrationTests(TestingAppFactory factory) => _factory = factory;
 
     [Theory]
     [InlineData("/health/live")]

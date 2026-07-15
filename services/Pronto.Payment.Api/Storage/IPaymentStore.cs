@@ -1,40 +1,44 @@
-using Pronto.Payment.Contracts.V1.Payments;
+using Pronto.Payment.Api.Domain;
 
 namespace Pronto.Payment.Api.Storage;
 
-/// <summary>Outcome of a persist-before-mark create: the stored payment plus whether an
-/// idempotency key made this an exact replay of an earlier request.</summary>
-public readonly record struct PaymentCreation(PaymentResponse Payment, bool IsReplay);
-
+/// <summary>
+/// Durable payment persistence. Beyond simple CRUD it exposes the operations the recoverable
+/// payment workflow needs: an idempotent <see cref="BeginAsync"/> that atomically claims a
+/// pending record (durable client idempotency), <see cref="SaveAsync"/> to finalize it, and
+/// <see cref="ClaimDueAsync"/> for the scheduled-payment processor to lease due scheduled payments
+/// and recover orphaned pending ones.
+/// </summary>
 public interface IPaymentStore
 {
     /// <summary>
-    /// Durably persist <paramref name="payment"/> (expected to be <see cref="PaymentStatus.Pending"/>)
-    /// BEFORE the invoice transition is asserted. When <paramref name="idempotencyKey"/> is supplied
-    /// it is reserved partition-scoped (conditional create); a repeat with the same key returns the
-    /// original payment with <see cref="PaymentCreation.IsReplay"/> true instead of persisting again.
+    /// Atomically insert <paramref name="pending"/>. If a record with the same id already exists
+    /// (i.e. the same derived idempotency key), returns it with <c>Created=false</c> instead of
+    /// inserting — so a retried client request never creates a duplicate payment.
     /// </summary>
-    Task<PaymentCreation> CreatePendingAsync(
-        PaymentResponse payment, string? idempotencyKey, CancellationToken cancellationToken = default);
+    Task<PaymentBeginResult> BeginAsync(PaymentRecord pending, CancellationToken cancellationToken = default);
 
-    /// <summary>Replace an existing payment (e.g. Pending -> Succeeded/Scheduled).</summary>
-    Task UpdateAsync(PaymentResponse payment, CancellationToken cancellationToken = default);
+    /// <summary>Persist a lifecycle transition (finalization, failure, lease change).</summary>
+    Task<PaymentRecord> SaveAsync(PaymentRecord record, CancellationToken cancellationToken = default);
 
-    /// <summary>The payment originally created under <paramref name="idempotencyKey"/>, if any.</summary>
-    Task<PaymentResponse?> FindByIdempotencyKeyAsync(
-        string billerId, string idempotencyKey, CancellationToken cancellationToken = default);
+    Task<PaymentRecord?> FindAsync(string billerId, string paymentId, CancellationToken cancellationToken = default);
 
-    Task<PaymentResponse?> FindAsync(string billerId, string paymentId, CancellationToken cancellationToken = default);
-    Task<IReadOnlyList<PaymentResponse>> ListAsync(
+    Task<IReadOnlyList<PaymentRecord>> ListAsync(
         string billerId, string? payerAccountId, string? invoiceId, CancellationToken cancellationToken = default);
 
     /// <summary>
-    /// Scheduled payments whose <c>ScheduledFor</c> is on or before <paramref name="asOf"/>, across all
-    /// billers — drives the scheduled executor. Each result still carries its <c>biller_id</c> so the
-    /// executor's follow-up work (invoice transition, status mark) stays partition-scoped.
+    /// Claim (with an exclusive lease) one payment that needs the processor's attention: either a
+    /// scheduled payment whose <c>scheduled_for</c> has arrived (<paramref name="asOf"/>), or a
+    /// pending payment stranded since before <paramref name="staleBefore"/> (crash recovery). A
+    /// record whose lease is still active (<c>LeaseUntil &gt; now</c>) is skipped. Returns null when
+    /// nothing is claimable.
     /// </summary>
-    Task<IReadOnlyList<PaymentResponse>> ListDueScheduledAsync(
-        DateOnly asOf, CancellationToken cancellationToken = default);
+    Task<PaymentRecord?> ClaimDueAsync(
+        DateOnly asOf,
+        DateTimeOffset now,
+        DateTimeOffset staleBefore,
+        DateTimeOffset leaseUntil,
+        CancellationToken cancellationToken = default);
 
     /// <summary>Delete all payments in a biller's partition (nonprod test-cleanup only).</summary>
     Task PurgeByBillerAsync(string billerId, CancellationToken cancellationToken = default);
@@ -43,56 +47,35 @@ public interface IPaymentStore
 public sealed class InMemoryPaymentStore : IPaymentStore
 {
     private readonly object gate = new();
-    private readonly Dictionary<(string BillerId, string PaymentId), PaymentResponse> payments = [];
-    private readonly Dictionary<(string BillerId, string Key), string> idempotency = [];
+    private readonly Dictionary<(string BillerId, string PaymentId), PaymentRecord> payments = [];
 
-    public Task<PaymentCreation> CreatePendingAsync(
-        PaymentResponse payment, string? idempotencyKey, CancellationToken cancellationToken = default)
+    public Task<PaymentBeginResult> BeginAsync(
+        PaymentRecord pending, CancellationToken cancellationToken = default)
     {
         lock (gate)
         {
-            if (idempotencyKey is not null
-                && idempotency.TryGetValue((payment.BillerId, idempotencyKey), out var existingId)
-                && payments.TryGetValue((payment.BillerId, existingId), out var existing))
+            var key = (pending.BillerId, pending.PaymentId);
+            if (payments.TryGetValue(key, out var existing))
             {
-                return Task.FromResult(new PaymentCreation(existing, IsReplay: true));
+                return Task.FromResult(new PaymentBeginResult(Created: false, existing));
             }
 
-            payments[(payment.BillerId, payment.PaymentId)] = payment;
-            if (idempotencyKey is not null)
-            {
-                idempotency[(payment.BillerId, idempotencyKey)] = payment.PaymentId;
-            }
-
-            return Task.FromResult(new PaymentCreation(payment, IsReplay: false));
+            payments[key] = pending;
+            return Task.FromResult(new PaymentBeginResult(Created: true, pending));
         }
     }
 
-    public Task UpdateAsync(PaymentResponse payment, CancellationToken cancellationToken = default)
+    public Task<PaymentRecord> SaveAsync(PaymentRecord record, CancellationToken cancellationToken = default)
     {
         lock (gate)
         {
-            payments[(payment.BillerId, payment.PaymentId)] = payment;
+            payments[(record.BillerId, record.PaymentId)] = record;
         }
 
-        return Task.CompletedTask;
+        return Task.FromResult(record);
     }
 
-    public Task<PaymentResponse?> FindByIdempotencyKeyAsync(
-        string billerId, string idempotencyKey, CancellationToken cancellationToken = default)
-    {
-        lock (gate)
-        {
-            if (idempotency.TryGetValue((billerId, idempotencyKey), out var paymentId))
-            {
-                return Task.FromResult(payments.GetValueOrDefault((billerId, paymentId)));
-            }
-
-            return Task.FromResult<PaymentResponse?>(null);
-        }
-    }
-
-    public Task<PaymentResponse?> FindAsync(
+    public Task<PaymentRecord?> FindAsync(
         string billerId, string paymentId, CancellationToken cancellationToken = default)
     {
         lock (gate)
@@ -101,13 +84,14 @@ public sealed class InMemoryPaymentStore : IPaymentStore
         }
     }
 
-    public Task<IReadOnlyList<PaymentResponse>> ListAsync(
+    public Task<IReadOnlyList<PaymentRecord>> ListAsync(
         string billerId, string? payerAccountId, string? invoiceId, CancellationToken cancellationToken = default)
     {
         lock (gate)
         {
-            IReadOnlyList<PaymentResponse> results = payments.Values
+            IReadOnlyList<PaymentRecord> results = payments.Values
                 .Where(payment => payment.BillerId == billerId
+                    && payment.IsFinalized
                     && (payerAccountId is null || payment.PayerAccountId == payerAccountId)
                     && (invoiceId is null || payment.InvoiceId == invoiceId))
                 .OrderByDescending(payment => payment.CreatedAt)
@@ -116,20 +100,37 @@ public sealed class InMemoryPaymentStore : IPaymentStore
         }
     }
 
-    public Task<IReadOnlyList<PaymentResponse>> ListDueScheduledAsync(
-        DateOnly asOf, CancellationToken cancellationToken = default)
+    public Task<PaymentRecord?> ClaimDueAsync(
+        DateOnly asOf,
+        DateTimeOffset now,
+        DateTimeOffset staleBefore,
+        DateTimeOffset leaseUntil,
+        CancellationToken cancellationToken = default)
     {
         lock (gate)
         {
-            IReadOnlyList<PaymentResponse> results = payments.Values
-                .Where(payment => payment.Status == PaymentStatus.Scheduled
-                    && payment.ScheduledFor is not null
-                    && payment.ScheduledFor.Value <= asOf)
-                .OrderBy(payment => payment.ScheduledFor)
-                .ToArray();
-            return Task.FromResult(results);
+            foreach (var key in payments.Keys.ToList())
+            {
+                var record = payments[key];
+                var leaseAvailable = record.LeaseUntil is null || record.LeaseUntil <= now;
+                if (!leaseAvailable || !IsDue(record, asOf, staleBefore))
+                {
+                    continue;
+                }
+
+                var claimed = record with { LeaseUntil = leaseUntil, UpdatedAt = now };
+                payments[key] = claimed;
+                return Task.FromResult<PaymentRecord?>(claimed);
+            }
+
+            return Task.FromResult<PaymentRecord?>(null);
         }
     }
+
+    private static bool IsDue(PaymentRecord record, DateOnly asOf, DateTimeOffset staleBefore) =>
+        (record.Lifecycle == PaymentLifecycle.Scheduled
+            && record.ScheduledFor is { } scheduledFor && scheduledFor <= asOf)
+        || (record.Lifecycle == PaymentLifecycle.Pending && record.UpdatedAt <= staleBefore);
 
     public Task PurgeByBillerAsync(string billerId, CancellationToken cancellationToken = default)
     {
@@ -138,11 +139,6 @@ public sealed class InMemoryPaymentStore : IPaymentStore
             foreach (var key in payments.Keys.Where(k => k.BillerId == billerId).ToList())
             {
                 payments.Remove(key);
-            }
-
-            foreach (var key in idempotency.Keys.Where(k => k.BillerId == billerId).ToList())
-            {
-                idempotency.Remove(key);
             }
         }
 

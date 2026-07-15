@@ -149,8 +149,8 @@ is still just a placeholder README.
   (Discover → Draft → Validate → Preview → Approve), Cosmos + in-memory persistence, deterministic
   and Azure OpenAI draft generation. Phases 1-4 of the delivery plan are done.
 - `Pronto.Invoice.Api`, `Pronto.Payment.Api`, `Pronto.PayerAccount.Api` have real controllers/domain logic.
-  `Pronto.Payment.Api`'s `IBillerAccountClient` is an intentional no-op stub (Biller Experience API has
-  no account-status endpoint yet).
+  Payment purchase completion uses a durable pending/outbox workflow and the Biller Experience
+  API's idempotent biller purchase-transition endpoint.
 - **`Pronto.BillerExperience.Worker` is implemented** — `PublicationWorker.cs` polls Cosmos
   (`ClaimNextAsync`), and `PublicationProcessor`/`BlobExperienceArtifactPublisher` upload the
   versioned `config.json`/`manifest.webmanifest` + an atomic `active.json` to the

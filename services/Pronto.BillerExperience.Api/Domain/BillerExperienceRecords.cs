@@ -17,7 +17,10 @@ public sealed record BillerRecord(
     [property: JsonProperty("support")] BillerSupport? Support,
     [property: JsonProperty("payment_rails")] IReadOnlyList<PaymentRailReference> PaymentRails,
     [property: JsonProperty("status")] BillerStatus Status,
-    [property: JsonProperty("created_at")] DateTimeOffset CreatedAt);
+    [property: JsonProperty("created_at")] DateTimeOffset CreatedAt,
+    [property: JsonProperty("tier")] BillerTier Tier = BillerTier.Shared,
+    [property: JsonProperty("purchase_id")] string? PurchaseId = null,
+    [property: JsonProperty("_etag")] string? ETag = null);
 
 public sealed record ExperienceRecord(
     [property: JsonProperty("id")] string Id,

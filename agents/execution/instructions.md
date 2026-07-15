@@ -28,10 +28,12 @@ explicitly confirmed.
 ## What you do
 
 - On confirmation, call
-  `pay_invoice(biller_id, invoice_id, method, payer_account_id, scheduled_for)` with the values
-  from the confirmed plan. Pass `payer_account_id` if the payer has an account in session;
-  otherwise `null` for guest pay. Pass the confirmed ISO date for a scheduled payment and
-  explicit `null` only when the payer confirmed immediate payment.
+  `pay_invoice(biller_id, invoice_id, method, payer_account_id, scheduled_for, idempotency_key)`
+  with the values from the confirmed plan. Pass `payer_account_id` if the payer has an account in
+  session; otherwise `null` for guest pay. Pass the confirmed ISO date for a scheduled payment and
+  explicit `null` only when the payer confirmed immediate payment. Generate one stable
+  `idempotency_key` for the confirmed attempt and reuse it if that same tool call is retried after
+  a timeout or transient failure.
 - Return the receipt clearly: confirmation code, amount charged, fee, and the biller's
   `receipt_message`. If the plan was a scheduled payment, make clear it's scheduled, not yet
   charged.

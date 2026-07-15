@@ -1,93 +1,108 @@
 using System.Globalization;
 using System.Net;
-using System.Security.Cryptography;
-using System.Text;
 using System.Text.Json.Serialization;
-using Pronto.Payment.Contracts.V1.Payments;
+using Pronto.Payment.Api.Domain;
 using Microsoft.Azure.Cosmos;
 
 namespace Pronto.Payment.Api.Storage;
 
 /// <summary>
 /// Cosmos-backed payment store. Container <c>payments</c>, partition key <c>/biller_id</c>.
-/// The wire <see cref="PaymentResponse"/> is wrapped so the document carries Cosmos's
-/// required <c>id</c> and the <c>biller_id</c> partition key at the top level. Idempotency keys
-/// are reserved as sibling marker documents (no <c>payment</c> field) in the same partition, so
-/// point reads / conditional creates enforce single-use without a second container; payment
-/// queries filter with <c>IS_DEFINED(c.payment)</c> to skip those markers.
+/// The <see cref="PaymentRecord"/> is wrapped so the document carries Cosmos's required
+/// <c>id</c> and the <c>biller_id</c> partition key at the top level while the queryable payment
+/// fields (lifecycle, scheduled_for, lease) live under <c>payment</c>.
 /// </summary>
 public sealed class CosmosPaymentStore : IPaymentStore
 {
+    private const int MaxClaimRetries = 5;
+
     private readonly Container container;
 
     public CosmosPaymentStore(CosmosClient client, string databaseName)
         => container = client.GetContainer(databaseName, "payments");
 
-    public async Task<PaymentCreation> CreatePendingAsync(
-        PaymentResponse payment, string? idempotencyKey, CancellationToken cancellationToken = default)
+    public async Task<PaymentBeginResult> BeginAsync(
+        PaymentRecord pending, CancellationToken cancellationToken = default)
     {
-        var partitionKey = new PartitionKey(payment.BillerId);
-
-        if (idempotencyKey is not null)
+        var document = PaymentDocument.From(pending);
+        try
         {
-            var replay = await FindByIdempotencyKeyAsync(payment.BillerId, idempotencyKey, cancellationToken);
-            if (replay is not null)
-            {
-                return new PaymentCreation(replay, IsReplay: true);
-            }
+            var created = await container.CreateItemAsync(
+                document, new PartitionKey(pending.BillerId), cancellationToken: cancellationToken);
+            return new PaymentBeginResult(
+                Created: true,
+                created.Resource.Payment with { ETag = created.ETag });
         }
-
-        await container.CreateItemAsync(
-            new PaymentDocument { Id = payment.PaymentId, BillerId = payment.BillerId, Payment = payment },
-            partitionKey,
-            cancellationToken: cancellationToken);
-
-        if (idempotencyKey is not null)
+        catch (CosmosException exception) when (exception.StatusCode == HttpStatusCode.Conflict)
         {
+            // Idempotent insert lost the race (or is a client retry): return the existing record.
+            var existing = await FindAsync(pending.BillerId, pending.PaymentId, cancellationToken)
+                .ConfigureAwait(false);
+            if (existing is null)
+            {
+                throw;
+            }
+
+            return new PaymentBeginResult(Created: false, existing);
+        }
+    }
+
+    public async Task<PaymentRecord> SaveAsync(PaymentRecord record, CancellationToken cancellationToken = default)
+    {
+        var desired = record;
+        for (var attempt = 0; attempt < MaxClaimRetries; attempt++)
+        {
+            var current = desired.ETag is null
+                ? await ReadDocumentAsync(desired.BillerId, desired.PaymentId, cancellationToken)
+                    .ConfigureAwait(false)
+                : null;
+            var etag = desired.ETag ?? current?.ETag;
+            if (etag is null)
+            {
+                throw new InvalidOperationException(
+                    $"payment {desired.PaymentId} must exist before its lifecycle can be updated");
+            }
+
             try
             {
-                await container.CreateItemAsync(
-                    new IdempotencyDocument
-                    {
-                        Id = MarkerId(idempotencyKey),
-                        BillerId = payment.BillerId,
-                        IdempotencyKey = idempotencyKey,
-                        PaymentId = payment.PaymentId,
-                    },
-                    partitionKey,
-                    cancellationToken: cancellationToken);
+                var response = await container.ReplaceItemAsync(
+                    PaymentDocument.From(desired),
+                    desired.PaymentId,
+                    new PartitionKey(desired.BillerId),
+                    new ItemRequestOptions { IfMatchEtag = etag },
+                    cancellationToken);
+                return response.Resource.Payment with { ETag = response.ETag };
             }
-            catch (CosmosException exception) when (exception.StatusCode == HttpStatusCode.Conflict)
+            catch (CosmosException exception) when (exception.StatusCode == HttpStatusCode.PreconditionFailed)
             {
-                // Lost the race to reserve the key; the winner's payment (written before its marker)
-                // is authoritative. Our own pending row is left as a recoverable, auditable orphan.
-                var replay = await FindByIdempotencyKeyAsync(payment.BillerId, idempotencyKey, cancellationToken);
-                if (replay is not null)
+                var latest = await FindAsync(desired.BillerId, desired.PaymentId, cancellationToken)
+                    .ConfigureAwait(false);
+                if (latest is null)
                 {
-                    return new PaymentCreation(replay, IsReplay: true);
+                    throw;
                 }
+
+                if (!ShouldAdvance(latest.Lifecycle, desired.Lifecycle))
+                {
+                    return latest;
+                }
+
+                desired = desired with { ETag = latest.ETag };
             }
         }
 
-        return new PaymentCreation(payment, IsReplay: false);
+        throw new InvalidOperationException(
+            $"payment {record.PaymentId} could not be updated after repeated concurrent modification");
     }
 
-    public async Task UpdateAsync(PaymentResponse payment, CancellationToken cancellationToken = default)
-    {
-        await container.UpsertItemAsync(
-            new PaymentDocument { Id = payment.PaymentId, BillerId = payment.BillerId, Payment = payment },
-            new PartitionKey(payment.BillerId),
-            cancellationToken: cancellationToken);
-    }
-
-    public async Task<PaymentResponse?> FindAsync(
+    public async Task<PaymentRecord?> FindAsync(
         string billerId, string paymentId, CancellationToken cancellationToken = default)
     {
         try
         {
             var response = await container.ReadItemAsync<PaymentDocument>(
                 paymentId, new PartitionKey(billerId), cancellationToken: cancellationToken);
-            return response.Resource.Payment;
+            return response.Resource.Payment with { ETag = response.ETag };
         }
         catch (CosmosException exception) when (exception.StatusCode == HttpStatusCode.NotFound)
         {
@@ -95,22 +110,22 @@ public sealed class CosmosPaymentStore : IPaymentStore
         }
     }
 
-    public async Task<IReadOnlyList<PaymentResponse>> ListAsync(
+    public async Task<IReadOnlyList<PaymentRecord>> ListAsync(
         string billerId,
         string? payerAccountId,
         string? invoiceId,
         CancellationToken cancellationToken = default)
     {
-        var clauses = new List<string> { "IS_DEFINED(c.payment)" };
+        var clauses = new List<string> { "c.payment.lifecycle != @pending" };
         if (!string.IsNullOrWhiteSpace(payerAccountId)) clauses.Add("c.payment.payer_account_id = @payerAccountId");
         if (!string.IsNullOrWhiteSpace(invoiceId)) clauses.Add("c.payment.invoice_id = @invoiceId");
         var sql = $"SELECT VALUE c.payment FROM c WHERE {string.Join(" AND ", clauses)} ORDER BY c.payment.created_at DESC";
-        var query = new QueryDefinition(sql);
+        var query = new QueryDefinition(sql).WithParameter("@pending", "pending");
         if (!string.IsNullOrWhiteSpace(payerAccountId)) query.WithParameter("@payerAccountId", payerAccountId);
         if (!string.IsNullOrWhiteSpace(invoiceId)) query.WithParameter("@invoiceId", invoiceId);
-        using var iterator = container.GetItemQueryIterator<PaymentResponse>(
+        using var iterator = container.GetItemQueryIterator<PaymentRecord>(
             query, requestOptions: new QueryRequestOptions { PartitionKey = new PartitionKey(billerId) });
-        var results = new List<PaymentResponse>();
+        var results = new List<PaymentRecord>();
         while (iterator.HasMoreResults)
         {
             results.AddRange(await iterator.ReadNextAsync(cancellationToken));
@@ -119,24 +134,63 @@ public sealed class CosmosPaymentStore : IPaymentStore
         return results;
     }
 
-    public async Task<IReadOnlyList<PaymentResponse>> ListDueScheduledAsync(
-        DateOnly asOf, CancellationToken cancellationToken = default)
+    public async Task<PaymentRecord?> ClaimDueAsync(
+        DateOnly asOf,
+        DateTimeOffset now,
+        DateTimeOffset staleBefore,
+        DateTimeOffset leaseUntil,
+        CancellationToken cancellationToken = default)
     {
-        // Cross-partition: the executor discovers due payments across billers, then does its
-        // follow-up (invoice transition, status mark) partition-scoped by each payment's biller_id.
-        var query = new QueryDefinition(
-                "SELECT VALUE c.payment FROM c WHERE IS_DEFINED(c.payment) "
-                + "AND c.payment.status = 'scheduled' AND c.payment.scheduled_for <= @asOf "
-                + "ORDER BY c.payment.scheduled_for")
-            .WithParameter("@asOf", asOf.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture));
-        using var iterator = container.GetItemQueryIterator<PaymentResponse>(query);
-        var results = new List<PaymentResponse>();
-        while (iterator.HasMoreResults)
+        for (var attempt = 0; attempt < MaxClaimRetries; attempt++)
         {
-            results.AddRange(await iterator.ReadNextAsync(cancellationToken));
+            var query = new QueryDefinition(
+                "SELECT TOP 1 * FROM c WHERE "
+                + "(NOT IS_DEFINED(c.payment.lease_until) OR c.payment.lease_until = null OR c.payment.lease_until <= @now) AND ("
+                + "(c.payment.lifecycle = @scheduled AND IS_DEFINED(c.payment.scheduled_for) AND c.payment.scheduled_for <= @asOf) "
+                + "OR (c.payment.lifecycle = @pending AND c.payment.updated_at <= @staleBefore)) "
+                + "ORDER BY c.payment.updated_at")
+                .WithParameter("@now", now)
+                .WithParameter("@asOf", asOf.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture))
+                .WithParameter("@staleBefore", staleBefore)
+                .WithParameter("@scheduled", "scheduled")
+                .WithParameter("@pending", "pending");
+
+            using var iterator = container.GetItemQueryIterator<PaymentDocument>(
+                query, requestOptions: new QueryRequestOptions { MaxItemCount = 1 });
+            if (!iterator.HasMoreResults)
+            {
+                return null;
+            }
+
+            var page = await iterator.ReadNextAsync(cancellationToken);
+            var candidate = page.FirstOrDefault();
+            if (candidate is null)
+            {
+                return null;
+            }
+
+            var claimed = candidate with
+            {
+                Payment = candidate.Payment with { LeaseUntil = leaseUntil, UpdatedAt = now },
+            };
+
+            try
+            {
+                var response = await container.ReplaceItemAsync(
+                    claimed,
+                    claimed.Id,
+                    new PartitionKey(claimed.BillerId),
+                    new ItemRequestOptions { IfMatchEtag = candidate.ETag },
+                    cancellationToken);
+                return response.Resource.Payment with { ETag = response.ETag };
+            }
+            catch (CosmosException exception) when (exception.StatusCode == HttpStatusCode.PreconditionFailed)
+            {
+                // Another processor claimed it first; re-query for the next candidate.
+            }
         }
 
-        return results;
+        return null;
     }
 
     public async Task PurgeByBillerAsync(string billerId, CancellationToken cancellationToken = default)
@@ -157,27 +211,30 @@ public sealed class CosmosPaymentStore : IPaymentStore
         }
     }
 
-    public async Task<PaymentResponse?> FindByIdempotencyKeyAsync(
-        string billerId, string idempotencyKey, CancellationToken cancellationToken = default)
+    private sealed record IdOnly([property: JsonPropertyName("id")] string Id);
+
+    private static bool ShouldAdvance(PaymentLifecycle current, PaymentLifecycle target) =>
+        current == PaymentLifecycle.Pending && target != PaymentLifecycle.Pending
+        || current == PaymentLifecycle.Scheduled && target == PaymentLifecycle.Succeeded;
+
+    private async Task<PaymentDocument?> ReadDocumentAsync(
+        string billerId,
+        string paymentId,
+        CancellationToken cancellationToken)
     {
         try
         {
-            var marker = await container.ReadItemAsync<IdempotencyDocument>(
-                MarkerId(idempotencyKey), new PartitionKey(billerId), cancellationToken: cancellationToken);
-            return await FindAsync(billerId, marker.Resource.PaymentId, cancellationToken);
+            var response = await container.ReadItemAsync<PaymentDocument>(
+                paymentId,
+                new PartitionKey(billerId),
+                cancellationToken: cancellationToken);
+            return response.Resource with { ETag = response.ETag };
         }
         catch (CosmosException exception) when (exception.StatusCode == HttpStatusCode.NotFound)
         {
             return null;
         }
     }
-
-    // Cosmos ids may not contain '/', '\\', '?' or '#', and the raw key is caller-supplied, so
-    // derive a stable id-safe marker id from a hash of the key.
-    private static string MarkerId(string idempotencyKey)
-        => "idem:" + Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(idempotencyKey)));
-
-    private sealed record IdOnly([property: JsonPropertyName("id")] string Id);
 
     private sealed record PaymentDocument
     {
@@ -188,21 +245,16 @@ public sealed class CosmosPaymentStore : IPaymentStore
         public required string BillerId { get; init; }
 
         [JsonPropertyName("payment")]
-        public required PaymentResponse Payment { get; init; }
-    }
+        public required PaymentRecord Payment { get; init; }
 
-    private sealed record IdempotencyDocument
-    {
-        [JsonPropertyName("id")]
-        public required string Id { get; init; }
+        [JsonPropertyName("_etag")]
+        public string? ETag { get; init; }
 
-        [JsonPropertyName("biller_id")]
-        public required string BillerId { get; init; }
-
-        [JsonPropertyName("idempotency_key")]
-        public required string IdempotencyKey { get; init; }
-
-        [JsonPropertyName("payment_id")]
-        public required string PaymentId { get; init; }
+        public static PaymentDocument From(PaymentRecord record) => new()
+        {
+            Id = record.PaymentId,
+            BillerId = record.BillerId,
+            Payment = record,
+        };
     }
 }

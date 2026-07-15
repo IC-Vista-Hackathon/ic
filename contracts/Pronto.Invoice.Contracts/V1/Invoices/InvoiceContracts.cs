@@ -68,6 +68,7 @@ public sealed record InvoiceListResponse(
 /// asserts <c>due→paid</c>, <c>due→scheduled</c>, or <c>scheduled→paid</c>).
 /// <see cref="PaymentId"/> makes the transition idempotent per payment.
 /// </summary>
+[JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Disallow)]
 public sealed record UpdateInvoiceStatusRequest(
     InvoiceStatus Status,
     string PaymentId);

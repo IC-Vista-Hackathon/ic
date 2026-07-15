@@ -1,7 +1,9 @@
+using System.Security.Claims;
 using Pronto.Invoice.Api.Common;
 using Pronto.Invoice.Api.Controllers;
 using Pronto.Invoice.Api.Repositories;
 using Pronto.Invoice.Contracts.V1.Invoices;
+using Pronto.ServiceDefaults.Security;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
 using Xunit;
@@ -15,7 +17,17 @@ public sealed class InvoicesControllerTests
     private static InvoicesController NewController(out InMemoryInvoiceRepository repo)
     {
         repo = new InMemoryInvoiceRepository();
-        return new InvoicesController(repo, new FixedTimeProvider(FixedNow));
+        // The HTTP pipeline authenticates before the action runs; these unit tests call the
+        // action directly, so supply a full-access (cross-biller) principal to stand in for it.
+        var principal = new ClaimsPrincipal(new ClaimsIdentity(
+            [new Claim("roles", ServiceClaims.CrossBillerRole)], "Test"));
+        return new InvoicesController(repo, new FixedTimeProvider(FixedNow))
+        {
+            ControllerContext = new ControllerContext
+            {
+                HttpContext = new DefaultHttpContext { User = principal },
+            },
+        };
     }
 
     [Fact]

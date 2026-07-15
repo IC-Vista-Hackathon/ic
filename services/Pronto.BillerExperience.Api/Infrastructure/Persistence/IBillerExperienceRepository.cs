@@ -13,7 +13,10 @@ public interface IBillerExperienceRepository
     /// public reads are keyed by slug, so creation must not reuse one.
     /// </summary>
     ValueTask<bool> SlugExistsAsync(string slug, CancellationToken cancellationToken);
-    ValueTask<BillerRecord> SaveBillerAsync(BillerRecord biller, CancellationToken cancellationToken);
+    ValueTask<BillerRecord> SaveBillerAsync(
+        BillerRecord biller,
+        string? expectedETag,
+        CancellationToken cancellationToken);
     ValueTask<ExperienceRecord?> GetLatestExperienceAsync(string billerId, CancellationToken cancellationToken);
     ValueTask<ExperienceRecord> SaveExperienceAsync(ExperienceRecord experience, string? expectedETag, CancellationToken cancellationToken);
     ValueTask<OnboardingRunRecord?> GetRunAsync(string billerId, string runId, CancellationToken cancellationToken);

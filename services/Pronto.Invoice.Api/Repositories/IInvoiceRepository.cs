@@ -34,7 +34,11 @@ public interface IInvoiceRepository
     /// <summary>
     /// Atomic conditional transition (<c>due→paid</c>, <c>due→scheduled</c>, <c>scheduled→paid</c>),
     /// idempotent when the invoice already carries <paramref name="paymentId"/> in the target
-    /// status. Outcomes: the updated document, or a conflict reason.
+    /// status. A <c>scheduled</c> invoice is bound to the payment that scheduled it: only that
+    /// same <paramref name="paymentId"/> may settle it (<c>scheduled→paid</c>) — any other payment
+    /// yields <see cref="InvoiceTransitionOutcome.ScheduleLocked"/> so a second payment cannot
+    /// take over or double-settle an active scheduled invoice. Outcomes: the updated document, or
+    /// a conflict reason.
     /// </summary>
     Task<InvoiceTransitionResult> TryUpdateStatusAsync(
         string billerId,
@@ -61,4 +65,11 @@ public enum InvoiceTransitionOutcome
     NotFound,
     AlreadyPaid,
     InvalidTransition,
+
+    /// <summary>
+    /// The invoice is <c>scheduled</c> against a different payment than the one asserting the
+    /// transition. The scheduled state is bound to its originating payment, so no other payment
+    /// may settle or re-schedule it.
+    /// </summary>
+    ScheduleLocked,
 }

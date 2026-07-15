@@ -24,6 +24,9 @@ spec:
           ports:
             - name: http
               containerPort: 8080
+          env:
+            - name: Services__InvoiceApi
+              value: http://ic-invoice-api:8080
           readinessProbe:
             httpGet:
               path: /health/ready

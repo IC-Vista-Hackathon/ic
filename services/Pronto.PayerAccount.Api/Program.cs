@@ -1,14 +1,14 @@
 using Pronto.PayerAccount.Api;
-using Pronto.PayerAccount.Api.Storage;
 using Pronto.Persistence.Cosmos;
 using Pronto.ServiceDefaults;
+using Pronto.ServiceDefaults.Health;
 using Microsoft.Azure.Cosmos;
+using Microsoft.Extensions.DependencyInjection;
 
 var builder = WebApplication.CreateBuilder(args);
 
 builder.AddServiceDefaults("Pronto.PayerAccount.Api");
-builder.Services.Configure<MaintenanceOptions>(
-    builder.Configuration.GetSection(MaintenanceOptions.SectionName));
+builder.Services.AddPayerAccountServices(builder.Configuration, builder.Environment);
 
 var persistence = builder.Configuration
     .GetSection(CosmosPersistenceOptions.SectionName)
@@ -16,13 +16,32 @@ var persistence = builder.Configuration
 
 if (persistence.UseCosmos)
 {
-    builder.Services.AddSingleton(CosmosClientFactory.Create(persistence, "Pronto.PayerAccount.Api"));
-    builder.Services.AddSingleton<IPayerStore>(services =>
-        new CosmosPayerStore(services.GetRequiredService<CosmosClient>(), persistence.DatabaseName));
+    builder.Services.AddHealthChecks().AddDependencyReadinessCheck(
+        "cosmos",
+        async (services, cancellationToken) =>
+        {
+            var database = services.GetRequiredService<CosmosClient>()
+                .GetDatabase(persistence.DatabaseName);
+            await database.ReadAsync(cancellationToken: cancellationToken);
+            await database.GetContainer("payer_accounts")
+                .ReadContainerAsync(cancellationToken: cancellationToken);
+        });
 }
-else
+
+if (builder.Environment.IsProduction())
 {
-    builder.Services.AddSingleton<IPayerStore, InMemoryPayerStore>();
+    const string readinessClient = "readiness-invoice-api";
+    builder.Services.AddHttpClient(readinessClient, client =>
+        client.BaseAddress = new Uri(builder.Configuration["Services:InvoiceApi"]!));
+    builder.Services.AddHealthChecks().AddDependencyReadinessCheck(
+        "invoice-api",
+        async (services, cancellationToken) =>
+        {
+            var client = services.GetRequiredService<IHttpClientFactory>()
+                .CreateClient(readinessClient);
+            using var response = await client.GetAsync("health/ready", cancellationToken);
+            response.EnsureSuccessStatusCode();
+        });
 }
 
 var app = builder.Build();

@@ -32,13 +32,14 @@ public sealed class InMemoryBillerExperienceRepository : IBillerExperienceReposi
             throw new SlugConflictException(biller.Slug);
         }
 
-        if (!_billers.TryAdd(biller.Id, biller))
+        var saved = biller with { ETag = Guid.NewGuid().ToString("N") };
+        if (!_billers.TryAdd(biller.Id, saved))
         {
             _slugReservations.TryRemove(biller.Slug, out _);
             throw new ConcurrencyException($"Biller '{biller.Id}' already exists.");
         }
 
-        return ValueTask.FromResult(biller);
+        return ValueTask.FromResult(saved);
     }
 
     public ValueTask<BillerRecord?> GetBillerAsync(string billerId, CancellationToken cancellationToken)
@@ -48,11 +49,25 @@ public sealed class InMemoryBillerExperienceRepository : IBillerExperienceReposi
         return ValueTask.FromResult(biller);
     }
 
-    public ValueTask<BillerRecord> SaveBillerAsync(BillerRecord biller, CancellationToken cancellationToken)
+    public ValueTask<BillerRecord> SaveBillerAsync(
+        BillerRecord biller,
+        string? expectedETag,
+        CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
-        _billers[biller.Id] = biller;
-        return ValueTask.FromResult(biller);
+        if (!_billers.TryGetValue(biller.Id, out var current))
+        {
+            throw new KeyNotFoundException($"Biller '{biller.Id}' was not found.");
+        }
+
+        if (expectedETag is not null && current.ETag != expectedETag)
+        {
+            throw new ConcurrencyException("The biller was modified by another request.");
+        }
+
+        var saved = biller with { ETag = Guid.NewGuid().ToString("N") };
+        _billers[biller.Id] = saved;
+        return ValueTask.FromResult(saved);
     }
 
     public ValueTask<ExperienceRecord?> GetLatestExperienceAsync(string billerId, CancellationToken cancellationToken)

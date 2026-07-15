@@ -1,37 +1,72 @@
 using Pronto.Payment.Contracts.V1.Purchases;
+using Pronto.BillerExperience.Contracts.V1.Billers;
+using Pronto.ServiceDefaults.Errors;
+using System.Net;
+using System.Net.Http.Json;
+using System.Text.Json;
 
 namespace Pronto.Payment.Api.Clients;
 
 /// <summary>
-/// Cross-service write: advance BillerAccount.status to purchased (and tier to the plan)
-/// after a Purchase is paid. Design/entities.md documents this handoff.
+/// Advances the BillerAccount owned by Biller Configuration Service after purchase. Implementors
+/// must treat <paramref name="idempotencyKey"/> idempotently because a successful downstream
+/// transition can be retried before the local purchase is marked paid.
 /// </summary>
 public interface IBillerAccountClient
 {
-    Task AdvanceToPurchasedAsync(string billerId, PurchasePlan plan, CancellationToken cancellationToken);
+    Task AdvanceToPurchasedAsync(
+        string billerId,
+        PurchasePlan plan,
+        string idempotencyKey,
+        CancellationToken cancellationToken);
 }
 
-/// <summary>
-/// No-op stub: BillerExperience.Api has no account-status endpoint yet. Logs the intent so
-/// the demo trace shows where the real call goes.
-/// </summary>
-public sealed partial class NoOpBillerAccountClient : IBillerAccountClient
+public sealed class HttpBillerAccountClient(HttpClient http) : IBillerAccountClient
 {
-    private readonly ILogger<NoOpBillerAccountClient> logger;
-
-    public NoOpBillerAccountClient(ILogger<NoOpBillerAccountClient> logger)
+    private static readonly JsonSerializerOptions Wire = new(JsonSerializerDefaults.Web)
     {
-        this.logger = logger;
-    }
+        PropertyNamingPolicy = JsonNamingPolicy.SnakeCaseLower,
+        DictionaryKeyPolicy = JsonNamingPolicy.SnakeCaseLower,
+    };
 
-    public Task AdvanceToPurchasedAsync(string billerId, PurchasePlan plan, CancellationToken cancellationToken)
+    public async Task AdvanceToPurchasedAsync(
+        string billerId,
+        PurchasePlan plan,
+        string idempotencyKey,
+        CancellationToken cancellationToken)
     {
-        LogWouldAdvance(logger, billerId, plan);
-        return Task.CompletedTask;
-    }
+        var request = new AdvanceBillerPurchaseRequest(
+            idempotencyKey,
+            plan == PurchasePlan.Isolated ? BillerTier.Isolated : BillerTier.Shared);
+        var response = await http.PostAsJsonAsync(
+            new Uri($"billers/{billerId}/purchase", UriKind.Relative),
+            request,
+            Wire,
+            cancellationToken);
+        if (response.IsSuccessStatusCode)
+        {
+            return;
+        }
 
-    [LoggerMessage(
-        Level = LogLevel.Information,
-        Message = "Would advance BillerAccount {BillerId} to purchased (tier {Plan}) — endpoint pending on BillerExperience.Api")]
-    private static partial void LogWouldAdvance(ILogger logger, string billerId, PurchasePlan plan);
+        if (response.StatusCode == HttpStatusCode.NotFound)
+        {
+            throw ServiceException.NotFound("biller_not_found", $"biller {billerId} not found");
+        }
+
+        throw new ServiceException(
+            (int)response.StatusCode,
+            "biller_purchase_failed",
+            "Biller account could not be advanced to purchased.");
+    }
+}
+
+public sealed class UnavailableBillerAccountClient : IBillerAccountClient
+{
+    public Task AdvanceToPurchasedAsync(
+        string billerId,
+        PurchasePlan plan,
+        string idempotencyKey,
+        CancellationToken cancellationToken) =>
+        Task.FromException(new InvalidOperationException(
+            "BillerAccount completion client is not configured; purchase remains queued for retry."));
 }

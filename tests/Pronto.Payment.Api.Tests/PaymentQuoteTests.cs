@@ -12,7 +12,7 @@ using Xunit;
 namespace Pronto.Payment.Api.Tests;
 
 /// <summary>The quote a payer approves must equal what the payment then charges.</summary>
-public sealed class PaymentQuoteTests : IClassFixture<WebApplicationFactory<Program>>
+public sealed class PaymentQuoteTests : IClassFixture<TestingAppFactory>
 {
     private static readonly JsonSerializerOptions Wire = new(JsonSerializerDefaults.Web)
     {
@@ -23,7 +23,7 @@ public sealed class PaymentQuoteTests : IClassFixture<WebApplicationFactory<Prog
     private readonly FakeInvoiceClient fakeInvoices = new();
     private readonly HttpClient client;
 
-    public PaymentQuoteTests(WebApplicationFactory<Program> factory)
+    public PaymentQuoteTests(TestingAppFactory factory)
     {
         client = factory.WithWebHostBuilder(builder =>
             builder.ConfigureServices(services =>
@@ -40,7 +40,9 @@ public sealed class PaymentQuoteTests : IClassFixture<WebApplicationFactory<Prog
         var quote = await client.GetFromJsonAsync<PaymentQuoteResponse>(
             $"payments/quote?biller_id={billerId}&invoice_id={invoice.Id}&method=card", Wire);
         var payment = await (await client.PostAsJsonAsync(
-            "payments", new CreatePaymentRequest(billerId, invoice.Id, "card"), Wire))
+            "payments",
+            new CreatePaymentRequest(billerId, invoice.Id, "card", IdempotencyKey: "quote-payment"),
+            Wire))
             .Content.ReadFromJsonAsync<PaymentResponse>(Wire);
 
         Assert.NotNull(quote);
@@ -69,7 +71,9 @@ public sealed class PaymentQuoteTests : IClassFixture<WebApplicationFactory<Prog
         var billerId = Guid.NewGuid().ToString();
         var invoice = fakeInvoices.AddDueInvoice(billerId, amountCents: 5000);
         await client.PostAsJsonAsync(
-            "payments", new CreatePaymentRequest(billerId, invoice.Id, "card"), Wire);
+            "payments",
+            new CreatePaymentRequest(billerId, invoice.Id, "card", IdempotencyKey: "paid-invoice"),
+            Wire);
 
         var response = await client.GetAsync(
             new Uri($"payments/quote?biller_id={billerId}&invoice_id={invoice.Id}&method=card", UriKind.Relative));
