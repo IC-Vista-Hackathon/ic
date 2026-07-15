@@ -1,6 +1,8 @@
 import { randomId } from './id';
 export interface FlowTrace { correlationId: string; traceId: string }
 export function createFlowTrace(): FlowTrace { return { correlationId: randomId(), traceId: randomId().replaceAll('-', '') }; }
+/** One flow per page load, shared by API calls and browser telemetry so both sides correlate on the same trace id. */
+export const sharedFlow = createFlowTrace();
 export function traceHeaders(flow: FlowTrace, billerId: string) { const spanId = randomId().replaceAll('-', '').slice(0, 16); return { 'x-correlation-id': flow.correlationId, 'x-ic-biller-id': billerId, traceparent: `00-${flow.traceId}-${spanId}-01` }; }
 export function logEvent(event: string, fields: Record<string, unknown> = {}) { console.info(JSON.stringify({ level: 'information', event, timestamp: new Date().toISOString(), ...fields })); }
 export function logError(event: string, error: unknown, fields: Record<string, unknown> = {}) { const details = error && typeof error === 'object' ? error as Record<string, unknown> : {}; console.error(JSON.stringify({ level: 'error', event, timestamp: new Date().toISOString(), message: error instanceof Error ? error.message : String(error), error_type: error instanceof Error ? error.name : typeof error, error_code: details.code, http_status: details.status, correlation_id: details.correlationId ?? fields.correlation_id, retryable: details.retryable, ...fields })); }

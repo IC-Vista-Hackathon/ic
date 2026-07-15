@@ -74,3 +74,61 @@ jobs:
 
       - name: Functional smoke tests
         run: ./scripts/smoke-test.sh ic-nonprod
+
+      - name: Set up Node for browser smoke test
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: tests/browser-smoke/package-lock.json
+
+      - name: Install browser smoke test dependencies
+        working-directory: tests/browser-smoke
+        run: |
+          npm ci
+          npx playwright install --with-deps chromium
+
+      # Loads the deployed PWA through the nonprod gateway (port-forwarded, same as the
+      # functional smoke tests) and asserts the browser telemetry client boots and sends a
+      # beacon. Prints the session's flow id for the arrival check below.
+      - name: Browser telemetry smoke test
+        id: browser_smoke
+        run: |
+          GATEWAY_SVC=$(kubectl get svc -n ic-nonprod \
+            -l gateway.networking.k8s.io/gateway-name=ic-nonprod-gateway \
+            -o jsonpath='{.items[0].metadata.name}' 2>/dev/null || true)
+          GATEWAY_SVC="${GATEWAY_SVC:-ic-nonprod-gateway}"
+          echo "port-forwarding svc/${GATEWAY_SVC}"
+          kubectl port-forward -n ic-nonprod "svc/${GATEWAY_SVC}" 18081:80 >/dev/null 2>&1 &
+          PF_PID=$!
+          trap 'kill $PF_PID 2>/dev/null || true' EXIT
+          for _ in $(seq 1 30); do
+            curl -fsS -o /dev/null "http://127.0.0.1:18081/pay/" && break
+            sleep 1
+          done
+          RESULT=$(TARGET_ORIGIN=http://127.0.0.1:18081 node tests/browser-smoke/telemetry-smoke.mjs)
+          echo "result: ${RESULT}"
+          echo "flow_id=$(jq -r .flowId <<<"$RESULT")" >> "$GITHUB_OUTPUT"
+
+      # Ingestion is asynchronous (observed ~7 minutes on this resource), so poll Application
+      # Insights until the session_started event with this exact flow id shows up server-side.
+      - name: Verify telemetry arrived in Application Insights
+        env:
+          FLOW_ID: ${{ steps.browser_smoke.outputs.flow_id }}
+        run: |
+          az extension add --name application-insights --only-show-errors
+          APP_ID=$(az monitor app-insights component show -g "$AKS_RG" --query "[0].appId" -o tsv)
+          echo "querying Application Insights app ${APP_ID} for flow ${FLOW_ID}"
+          for attempt in $(seq 1 24); do
+            COUNT=$(az monitor app-insights query --app "$APP_ID" \
+              --analytics-query "customEvents | where timestamp > ago(30m) | where name == 'pwa.session_started' | where tostring(customDimensions.flow_id) == '${FLOW_ID}' | count" \
+              --query 'tables[0].rows[0][0]' -o tsv)
+            echo "attempt ${attempt}: matching events = ${COUNT:-0}"
+            if [ "${COUNT:-0}" -ge 1 ]; then
+              echo "browser telemetry arrived in Application Insights"
+              exit 0
+            fi
+            sleep 30
+          done
+          echo "ERROR: pwa.session_started with flow_id ${FLOW_ID} never arrived in Application Insights" >&2
+          exit 1

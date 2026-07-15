@@ -1,0 +1,10 @@
+{
+  "name": "@pronto/browser-smoke",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "description": "Headless-browser smoke test: loads the deployed payer PWA and confirms browser telemetry is emitted end-to-end.",
+  "devDependencies": {
+    "playwright": "^1.49.0"
+  }
+}
