@@ -1,0 +1,69 @@
+name: Deploy infra
+
+# Manually triggered subscription-scope Bicep deploy of infra/bicep/main.bicep.
+# Runs as the AZURE_CREDENTIALS service principal because the template creates
+# role assignments (ACR pull, Cosmos data-plane RBAC, workload-identity grants)
+# that human Contributor accounts are not authorized to write.
+#
+# Always runs what-if; only applies when the `mode` input is set to `apply`.
+
+on:
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: "what-if (dry run) or apply"
+        type: choice
+        options: [what-if, apply]
+        default: what-if
+
+permissions:
+  contents: read
+
+concurrency:
+  group: deploy-infra
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    name: Bicep ${{ inputs.mode }} (ic-hack)
+    runs-on: ubuntu-latest
+    environment: production
+    env:
+      SUBSCRIPTION_ID: ca64adec-b195-49fd-a782-15553708c07c
+      # Keeps the observability action group's email receiver from being wiped:
+      # the action group is template-managed, so every deploy must re-assert it.
+      ALERT_EMAIL: ${{ vars.OBSERVABILITY_ALERT_EMAIL || 'ddominguez@invoicecloud.com' }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Azure login
+        uses: azure/login@v2
+        with:
+          creds: ${{ secrets.AZURE_CREDENTIALS }}
+
+      - name: Validate template
+        working-directory: infra/bicep
+        run: |
+          az account set --subscription "$SUBSCRIPTION_ID"
+          az bicep build --file main.bicep --stdout > /dev/null
+
+      - name: What-if
+        working-directory: infra/bicep
+        run: |
+          az deployment sub what-if --name ic-hack --location eastus2 \
+            --template-file main.bicep \
+            --parameters observabilityAlertEmailAddress="$ALERT_EMAIL"
+
+      - name: Apply
+        if: inputs.mode == 'apply'
+        working-directory: infra/bicep
+        run: |
+          az deployment sub create --name ic-hack --location eastus2 \
+            --template-file main.bicep \
+            --parameters observabilityAlertEmailAddress="$ALERT_EMAIL"
+
+      - name: Show outputs
+        if: inputs.mode == 'apply'
+        run: |
+          az deployment sub show --name ic-hack \
+            --query 'properties.outputs.{nonprodWorkloadIdentityClientId: nonprodWorkloadIdentityClientId.value, workloadIdentityClientId: workloadIdentityClientId.value}' -o table
