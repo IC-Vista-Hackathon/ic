@@ -38,6 +38,10 @@ public sealed class ServiceToolRegistry
         public const string VerifyPayerAccount = "verify_payer_account";
         public const string GetPayerProfile = "get_payer_profile";
         public const string GetPaymentHistory = "get_payment_history";
+        public const string UpdatePayerPreferences = "update_payer_preferences";
+        public const string CreatePaymentIntent = "create_payment_intent";
+        public const string SubmitPayment = "submit_payment";
+        public const string SeedInvoices = "seed_invoices";
     }
 
     private static readonly IReadOnlyList<ServiceToolDescriptor> Descriptors =
@@ -63,6 +67,18 @@ public sealed class ServiceToolRegistry
         new(ToolNames.GetPaymentHistory, "Get payment history", ReadOnly: true, Idempotent: true,
             ToolScope.Payer, WriteCapabilityRequired: false,
             "Lists the verified payer's payment history. Requires a payer-bound capability."),
+        new(ToolNames.UpdatePayerPreferences, "Update payer preferences", ReadOnly: false, Idempotent: true,
+            ToolScope.Payer, WriteCapabilityRequired: true,
+            "Updates the verified payer's notification/autopay preferences. Requires a write-capable, payer-bound capability."),
+        new(ToolNames.CreatePaymentIntent, "Create payment intent", ReadOnly: true, Idempotent: true,
+            ToolScope.Payer, WriteCapabilityRequired: true,
+            "Quotes a payment and returns a confirmation-required intent (with an idempotency key) for the payer to approve. Requires a write-capable, payer-bound capability. No money moves."),
+        new(ToolNames.SubmitPayment, "Submit payment", ReadOnly: false, Idempotent: true,
+            ToolScope.Payer, WriteCapabilityRequired: true,
+            "Submits a confirmed payment intent (money moves) via the idempotent Payment Service. Execution-Agent-only and requires explicit payer confirmation plus a write-capable, payer-bound capability."),
+        new(ToolNames.SeedInvoices, "Seed invoices", ReadOnly: false, Idempotent: false,
+            ToolScope.Biller, WriteCapabilityRequired: true,
+            "Seeds fake demo invoices for the biller. Nonprod/demo-gated; requires a write-capable biller capability."),
     ];
 
     public IReadOnlyList<ServiceToolDescriptor> All => Descriptors;

@@ -1,7 +1,9 @@
 using System.ComponentModel;
 using System.Diagnostics;
+using Microsoft.Extensions.Options;
 using ModelContextProtocol.Server;
 using Pronto.BillerExperience.Api.Application;
+using Pronto.BillerExperience.Api.Configuration;
 using Pronto.BillerExperience.Api.Infrastructure.Mcp.ServiceClients;
 using Pronto.BillerExperience.Contracts.V1.Experiences;
 using Pronto.Invoice.Contracts.V1.Invoices;
@@ -13,8 +15,10 @@ namespace Pronto.BillerExperience.Api.Infrastructure.Mcp;
 /// <summary>
 /// Deterministic MCP service router. Every tool validates a capability token first (identity is
 /// bound to the token, never taken from a tool argument), then calls a typed downstream client.
-/// Read-only, biller-scoped reads and the payer-verification handshake live here; controlled
-/// writes and payment execution are added by later PRs behind explicit gates.
+/// Read-only reads, the payer-verification handshake, and controlled writes all live here; each
+/// write is gated — write-capable capability, payer binding, explicit payer confirmation, and the
+/// Execution-Agent-only rule for payment submission. The MCP never mutates payment/invoice state
+/// directly; it delegates to the (idempotent) Payment Service, which owns those transitions.
 /// </summary>
 [McpServerToolType]
 public sealed partial class ServiceMcpTools(
@@ -23,8 +27,12 @@ public sealed partial class ServiceMcpTools(
     IInvoiceServiceClient invoices,
     IPaymentServiceClient payments,
     IPayerAccountServiceClient payers,
+    IOptions<BillerExperienceOptions> options,
+    IOptions<MaintenanceOptions> maintenance,
     ILogger<ServiceMcpTools> logger)
 {
+    private readonly string executionAgentId = options.Value.Mcp.ExecutionAgentId;
+
     [McpServerTool(Name = ServiceToolRegistry.ToolNames.GetBillerConfiguration, ReadOnly = true, OpenWorld = false, UseStructuredContent = true)]
     [Description("Read the current experience configuration for the capability's biller: brand, enabled payment methods, fee handling, and revision state.")]
     public async ValueTask<BillerConfigurationView> GetBillerConfigurationAsync(
@@ -132,6 +140,111 @@ public sealed partial class ServiceMcpTools(
         });
     }
 
+    [McpServerTool(Name = ServiceToolRegistry.ToolNames.UpdatePayerPreferences, ReadOnly = false, Idempotent = true, OpenWorld = false, UseStructuredContent = true)]
+    [Description("Update the verified payer's notification/autopay preferences. Requires a write-capable, payer-bound capability from verify_payer_account. Only supplied fields change; omit a field to leave it unchanged.")]
+    public async ValueTask<PayerPreferences> UpdatePayerPreferencesAsync(
+        [Description("Write-capable payer-bound capability returned by verify_payer_account.")] string capabilityToken,
+        [Description("Enable/disable autopay. Omit to leave unchanged. Enabling autopay requires a payment day set now or already on file.")] bool? autopay,
+        [Description("Enable/disable paperless billing. Omit to leave unchanged.")] bool? paperless,
+        [Description("Day of month (1-28) to run autopay. Omit to leave unchanged.")] int? paymentDay,
+        CancellationToken cancellationToken)
+    {
+        var capability = capabilities.Validate(capabilityToken, writeRequired: true, payerRequired: true);
+        return await InvokeAsync(ServiceToolRegistry.ToolNames.UpdatePayerPreferences, capability, () =>
+            payers.UpdatePreferencesAsync(
+                capability.BillerId,
+                capability.PayerId!,
+                new UpdatePayerPreferencesRequest(autopay, paperless, Channels: null, paymentDay),
+                cancellationToken).AsTask());
+    }
+
+    [McpServerTool(Name = ServiceToolRegistry.ToolNames.CreatePaymentIntent, ReadOnly = true, Idempotent = true, OpenWorld = false, UseStructuredContent = true)]
+    [Description("Quote a payment for the verified payer and return a confirmation-required intent (carrying an idempotency key) for them to approve. Requires a write-capable, payer-bound capability. No money moves; submit_payment executes the approved intent.")]
+    public async ValueTask<PaymentIntentView> CreatePaymentIntentAsync(
+        [Description("Write-capable payer-bound capability returned by verify_payer_account.")] string capabilityToken,
+        [Description("The invoice id to pay.")] string invoiceId,
+        [Description("The payment method token (must be enabled for the biller).")] string method,
+        [Description("Optional future date (yyyy-MM-dd) to schedule the payment; omit to pay now.")] DateOnly? scheduledFor,
+        CancellationToken cancellationToken)
+    {
+        var capability = capabilities.Validate(capabilityToken, writeRequired: true, payerRequired: true);
+        return await InvokeAsync(ServiceToolRegistry.ToolNames.CreatePaymentIntent, capability, async () =>
+        {
+            var requiredInvoiceId = RequireArgument(invoiceId, nameof(invoiceId));
+            var requiredMethod = RequireArgument(method, nameof(method));
+            var quote = await payments.GetQuoteAsync(capability.BillerId, requiredInvoiceId, requiredMethod, cancellationToken);
+            return new PaymentIntentView(
+                IntentId: Guid.NewGuid().ToString(),
+                InvoiceId: requiredInvoiceId,
+                Method: requiredMethod,
+                PayerAccountId: capability.PayerId,
+                AmountCents: quote.AmountCents,
+                FeeCents: quote.FeeCents,
+                TotalCents: quote.TotalCents,
+                ScheduledFor: scheduledFor,
+                Status: "requires_confirmation");
+        });
+    }
+
+    [McpServerTool(Name = ServiceToolRegistry.ToolNames.SubmitPayment, ReadOnly = false, Idempotent = true, OpenWorld = false, UseStructuredContent = true)]
+    [Description("Submit an approved payment intent, moving money via the idempotent Payment Service. Restricted to the Execution Agent and only after explicit payer confirmation. Requires a write-capable, payer-bound capability. Resubmitting the same intent id resolves to the original payment (no double charge).")]
+    public async ValueTask<PaymentResponse> SubmitPaymentAsync(
+        [Description("Write-capable payer-bound capability returned by verify_payer_account.")] string capabilityToken,
+        [Description("The intent id returned by create_payment_intent; used as the idempotency key so retries never double-charge.")] string intentId,
+        [Description("The invoice id from the approved intent.")] string invoiceId,
+        [Description("The payment method from the approved intent.")] string method,
+        [Description("Must be true: the payer has explicitly confirmed this payment. The server refuses to submit otherwise.")] bool payerConfirmed,
+        [Description("Optional schedule date from the approved intent; omit to pay now.")] DateOnly? scheduledFor,
+        CancellationToken cancellationToken)
+    {
+        var capability = capabilities.Validate(capabilityToken, writeRequired: true, payerRequired: true);
+
+        // Money movement is Execution-Agent-only (design/services.md), enforced server-side here.
+        if (!string.Equals(capability.AgentId, executionAgentId, StringComparison.Ordinal))
+        {
+            throw new UnauthorizedAccessException("Only the Execution Agent may submit a payment.");
+        }
+
+        if (!payerConfirmed)
+        {
+            throw new UnauthorizedAccessException("A payment can only be submitted after explicit payer confirmation.");
+        }
+
+        return await InvokeAsync(ServiceToolRegistry.ToolNames.SubmitPayment, capability, () =>
+            payments.CreateAsync(
+                new CreatePaymentRequest(
+                    capability.BillerId,
+                    RequireArgument(invoiceId, nameof(invoiceId)),
+                    RequireArgument(method, nameof(method)),
+                    capability.PayerId,
+                    scheduledFor),
+                RequireArgument(intentId, nameof(intentId)),
+                cancellationToken).AsTask());
+    }
+
+    [McpServerTool(Name = ServiceToolRegistry.ToolNames.SeedInvoices, ReadOnly = false, Idempotent = false, OpenWorld = false, UseStructuredContent = true)]
+    [Description("Seed fake demo invoices for the capability's biller. Nonprod/demo only: reports unavailable when seeding is disabled. Requires a write-capable biller capability.")]
+    public async ValueTask<SeedInvoicesResponse> SeedInvoicesAsync(
+        [Description("Write-capable biller capability issued by IC orchestration.")] string capabilityToken,
+        [Description("How many invoices to seed. Omit for a sensible demo default.")] int? count,
+        [Description("Account number to attach the invoices to. Omit to let the service generate one.")] string? accountNumber,
+        [Description("Optional bill type label for the seeded set.")] string? billType,
+        CancellationToken cancellationToken)
+    {
+        var capability = capabilities.Validate(capabilityToken, writeRequired: true);
+        if (!maintenance.Value.SeedingEnabled)
+        {
+            // Uniform "unavailable" — seeding is invisible in prod, same discipline as the REST gate.
+            throw new InvalidOperationException("The seed_invoices tool is not available in this environment.");
+        }
+
+        return await InvokeAsync(ServiceToolRegistry.ToolNames.SeedInvoices, capability, () =>
+            invoices.SeedAsync(
+                capability.BillerId,
+                new SeedInvoicesRequest(count, accountNumber, billType),
+                cancellationToken).AsTask());
+    }
+
     private async ValueTask<T> InvokeAsync<T>(string toolName, AgentContextCapability capability, Func<Task<T>> action)
     {
         try
@@ -185,3 +298,19 @@ public sealed record PayerVerificationResult(
 
 /// <summary>Agent-facing projection of a payer's payment history.</summary>
 public sealed record PaymentHistoryView(IReadOnlyList<PaymentResponse> Payments);
+
+/// <summary>
+/// A payment the verified payer must confirm before it executes. <see cref="IntentId"/> doubles as
+/// the idempotency key passed to the Payment Service on submit, so a retried submission of the same
+/// approved intent resolves to the original payment. Nothing is charged until submit_payment.
+/// </summary>
+public sealed record PaymentIntentView(
+    string IntentId,
+    string InvoiceId,
+    string Method,
+    string? PayerAccountId,
+    int AmountCents,
+    int FeeCents,
+    int TotalCents,
+    DateOnly? ScheduledFor,
+    string Status);
