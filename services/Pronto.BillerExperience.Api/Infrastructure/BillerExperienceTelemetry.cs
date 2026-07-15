@@ -16,6 +16,8 @@ public static class BillerExperienceTelemetry
     public static readonly Counter<long> ModelCalls = Meter.CreateCounter<long>("ic.biller.model.calls");
     public static readonly Counter<long> PersistenceOperations = Meter.CreateCounter<long>("ic.biller.persistence.operations");
     public static readonly Counter<long> DiscoveryAnswers = Meter.CreateCounter<long>("ic.biller.discovery.answers");
+    public static readonly Counter<long> PayerPlanProduced = Meter.CreateCounter<long>("ic.payer.plan.produced");
+    public static readonly Counter<long> PayerPlanRejected = Meter.CreateCounter<long>("ic.payer.plan.rejected");
     public static readonly Histogram<double> ModelDuration = Meter.CreateHistogram<double>("ic.biller.model.duration", "ms");
     public static readonly Histogram<double> PersistenceDuration = Meter.CreateHistogram<double>("ic.biller.persistence.duration", "ms");
 }

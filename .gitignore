@@ -16,3 +16,7 @@ TestResults/
 .env.*
 !.env.example
 .claude/
+
+# Local Claude Code tooling (not part of the repo)
+.agents/
+skills-lock.json

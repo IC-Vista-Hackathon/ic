@@ -184,6 +184,11 @@ public sealed partial class BillingDiscoveryEngine(ILogger<BillingDiscoveryEngin
         {
             var start = positioned[index].Index;
             var end = index + 1 < positioned.Length ? positioned[index + 1].Index : text.Length;
+            if (index + 1 < positioned.Length)
+            {
+                var separator = text[start..end].LastIndexOfAny([',', ';', '.', '\n']);
+                if (separator >= 0) end = start + separator;
+            }
             if (TryStateRule(text[start..end], out var rule)) assignments[positioned[index].Category.Id] = rule;
         }
         if (assignments.Count == 0 && TryStateRule(text, out var single)) assignments[current.CategoryId!] = single;
