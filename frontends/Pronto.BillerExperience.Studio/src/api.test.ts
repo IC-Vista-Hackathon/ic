@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { api, CHAT_REQUEST_TIMEOUT_MS } from './api';
+import { DEFAULT_REQUEST_TIMEOUT_MS } from './http';
 
 afterEach(() => {
   vi.unstubAllGlobals();
@@ -21,7 +22,10 @@ describe('Studio API request budgets', () => {
 
     await api.chat('biller-1', 'Research this biller');
 
-    expect(CHAT_REQUEST_TIMEOUT_MS).toBe(120_000);
+    // Assert the relationship, not the literal: the chat budget must exceed the generic
+    // request timeout so multi-agent research is never cut short by the default. The exact
+    // value is a tuning knob and has changed twice already (120s -> 300s).
+    expect(CHAT_REQUEST_TIMEOUT_MS).toBeGreaterThan(DEFAULT_REQUEST_TIMEOUT_MS);
     expect(delays).toEqual([CHAT_REQUEST_TIMEOUT_MS]);
   });
 });
