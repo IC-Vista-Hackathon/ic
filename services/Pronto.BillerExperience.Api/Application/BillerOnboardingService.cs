@@ -201,10 +201,18 @@ public sealed partial class BillerOnboardingService(
         }
 
         var findings = ValidateDefinition(billerId, experience.Definition);
-        if (findings.Any(finding => finding.Severity == ComplianceFindingSeverity.Blocking))
+        var blockingFindings = findings
+            .Where(finding => finding.Severity == ComplianceFindingSeverity.Blocking)
+            .ToArray();
+        if (blockingFindings.Length > 0)
         {
-            LogValidationError(logger, billerId, "compliance", "Blocking validation findings must be resolved.");
-            throw new ArgumentException("Blocking validation findings must be resolved before approval.");
+            foreach (var finding in blockingFindings)
+            {
+                LogBlockingFinding(logger, billerId, experience.Id, finding.Code, finding.Message);
+            }
+            throw new ExperienceValidationException(
+                "This experience is not ready to publish. Resolve the listed validation items and try again.",
+                blockingFindings);
         }
 
         var now = DateTimeOffset.UtcNow;
@@ -542,4 +550,12 @@ public sealed partial class BillerOnboardingService(
 
     [LoggerMessage(1902, LogLevel.Error, "Invoice seeding failed for biller {BillerId}; continuing with biller creation")]
     private static partial void LogInvoiceSeedingFailed(ILogger logger, string billerId, Exception exception);
+
+    [LoggerMessage(1903, LogLevel.Error, "Approval blocked for biller {BillerId}, revision {Revision}; finding {FindingCode}: {FindingMessage}")]
+    private static partial void LogBlockingFinding(
+        ILogger logger,
+        string billerId,
+        string revision,
+        string findingCode,
+        string findingMessage);
 }

@@ -107,6 +107,29 @@ public sealed class BillerOnboardingServiceTests
     }
 
     [Fact]
+    public async Task ApprovalFailureReturnsTheBlockingFindings()
+    {
+        var service = CreateService();
+        var created = await service.CreateAsync(CreateRequest(), CancellationToken.None);
+        var invalidDefinition = created.Draft.Definition with
+        {
+            Brand = created.Draft.Definition.Brand with { PrimaryColor = "not-a-color" }
+        };
+        var updated = await service.UpdateDraftAsync(
+            created.Biller.BillerId,
+            new UpdateExperienceRequest(invalidDefinition, created.Draft.ETag),
+            CancellationToken.None);
+
+        var exception = await Assert.ThrowsAsync<ExperienceValidationException>(async () =>
+            await service.ApproveAsync(
+                created.Biller.BillerId,
+                new ApproveExperienceRequest(updated.Revision, "test-user"),
+                CancellationToken.None));
+
+        Assert.Contains(exception.Findings, finding => finding.Code == "BRAND_COLOR_INVALID");
+    }
+
+    [Fact]
     public async Task PublishPersistsW3CTraceparentFromCurrentActivity()
     {
         using var listener = new ActivityListener
