@@ -1877,7 +1877,7 @@ export function App() {
             </svg>
           </div>
 
-          <h2 style={css('margin-bottom:var(--invoicecloud-spacing-m)')}>{!s.analysisComplete ? 'Building your preview...' : runOutcome(s.agentActivity) === 'failed' ? 'Preview built — some steps failed' : runOutcome(s.agentActivity) === 'warnings' ? 'Completed with warnings — research unavailable, using supplied info' : 'Research completed successfully'}</h2>
+          <h2 style={css('margin-bottom:var(--invoicecloud-spacing-m)')}>{!s.analysisComplete ? 'Building your preview...' : runOutcome(s.agentActivity) === 'failed' ? 'Preview built — some steps failed' : runOutcome(s.agentActivity) === 'warnings' ? 'Preview built with warnings — see agent activity for details' : 'Preview built successfully'}</h2>
           <div style={css('display:flex;flex-direction:column;gap:var(--invoicecloud-spacing-s);width:100%;max-width:440px')}>
             {analyzeStages.map((st, i) => (
               <div key={i} style={css(`display:flex;align-items:center;gap:var(--invoicecloud-spacing-s);padding:var(--invoicecloud-spacing-s);border-radius:10px;background:${st.bg};opacity:${st.opacity}`)}>
