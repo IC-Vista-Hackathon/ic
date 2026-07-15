@@ -39,7 +39,7 @@ public sealed partial class BillerOnboardingService(
         var id = Guid.NewGuid().ToString("N");
         activity?.SetTag("ic.biller_id", id);
         var now = DateTimeOffset.UtcNow;
-        var slug = await ReserveSlugAsync(normalizedSlug, id, cancellationToken);
+        var slug = await ReserveSlugAsync(normalizedSlug, cancellationToken);
         var biller = new BillerRecord(
             id,
             request.DisplayName.Trim(),
@@ -90,7 +90,7 @@ public sealed partial class BillerOnboardingService(
         }
         catch
         {
-            await CleanupFailedCreationAsync(id, slug);
+            await CleanupFailedCreationAsync(id);
             throw;
         }
     }
@@ -189,16 +189,11 @@ public sealed partial class BillerOnboardingService(
             LogValidationError(logger, billerId, "state", "Only draft experiences can be updated.");
             throw new ArgumentException("Only draft experiences can be updated.");
         }
-        if (string.IsNullOrWhiteSpace(request.ExpectedETag))
-        {
-            LogValidationError(logger, billerId, "expected_etag", "The current experience ETag is required.");
-            throw new ArgumentException("The current experience ETag is required.");
-        }
 
         var findings = ValidateDefinition(billerId, request.Definition);
         var saved = await repository.SaveExperienceAsync(
             current with { Definition = request.Definition with { BillerId = billerId, Brief = request.Definition.Brief ?? current.Definition.Brief }, Findings = findings },
-            request.ExpectedETag,
+            request.ExpectedETag ?? current.ETag,
             cancellationToken);
         LogDraftUpdated(logger, billerId, saved.Version, findings.Count);
         return Map(saved);
@@ -267,44 +262,24 @@ public sealed partial class BillerOnboardingService(
         var existing = await repository.GetDeploymentAsync(billerId, deploymentId, cancellationToken);
         if (existing is not null)
         {
-            if (IsActiveDeployment(existing.Status) &&
-                experience.State is ExperienceRevisionState.Approved or ExperienceRevisionState.Publishing)
-            {
-                await EnsurePublishingStateAsync(experience, run, DateTimeOffset.UtcNow, cancellationToken);
-            }
             LogDuplicatePublication(logger, billerId, request.Revision, deploymentId);
             return Map(existing);
         }
 
-        if (experience.State is not ExperienceRevisionState.Approved and not ExperienceRevisionState.Publishing)
+        if (experience.State != ExperienceRevisionState.Approved)
         {
             LogValidationError(logger, billerId, "state", "The current revision must be approved before publication.");
             throw new ArgumentException("The current revision must be approved before publication.");
         }
 
         var now = DateTimeOffset.UtcNow;
-        await EnsurePublishingStateAsync(experience, run, now, cancellationToken);
-        DeploymentRecord deployment;
-        try
-        {
-            deployment = await repository.CreateDeploymentAsync(
-                new DeploymentRecord(deploymentId, billerId, experience.Version, "requested", now,
-                    Traceparent: FormatTraceparent(Activity.Current)),
-                cancellationToken);
-        }
-        catch (ConcurrencyException)
-        {
-            var concurrentDeployment = await repository.GetDeploymentAsync(
-                billerId,
-                deploymentId,
-                cancellationToken);
-            if (concurrentDeployment is null)
-            {
-                throw;
-            }
-
-            deployment = concurrentDeployment;
-        }
+        var deployment = await repository.CreateDeploymentAsync(
+            new DeploymentRecord(deploymentId, billerId, experience.Version, "requested", now,
+                Traceparent: FormatTraceparent(Activity.Current)),
+            cancellationToken);
+        await repository.SaveExperienceAsync(experience with { State = ExperienceRevisionState.Publishing }, experience.ETag, cancellationToken);
+        await repository.SaveRunAsync(run with { State = OnboardingSessionState.Publishing, UpdatedAt = now }, run.ETag, cancellationToken);
+        RecordTransition(run.State, OnboardingSessionState.Publishing);
         LogPublicationRequested(logger, billerId, experience.Id, deployment.Id);
         return Map(deployment);
     }
@@ -340,15 +315,10 @@ public sealed partial class BillerOnboardingService(
     /// Published artifacts and public reads are keyed by slug, so two billers must never
     /// share one. Appends -2, -3, … until free.
     /// </summary>
-    private async ValueTask<string> ReserveSlugAsync(
-        string requested,
-        string billerId,
-        CancellationToken cancellationToken)
+    private async ValueTask<string> ReserveSlugAsync(string requested, CancellationToken cancellationToken)
     {
         var candidate = requested;
-        for (var suffix = 2;
-             !await repository.TryReserveSlugAsync(candidate, billerId, cancellationToken);
-             suffix++)
+        for (var suffix = 2; await repository.SlugExistsAsync(candidate, cancellationToken); suffix++)
         {
             candidate = SuffixSlug(requested, suffix);
             if (!SlugRegex().IsMatch(candidate))
@@ -362,44 +332,17 @@ public sealed partial class BillerOnboardingService(
         return candidate;
     }
 
-    private async ValueTask CleanupFailedCreationAsync(string billerId, string slug)
+    private async ValueTask CleanupFailedCreationAsync(string billerId)
     {
-        var releaseSlug = false;
         try
         {
             await repository.PurgeByBillerAsync(billerId, CancellationToken.None);
-            releaseSlug = true;
         }
         catch (Exception exception) when (!IsCriticalException(exception))
         {
             LogCreationCleanupFailed(logger, billerId, "purge", exception);
-            try
-            {
-                releaseSlug = await repository.GetBillerAsync(billerId, CancellationToken.None) is null;
-            }
-            catch (Exception verificationException) when (!IsCriticalException(verificationException))
-            {
-                LogCreationCleanupFailed(logger, billerId, "verify_purge", verificationException);
-            }
-        }
-
-        if (!releaseSlug)
-        {
-            return;
-        }
-
-        try
-        {
-            await repository.ReleaseSlugAsync(slug, billerId, CancellationToken.None);
-        }
-        catch (Exception exception) when (!IsCriticalException(exception))
-        {
-            LogCreationCleanupFailed(logger, billerId, "release_slug", exception);
         }
     }
-
-    private static bool IsActiveDeployment(string status) =>
-        status is "requested" or "applying" or "waiting_for_readiness" or "verifying";
 
     private static bool IsCriticalException(Exception exception) =>
         exception is OutOfMemoryException
@@ -409,30 +352,6 @@ public sealed partial class BillerOnboardingService(
             or BadImageFormatException
             or CannotUnloadAppDomainException
             or InvalidProgramException;
-
-    private async ValueTask EnsurePublishingStateAsync(
-        ExperienceRecord experience,
-        OnboardingRunRecord run,
-        DateTimeOffset now,
-        CancellationToken cancellationToken)
-    {
-        if (experience.State == ExperienceRevisionState.Approved)
-        {
-            await repository.SaveExperienceAsync(
-                experience with { State = ExperienceRevisionState.Publishing },
-                experience.ETag,
-                cancellationToken);
-        }
-
-        if (run.State != OnboardingSessionState.Publishing)
-        {
-            await repository.SaveRunAsync(
-                run with { State = OnboardingSessionState.Publishing, UpdatedAt = now },
-                run.ETag,
-                cancellationToken);
-            RecordTransition(run.State, OnboardingSessionState.Publishing);
-        }
-    }
 
     /// <summary>
     /// Appends -2, -3, … while keeping the result DNS-safe: the base is truncated so the

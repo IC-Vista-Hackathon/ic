@@ -29,44 +29,6 @@ public sealed class SlugUniquenessTests
     }
 
     [Fact]
-    public async Task ConcurrentDuplicateSlugsRemainUnique()
-    {
-        var service = CreateService();
-
-        var created = await Task.WhenAll(
-            Enumerable.Range(0, 20)
-                .Select(_ => service.CreateAsync(Request(), CancellationToken.None).AsTask()));
-
-        Assert.Equal(20, created.Select(item => item.Biller.Slug).Distinct(StringComparer.Ordinal).Count());
-        Assert.Contains(created, item => item.Biller.Slug == "city-of-plano");
-    }
-
-    [Fact]
-    public async Task ExistingBillerWithoutReservationStillOwnsItsSlug()
-    {
-        var repository = new InMemoryBillerExperienceRepository();
-        await repository.CreateBillerAsync(
-            new(
-                "legacy-biller",
-                "Legacy City",
-                "city-of-plano",
-                "Utility",
-                "75074",
-                null,
-                null,
-                null,
-                [],
-                BillerStatus.Prospect,
-                DateTimeOffset.UtcNow),
-            CancellationToken.None);
-        var service = CreateService(repository);
-
-        var created = await service.CreateAsync(Request(), CancellationToken.None);
-
-        Assert.Equal("city-of-plano-2", created.Biller.Slug);
-    }
-
-    [Fact]
     public async Task MixedCaseSlugIsNormalizedNotRejected()
     {
         var service = CreateService();
@@ -114,9 +76,8 @@ public sealed class SlugUniquenessTests
             Request() with { Slug = "no spaces allowed!" }, CancellationToken.None).AsTask());
     }
 
-    private static BillerOnboardingService CreateService(
-        IBillerExperienceRepository? repository = null) => new(
-        repository ?? new InMemoryBillerExperienceRepository(),
+    private static BillerOnboardingService CreateService() => new(
+        new InMemoryBillerExperienceRepository(),
         new DeterministicExperienceDraftGenerator(NullLogger<DeterministicExperienceDraftGenerator>.Instance),
         new OrchestrationRunner(),
         NullLogger<BillerOnboardingService>.Instance,

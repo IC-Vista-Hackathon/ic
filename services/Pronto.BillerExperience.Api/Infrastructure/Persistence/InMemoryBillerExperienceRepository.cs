@@ -12,49 +12,23 @@ public sealed class InMemoryBillerExperienceRepository : IBillerExperienceReposi
     private readonly ConcurrentDictionary<string, AgentActivityEvent> _agentActivity = new();
     private readonly ConcurrentDictionary<string, AgentContextRecord> _agentContexts = new();
     private readonly ConcurrentDictionary<string, DeploymentRecord> _deployments = new();
-    private readonly ConcurrentDictionary<string, string> _slugReservations = new(StringComparer.Ordinal);
-    private readonly object _writeLock = new();
 
-    public ValueTask<bool> TryReserveSlugAsync(
-        string slug,
-        string billerId,
-        CancellationToken cancellationToken)
+    public ValueTask<bool> SlugExistsAsync(string slug, CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
-        lock (_writeLock)
-        {
-            if (_billers.Values.Any(
-                    biller => string.Equals(biller.Slug, slug, StringComparison.Ordinal)))
-            {
-                return ValueTask.FromResult(false);
-            }
-
-            return ValueTask.FromResult(_slugReservations.TryAdd(slug, billerId));
-        }
-    }
-
-    public ValueTask ReleaseSlugAsync(
-        string slug,
-        string billerId,
-        CancellationToken cancellationToken)
-    {
-        cancellationToken.ThrowIfCancellationRequested();
-        _slugReservations.TryRemove(new KeyValuePair<string, string>(slug, billerId));
-        return ValueTask.CompletedTask;
+        return ValueTask.FromResult(_billers.Values.Any(
+            biller => string.Equals(biller.Slug, slug, StringComparison.Ordinal)));
     }
 
     public ValueTask<BillerRecord> CreateBillerAsync(BillerRecord biller, CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
-        lock (_writeLock)
+        if (!_billers.TryAdd(biller.Id, biller))
         {
-            if (!_billers.TryAdd(biller.Id, biller))
-            {
-                throw new ConcurrencyException($"Biller '{biller.Id}' already exists.");
-            }
-
-            return ValueTask.FromResult(biller);
+            throw new ConcurrencyException($"Biller '{biller.Id}' already exists.");
         }
+
+        return ValueTask.FromResult(biller);
     }
 
     public ValueTask<BillerRecord?> GetBillerAsync(string billerId, CancellationToken cancellationToken)
@@ -85,19 +59,14 @@ public sealed class InMemoryBillerExperienceRepository : IBillerExperienceReposi
     {
         cancellationToken.ThrowIfCancellationRequested();
         var key = $"{experience.BillerId}:{experience.Id}";
-        lock (_writeLock)
+        if (_experiences.TryGetValue(key, out var current) && expectedETag is not null && current.ETag != expectedETag)
         {
-            if (_experiences.TryGetValue(key, out var current) &&
-                expectedETag is not null &&
-                current.ETag != expectedETag)
-            {
-                throw new ConcurrencyException("The experience was modified by another request.");
-            }
-
-            var saved = experience with { ETag = Guid.NewGuid().ToString("N") };
-            _experiences[key] = saved;
-            return ValueTask.FromResult(saved);
+            throw new ConcurrencyException("The experience was modified by another request.");
         }
+
+        var saved = experience with { ETag = Guid.NewGuid().ToString("N") };
+        _experiences[key] = saved;
+        return ValueTask.FromResult(saved);
     }
 
     public ValueTask<OnboardingRunRecord?> GetRunAsync(string billerId, string runId, CancellationToken cancellationToken)
@@ -111,19 +80,14 @@ public sealed class InMemoryBillerExperienceRepository : IBillerExperienceReposi
     {
         cancellationToken.ThrowIfCancellationRequested();
         var key = $"{run.BillerId}:{run.Id}";
-        lock (_writeLock)
+        if (_runs.TryGetValue(key, out var current) && expectedETag is not null && current.ETag != expectedETag)
         {
-            if (_runs.TryGetValue(key, out var current) &&
-                expectedETag is not null &&
-                current.ETag != expectedETag)
-            {
-                throw new ConcurrencyException("The onboarding run was modified by another request.");
-            }
-
-            var saved = run with { ETag = Guid.NewGuid().ToString("N") };
-            _runs[key] = saved;
-            return ValueTask.FromResult(saved);
+            throw new ConcurrencyException("The onboarding run was modified by another request.");
         }
+
+        var saved = run with { ETag = Guid.NewGuid().ToString("N") };
+        _runs[key] = saved;
+        return ValueTask.FromResult(saved);
     }
 
     public ValueTask AppendAgentActivityAsync(
@@ -169,19 +133,16 @@ public sealed class InMemoryBillerExperienceRepository : IBillerExperienceReposi
     {
         cancellationToken.ThrowIfCancellationRequested();
         var key = $"{context.BillerId}:{context.RunId}";
-        lock (_writeLock)
+        if (_agentContexts.TryGetValue(key, out var current) &&
+            expectedETag is not null &&
+            current.ETag != expectedETag)
         {
-            if (_agentContexts.TryGetValue(key, out var current) &&
-                expectedETag is not null &&
-                current.ETag != expectedETag)
-            {
-                throw new ConcurrencyException("The shared agent context was modified by another request.");
-            }
-
-            var saved = context with { ETag = Guid.NewGuid().ToString("N") };
-            _agentContexts[key] = saved;
-            return ValueTask.FromResult(saved);
+            throw new ConcurrencyException("The shared agent context was modified by another request.");
         }
+
+        var saved = context with { ETag = Guid.NewGuid().ToString("N") };
+        _agentContexts[key] = saved;
+        return ValueTask.FromResult(saved);
     }
 
     public ValueTask<DeploymentRecord> CreateDeploymentAsync(DeploymentRecord deployment, CancellationToken cancellationToken)
@@ -205,10 +166,7 @@ public sealed class InMemoryBillerExperienceRepository : IBillerExperienceReposi
     public ValueTask PurgeByBillerAsync(string billerId, CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
-        if (_billers.TryRemove(billerId, out var biller))
-        {
-            _slugReservations.TryRemove(new KeyValuePair<string, string>(biller.Slug, billerId));
-        }
+        _billers.TryRemove(billerId, out _);
         RemoveWhere(_experiences, item => item.BillerId == billerId);
         RemoveWhere(_runs, item => item.BillerId == billerId);
         RemoveKeysWithPrefix(_agentActivity, $"{billerId}:");

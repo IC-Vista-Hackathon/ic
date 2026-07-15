@@ -45,60 +45,23 @@ public sealed partial class CosmosBillerExperienceRepository(
             return response.Resource;
         });
 
-    public ValueTask<bool> TryReserveSlugAsync(
-        string slug,
-        string billerId,
-        CancellationToken cancellationToken) =>
-        ObserveAsync("reserve_slug", "billers", billerId, async () =>
+    public ValueTask<bool> SlugExistsAsync(string slug, CancellationToken cancellationToken) =>
+        ObserveAsync("query", "billers", slug, async () =>
         {
-            var reservation = new SlugReservationDocument(SlugReservationId(slug), "slug_reservation", slug, billerId);
-            try
-            {
-                await Billers.CreateItemAsync(
-                    reservation,
-                    new PartitionKey(reservation.Id),
-                    cancellationToken: cancellationToken);
-                if (await SlugExistsOnBillerAsync(slug, cancellationToken))
-                {
-                    await Billers.DeleteItemAsync<SlugReservationDocument>(
-                        reservation.Id,
-                        new PartitionKey(reservation.Id),
-                        cancellationToken: cancellationToken);
-                    return false;
-                }
-
-                return true;
-            }
-            catch (CosmosException exception) when (exception.StatusCode == HttpStatusCode.Conflict)
+            // Cross-partition by design: billers partition on /id and slug lookups are rare
+            // (creation-time only).
+            var query = new QueryDefinition("SELECT TOP 1 c.id FROM c WHERE c.slug = @slug")
+                .WithParameter("@slug", slug);
+            using var iterator = Billers.GetItemQueryIterator<IdOnly>(
+                query, requestOptions: new QueryRequestOptions { MaxItemCount = 1 });
+            if (!iterator.HasMoreResults)
             {
                 return false;
             }
-            catch (Exception exception) when (!IsCriticalException(exception))
-            {
-                try
-                {
-                    await ReleaseSlugCoreAsync(slug, billerId, CancellationToken.None);
-                }
-                catch (Exception cleanupException) when (!IsCriticalException(cleanupException))
-                {
-                    LogSlugReservationCleanupFailed(logger, slug, billerId, cleanupException);
-                }
 
-                throw;
-            }
+            var page = await iterator.ReadNextAsync(cancellationToken);
+            return page.Resource.Any();
         });
-
-    public async ValueTask ReleaseSlugAsync(
-        string slug,
-        string billerId,
-        CancellationToken cancellationToken)
-    {
-        await ObserveAsync("release_slug", "billers", billerId, async () =>
-        {
-            await ReleaseSlugCoreAsync(slug, billerId, cancellationToken);
-            return true;
-        });
-    }
 
     public ValueTask<ExperienceRecord?> GetLatestExperienceAsync(string billerId, CancellationToken cancellationToken) =>
         ObserveAsync<ExperienceRecord?>("query", "configs", billerId, async () =>
@@ -275,7 +238,6 @@ public sealed partial class CosmosBillerExperienceRepository(
 
     public async ValueTask PurgeByBillerAsync(string billerId, CancellationToken cancellationToken)
     {
-        var biller = await GetBillerAsync(billerId, cancellationToken);
         var partition = new PartitionKey(billerId);
         await DeletePartitionAsync(Configs, partition, cancellationToken);
         await DeletePartitionAsync(Runs, partition, cancellationToken);
@@ -291,10 +253,6 @@ public sealed partial class CosmosBillerExperienceRepository(
         catch (CosmosException exception) when (exception.StatusCode == HttpStatusCode.NotFound)
         {
             LogIdempotentDeleteNotFound(logger, "billers", billerId);
-        }
-        if (biller is not null)
-        {
-            await ReleaseSlugAsync(biller.Slug, billerId, cancellationToken);
         }
     }
 
@@ -326,68 +284,6 @@ public sealed partial class CosmosBillerExperienceRepository(
     }
 
     private sealed record IdOnly(string Id);
-
-    private static string SlugReservationId(string slug) => $"slug-{slug}";
-
-    private async Task ReleaseSlugCoreAsync(
-        string slug,
-        string billerId,
-        CancellationToken cancellationToken)
-    {
-        var id = SlugReservationId(slug);
-        var partition = new PartitionKey(id);
-        try
-        {
-            var reservation = await Billers.ReadItemAsync<SlugReservationDocument>(
-                id,
-                partition,
-                cancellationToken: cancellationToken);
-            if (string.Equals(reservation.Resource.BillerId, billerId, StringComparison.Ordinal))
-            {
-                await Billers.DeleteItemAsync<SlugReservationDocument>(
-                    id,
-                    partition,
-                    cancellationToken: cancellationToken);
-            }
-        }
-        catch (CosmosException exception) when (exception.StatusCode == HttpStatusCode.NotFound)
-        {
-            LogSlugReservationNotFound(logger, slug, billerId);
-        }
-    }
-
-    private static bool IsCriticalException(Exception exception) =>
-        exception is OutOfMemoryException
-            or StackOverflowException
-            or AccessViolationException
-            or AppDomainUnloadedException
-            or BadImageFormatException
-            or CannotUnloadAppDomainException
-            or InvalidProgramException;
-
-    private async ValueTask<bool> SlugExistsOnBillerAsync(
-        string slug,
-        CancellationToken cancellationToken)
-    {
-        var query = new QueryDefinition(
-                """
-                SELECT TOP 1 c.id
-                FROM c
-                WHERE c.slug = @slug
-                  AND (NOT IS_DEFINED(c.document_type) OR c.document_type != "slug_reservation")
-                """)
-            .WithParameter("@slug", slug);
-        using var iterator = Billers.GetItemQueryIterator<IdOnly>(
-            query,
-            requestOptions: new QueryRequestOptions { MaxItemCount = 1 });
-        if (!iterator.HasMoreResults)
-        {
-            return false;
-        }
-
-        var page = await iterator.ReadNextAsync(cancellationToken);
-        return page.Resource.Any();
-    }
 
     private async ValueTask<T> ObserveAsync<T>(string operation, string container, string billerId, Func<Task<T>> action)
     {
@@ -436,21 +332,6 @@ public sealed partial class CosmosBillerExperienceRepository(
         string container,
         string itemId);
 
-    [LoggerMessage(2102, LogLevel.Debug,
-        "Slug reservation {Slug} for biller {BillerId} was already absent")]
-    private static partial void LogSlugReservationNotFound(
-        ILogger logger,
-        string slug,
-        string billerId);
-
-    [LoggerMessage(2103, LogLevel.Warning,
-        "Failed to clean up slug reservation {Slug} for biller {BillerId} after reservation error")]
-    private static partial void LogSlugReservationCleanupFailed(
-        ILogger logger,
-        string slug,
-        string billerId,
-        Exception exception);
-
     private sealed record AgentActivityDocument(
         [property: JsonProperty("id")] string Id,
         [property: JsonProperty("biller_id")] string BillerId,
@@ -460,10 +341,4 @@ public sealed partial class CosmosBillerExperienceRepository(
 
     private sealed record AgentActivityProjection(
         [property: JsonProperty("event")] AgentActivityEvent Event);
-
-    private sealed record SlugReservationDocument(
-        [property: JsonProperty("id")] string Id,
-        [property: JsonProperty("document_type")] string DocumentType,
-        [property: JsonProperty("slug")] string Slug,
-        [property: JsonProperty("biller_id")] string BillerId);
 }
