@@ -9,13 +9,18 @@ export function assembleBrief(
   slug: string,
   overrides: Partial<DesignBrief> = {},
 ): DesignBrief {
-  const { brand, content } = definition;
-  const assets: BrandAsset[] = [];
-  if (brand.logo_asset_id) assets.push({ kind: 'logo', url: brand.logo_asset_id, description: `${brand.display_name} logo` });
-  if (definition.pwa.icon_asset_id) assets.push({ kind: 'icon', url: definition.pwa.icon_asset_id });
+  const { brand, content, brief } = definition;
+  const assets: BrandAsset[] = brief?.assets?.map(asset => ({ kind: asset.kind as BrandAsset['kind'], url: asset.url, description: asset.description }))
+    ?? [];
+  if (assets.length === 0) {
+    if (brand.logo_asset_id) assets.push({ kind: 'logo', url: brand.logo_asset_id, description: `${brand.display_name} logo` });
+    if (definition.pwa.icon_asset_id) assets.push({ kind: 'icon', url: definition.pwa.icon_asset_id });
+  }
 
   const billType = overrides.bill_type ?? inferBillType(content.heading);
 
+  // Prefer the persisted brief the onboarding agents produced; fall back to derived
+  // defaults so the pipeline still works on older revisions with no brief.
   return {
     biller_slug: slug,
     display_name: brand.display_name,
@@ -23,12 +28,12 @@ export function assembleBrief(
     primary_color: brand.primary_color,
     secondary_color: brand.secondary_color,
     font_family: brand.font_family || 'Inter',
-    voice_and_tone: overrides.voice_and_tone ?? 'Reassuring, plain-language, and efficient. Confident without jargon.',
-    visual_style: overrides.visual_style ?? 'Modern civic: generous whitespace, calm surfaces, clear hierarchy, accessible contrast.',
-    brand_keywords: overrides.brand_keywords ?? deriveKeywords(brand.display_name, billType),
-    reference_url: overrides.reference_url,
+    voice_and_tone: overrides.voice_and_tone ?? brief?.voice_and_tone ?? 'Reassuring, plain-language, and efficient. Confident without jargon.',
+    visual_style: overrides.visual_style ?? brief?.visual_style ?? 'Modern civic: generous whitespace, calm surfaces, clear hierarchy, accessible contrast.',
+    brand_keywords: overrides.brand_keywords ?? brief?.brand_keywords ?? deriveKeywords(brand.display_name, billType),
+    reference_url: overrides.reference_url ?? brief?.reference_url,
     assets: overrides.assets ?? assets,
-    layout_intent: overrides.layout_intent,
+    layout_intent: overrides.layout_intent ?? brief?.layout_intent,
     enabled_payment_capabilities: definition.enabled_payment_capabilities,
     content,
   };

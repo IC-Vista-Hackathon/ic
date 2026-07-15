@@ -132,7 +132,9 @@ public sealed partial class BillerOnboardingService(
             : OnboardingSessionState.CollectingInformation;
         var updatedExperience = experience with
         {
-            Definition = generated.Definition with { BillerId = billerId },
+            // The draft generator's schema doesn't own the design brief; carry it forward
+            // so the bespoke-skin input survives each onboarding turn.
+            Definition = generated.Definition with { BillerId = billerId, Brief = generated.Definition.Brief ?? experience.Definition.Brief },
             Findings = generated.Findings
         };
         var latestRun = await GetRequiredRunAsync(billerId, cancellationToken);
@@ -172,7 +174,7 @@ public sealed partial class BillerOnboardingService(
 
         var findings = ValidateDefinition(billerId, request.Definition);
         var saved = await repository.SaveExperienceAsync(
-            current with { Definition = request.Definition with { BillerId = billerId }, Findings = findings },
+            current with { Definition = request.Definition with { BillerId = billerId, Brief = request.Definition.Brief ?? current.Definition.Brief }, Findings = findings },
             request.ExpectedETag ?? current.ETag,
             cancellationToken);
         LogDraftUpdated(logger, billerId, saved.Version, findings.Count);
@@ -403,7 +405,34 @@ public sealed partial class BillerOnboardingService(
                     ["guest_checkout_allowed"] = "Guest checkout reduces friction for one-time payers.",
                     ["offer_autopay"] = "AutoPay gives returning payers a convenient recurring option.",
                     ["offer_paperless"] = "Paperless billing can be offered independently at checkout."
-                }));
+                }),
+            CreateInitialBrief(biller, root));
+    }
+
+    private static DesignBrief CreateInitialBrief(BillerRecord biller, Uri root)
+    {
+        var keywords = new List<string> { "trustworthy", "secure", "straightforward", biller.BillType.ToLowerInvariant() };
+        if (biller.BillType.Contains("tax", StringComparison.OrdinalIgnoreCase)
+            || biller.BillType.Contains("utility", StringComparison.OrdinalIgnoreCase)
+            || biller.Name.Contains("city", StringComparison.OrdinalIgnoreCase)
+            || biller.Name.Contains("county", StringComparison.OrdinalIgnoreCase))
+        {
+            keywords.Add("civic");
+            keywords.Add("community");
+        }
+
+        var assets = new List<BrandAsset>();
+        if (biller.Brand?.LogoAssetId is { Length: > 0 } logo)
+        {
+            assets.Add(new BrandAsset("logo", new Uri(logo, UriKind.RelativeOrAbsolute), $"{biller.Name} logo"));
+        }
+
+        return new DesignBrief(
+            VoiceAndTone: "Reassuring, plain-language, and efficient. Confident without jargon.",
+            VisualStyle: "Modern civic: generous whitespace, calm surfaces, clear hierarchy, accessible contrast.",
+            BrandKeywords: keywords,
+            Assets: assets,
+            ReferenceUrl: biller.Website ?? root);
     }
 
     private static BillerResponse Map(BillerRecord record) =>

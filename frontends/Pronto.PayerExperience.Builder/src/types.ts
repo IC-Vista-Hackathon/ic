@@ -27,6 +27,15 @@ export interface ExperienceDefinition {
   enabled_payment_capabilities: string[];
   ui?: unknown;
   preferences?: unknown;
+  // Persisted design brief (DesignBrief contract) when the onboarding agents produced one.
+  brief?: {
+    voice_and_tone: string;
+    visual_style: string;
+    brand_keywords: string[];
+    assets: Array<{ kind: string; url: string; description?: string }>;
+    reference_url?: string;
+    layout_intent?: string;
+  };
 }
 
 export interface BrandAsset {
