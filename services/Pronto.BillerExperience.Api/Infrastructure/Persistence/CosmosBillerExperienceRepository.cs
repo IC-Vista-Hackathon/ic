@@ -128,8 +128,7 @@ public sealed partial class CosmosBillerExperienceRepository(
             }
 
             var page = await iterator.ReadNextAsync(cancellationToken);
-            var item = page.Resource.FirstOrDefault();
-            return item is null ? null : item with { ETag = page.ETag };
+            return page.Resource.FirstOrDefault();
         });
 
     public ValueTask<ExperienceRecord> SaveExperienceAsync(ExperienceRecord experience, string? expectedETag, CancellationToken cancellationToken) =>
@@ -301,13 +300,20 @@ public sealed partial class CosmosBillerExperienceRepository(
                 reservationId, new PartitionKey(reservationId), cancellationToken: cancellationToken);
         }
 
-        // The billers container is partitioned by /id (which equals the biller id).
-        // DeleteItemStreamAsync returns a ResponseMessage and does NOT throw on a non-success
-        // status, so a missing biller (404) is naturally a no-op — no try/catch required.
-        using var _ = await Billers.DeleteItemStreamAsync(billerId, partition, cancellationToken: cancellationToken);
+        try
+        {
+            await Billers.DeleteItemAsync<BillerRecord>(
+                billerId,
+                partition,
+                cancellationToken: cancellationToken);
+        }
+        catch (CosmosException exception) when (exception.StatusCode == HttpStatusCode.NotFound)
+        {
+            LogIdempotentDeleteNotFound(logger, "billers", billerId);
+        }
     }
 
-    private static async Task DeletePartitionAsync(
+    private async Task DeletePartitionAsync(
         Container container, PartitionKey partition, CancellationToken cancellationToken)
     {
         using var iterator = container.GetItemQueryIterator<IdOnly>(
@@ -319,7 +325,17 @@ public sealed partial class CosmosBillerExperienceRepository(
             var page = await iterator.ReadNextAsync(cancellationToken);
             foreach (var item in page)
             {
-                using var _ = await container.DeleteItemStreamAsync(item.Id, partition, cancellationToken: cancellationToken);
+                try
+                {
+                    await container.DeleteItemAsync<IdOnly>(
+                        item.Id,
+                        partition,
+                        cancellationToken: cancellationToken);
+                }
+                catch (CosmosException exception) when (exception.StatusCode == HttpStatusCode.NotFound)
+                {
+                    LogIdempotentDeleteNotFound(logger, container.Id, item.Id);
+                }
             }
         }
     }
@@ -372,6 +388,13 @@ public sealed partial class CosmosBillerExperienceRepository(
         string billerId,
         string? traceId,
         Exception exception);
+
+    [LoggerMessage(2101, LogLevel.Debug,
+        "Cosmos item {ItemId} in container {Container} was already absent during idempotent deletion")]
+    private static partial void LogIdempotentDeleteNotFound(
+        ILogger logger,
+        string container,
+        string itemId);
 
     private sealed record AgentActivityDocument(
         [property: JsonProperty("id")] string Id,

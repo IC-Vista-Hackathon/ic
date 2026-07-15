@@ -28,7 +28,7 @@ public sealed record ExperienceRecord(
     [property: JsonProperty("findings")] IReadOnlyList<ComplianceFinding> Findings,
     [property: JsonProperty("created_at")] DateTimeOffset CreatedAt,
     [property: JsonProperty("approved_at")] DateTimeOffset? ApprovedAt = null,
-    [property: JsonIgnore] string? ETag = null);
+    [property: JsonProperty("_etag")] string? ETag = null);
 
 public sealed record OnboardingRunRecord(
     [property: JsonProperty("id")] string Id,

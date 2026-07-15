@@ -59,19 +59,27 @@ public sealed partial class BillerOnboardingService(
             ["review_brand", "review_legal_links", "review_payment_methods"],
             now);
 
-        var savedExperience = await repository.SaveExperienceAsync(experience, null, cancellationToken);
-        var savedRun = await repository.SaveRunAsync(run, null, cancellationToken);
-        if (agentContextService is not null)
+        try
         {
-            await agentContextService.EnsureAsync(
-                id,
-                savedRun.Id,
-                $"Create, review, approve, and publish a safe branded payment experience for {biller.Name}.",
-                cancellationToken);
+            var savedExperience = await repository.SaveExperienceAsync(experience, null, cancellationToken);
+            var savedRun = await repository.SaveRunAsync(run, null, cancellationToken);
+            if (agentContextService is not null)
+            {
+                await agentContextService.EnsureAsync(
+                    id,
+                    savedRun.Id,
+                    $"Create, review, approve, and publish a safe branded payment experience for {biller.Name}.",
+                    cancellationToken);
+            }
+            await (invoiceSeeder ?? new NullInvoiceSeeder()).SeedAsync(id, biller.BillType, cancellationToken);
+            LogBillerCreated(logger, id, savedRun.Id, draftGenerator.Provider);
+            return (Map(biller), Map(savedRun), Map(savedExperience));
         }
-        await (invoiceSeeder ?? new NullInvoiceSeeder()).SeedAsync(id, biller.BillType, cancellationToken);
-        LogBillerCreated(logger, id, savedRun.Id, draftGenerator.Provider);
-        return (Map(biller), Map(savedRun), Map(savedExperience));
+        catch (Exception exception) when (!IsCriticalException(exception))
+        {
+            await CleanupFailedCreationAsync(id);
+            throw;
+        }
     }
 
     public async ValueTask<BillerResponse> GetBillerAsync(string billerId, CancellationToken cancellationToken)
@@ -97,6 +105,12 @@ public sealed partial class BillerOnboardingService(
         var biller = await GetRequiredBillerAsync(billerId, cancellationToken);
         var run = await GetRequiredRunAsync(billerId, cancellationToken);
         var experience = await GetRequiredExperienceAsync(billerId, cancellationToken);
+        if (experience.State != ExperienceRevisionState.Draft)
+        {
+            LogValidationError(logger, billerId, "state", "Only draft experiences can be changed through chat.");
+            throw new ArgumentException("Only draft experiences can be changed through chat.");
+        }
+
         var userMessage = new OnboardingChatMessage("user", request.Message.Trim(), DateTimeOffset.UtcNow);
         var messages = run.Messages.Append(userMessage).ToArray();
         var orchestrationContext = new OrchestrationContext(
@@ -396,6 +410,27 @@ public sealed partial class BillerOnboardingService(
         return candidate;
     }
 
+    private async ValueTask CleanupFailedCreationAsync(string billerId)
+    {
+        try
+        {
+            await repository.PurgeByBillerAsync(billerId, CancellationToken.None);
+        }
+        catch (Exception exception) when (!IsCriticalException(exception))
+        {
+            LogCreationCleanupFailed(logger, billerId, "purge", exception);
+        }
+    }
+
+    private static bool IsCriticalException(Exception exception) =>
+        exception is OutOfMemoryException
+            or StackOverflowException
+            or AccessViolationException
+            or AppDomainUnloadedException
+            or BadImageFormatException
+            or CannotUnloadAppDomainException
+            or InvalidProgramException;
+
     /// <summary>
     /// Appends -2, -3, … while keeping the result DNS-safe: the base is truncated so the
     /// total stays within 63 characters, and a hyphen exposed by the cut is trimmed so the
@@ -477,6 +512,11 @@ public sealed partial class BillerOnboardingService(
             if (string.IsNullOrWhiteSpace(action.Label) || action.Label.Length > 48)
             {
                 findings.Add(new("ACTION_LABEL_INVALID", "Action labels must contain 1 to 48 characters.", ComplianceFindingSeverity.Blocking));
+            }
+            if (!Enum.IsDefined(action.Action))
+            {
+                findings.Add(new("ACTION_TYPE_INVALID", "Actions must use a supported action type.", ComplianceFindingSeverity.Blocking));
+                continue;
             }
             if (action.Action == ExperienceActionType.SchedulePayment &&
                 !definition.EnabledPaymentCapabilities.Any(capability =>
@@ -663,11 +703,17 @@ public sealed partial class BillerOnboardingService(
         string revision,
         string findingCode,
         string findingMessage);
-
     [LoggerMessage(1904, LogLevel.Error, "Compensating approval rollback failed for biller {BillerId}, revision {Revision}; state may be inconsistent")]
     private static partial void LogCompensationFailed(
         ILogger logger,
         string billerId,
         string revision,
+        Exception exception);
+
+    [LoggerMessage(1905, LogLevel.Error, "Creation cleanup operation {Operation} failed for biller {BillerId}")]
+    private static partial void LogCreationCleanupFailed(
+        ILogger logger,
+        string billerId,
+        string operation,
         Exception exception);
 }
