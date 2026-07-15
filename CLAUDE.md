@@ -159,7 +159,8 @@ is still just a placeholder README.
   `frontends/Pronto.BillerPayments.Pwa/README.md`, "Browser observability"): runtime config comes
   from the Biller Experience API's `GET /public/telemetry`, PII is structurally excluded via
   `src/telemetryPolicy.ts`, and the nonprod deploy workflow runs a Playwright smoke test that
-  confirms an event round-trips into App Insights (`tests/browser-smoke/`).
+  confirms the browser SDK sends the expected event and flow id and the App Insights ingestion
+  endpoint accepts it (`tests/browser-smoke/`).
 - Test coverage is thin outside Invoice/Payment. `BillerExperience.IntegrationTests` now has
   in-process integration tests for the Invoice API (health endpoints + seed-then-lookup flow),
   added with the GitHub Actions CI/CD pipeline; `BillerExperience.Worker.Tests` remains sparse.
