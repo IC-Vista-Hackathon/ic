@@ -1,4 +1,5 @@
 using Pronto.BillerExperience.Api.Domain;
+using Pronto.BillerExperience.Api.Application.Compliance;
 using Pronto.BillerExperience.Api.Infrastructure.AI;
 using Pronto.BillerExperience.Contracts.V1.Experiences;
 using Pronto.BillerExperience.Contracts.V1.Onboarding;
@@ -30,7 +31,7 @@ internal interface IAccessibilityReviewAgent
 internal interface IComplianceReviewAgent
 {
     ValueTask<IReadOnlyList<ComplianceFinding>> ReviewAsync(
-        string billerId,
+        BillerRecord biller,
         BillerExperienceDefinition definition,
         CancellationToken cancellationToken);
 }
@@ -97,15 +98,11 @@ internal sealed class AccessibilityReviewAgent : IAccessibilityReviewAgent
         (Math.Max(first, second) + 0.05) / (Math.Min(first, second) + 0.05);
 }
 
-internal sealed class ComplianceReviewAgent(
-    Func<string, BillerExperienceDefinition, IReadOnlyList<ComplianceFinding>> validate) : IComplianceReviewAgent
+internal sealed class ComplianceReviewAgent(IComplianceReviewService compliance) : IComplianceReviewAgent
 {
     public ValueTask<IReadOnlyList<ComplianceFinding>> ReviewAsync(
-        string billerId,
+        BillerRecord biller,
         BillerExperienceDefinition definition,
-        CancellationToken cancellationToken)
-    {
-        cancellationToken.ThrowIfCancellationRequested();
-        return ValueTask.FromResult(validate(billerId, definition));
-    }
+        CancellationToken cancellationToken) =>
+        compliance.ReviewAsync(biller, definition, ComplianceReviewStage.Draft, cancellationToken);
 }

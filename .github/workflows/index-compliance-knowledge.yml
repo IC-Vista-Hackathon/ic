@@ -10,6 +10,8 @@ on:
     branches: [main]
     paths:
       - 'knowledge/compliance/**'
+      - 'agents/compliance/**'
+      - 'agents/RESPONSIBLE_AI.md'
       - 'scripts/index-compliance-knowledge.py'
       - '.github/workflows/index-compliance-knowledge.yml'
 
@@ -31,6 +33,9 @@ jobs:
       # This is the services.ai.azure.com/api/projects/<project> form — NOT the account's
       # cognitiveservices.azure.com endpoint, which the SDK's project client rejects.
       PROJECT_ENDPOINT: ${{ vars.AIFOUNDRY_PROJECT_ENDPOINT || 'https://aif-ic-hack-jk4zmntatjem4.services.ai.azure.com/api/projects/ic' }}
+      COMPLIANCE_AGENT_NAME: biller-compliance
+      COMPLIANCE_MODEL_DEPLOYMENT: gpt-5.4-mini
+      COMPLIANCE_POLICY_VERSION: '2026-07-15'
     steps:
       - uses: actions/checkout@v4
 
@@ -45,7 +50,7 @@ jobs:
           python-version: '3.12'
 
       - name: Install dependencies
-        run: pip install azure-ai-projects azure-identity
+        run: pip install azure-ai-projects==2.3.0 azure-identity==1.25.1
 
       - name: Rebuild index
         run: python3 scripts/index-compliance-knowledge.py

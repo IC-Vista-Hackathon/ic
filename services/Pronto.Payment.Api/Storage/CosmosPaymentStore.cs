@@ -116,7 +116,7 @@ public sealed class CosmosPaymentStore : IPaymentStore
         string? invoiceId,
         CancellationToken cancellationToken = default)
     {
-        var clauses = new List<string> { "c.payment.lifecycle != @pending" };
+        var clauses = new List<string> { "IS_DEFINED(c.payment) AND c.payment.lifecycle != @pending" };
         if (!string.IsNullOrWhiteSpace(payerAccountId)) clauses.Add("c.payment.payer_account_id = @payerAccountId");
         if (!string.IsNullOrWhiteSpace(invoiceId)) clauses.Add("c.payment.invoice_id = @invoiceId");
         var sql = $"SELECT VALUE c.payment FROM c WHERE {string.Join(" AND ", clauses)} ORDER BY c.payment.created_at DESC";
@@ -144,7 +144,7 @@ public sealed class CosmosPaymentStore : IPaymentStore
         for (var attempt = 0; attempt < MaxClaimRetries; attempt++)
         {
             var query = new QueryDefinition(
-                "SELECT TOP 1 * FROM c WHERE "
+                "SELECT TOP 1 * FROM c WHERE IS_DEFINED(c.payment) AND "
                 + "(NOT IS_DEFINED(c.payment.lease_until) OR c.payment.lease_until = null OR c.payment.lease_until <= @now) AND ("
                 + "(c.payment.lifecycle = @scheduled AND IS_DEFINED(c.payment.scheduled_for) AND c.payment.scheduled_for <= @asOf) "
                 + "OR (c.payment.lifecycle = @pending AND c.payment.updated_at <= @staleBefore)) "

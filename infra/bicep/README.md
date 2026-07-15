@@ -49,6 +49,17 @@ attachment. Enable `BillerExperience__AgentProvisioning__Enabled=true` only afte
 has been provisioned; reconciliation fails closed if the latest version lacks the reviewed tool.
 
 Re-run the same command to apply changes; Bicep is idempotent (ARM incremental deployment).
+Pass the object IDs of CI service principals that publish the compliance corpus and prompt-agent
+version through `foundryOwnerPrincipalIds`; the module grants only those identities `Foundry
+Owner`, which the Foundry data plane requires for file upload and agent-version creation:
+
+```sh
+az deployment sub create \
+  --name ic-hack \
+  --location eastus2 \
+  --template-file main.bicep \
+  --parameters foundryOwnerPrincipalIds='["<service-principal-object-id>"]'
+```
 
 ## What this creates
 
@@ -59,7 +70,7 @@ Re-run the same command to apply changes; Bicep is idempotent (ARM incremental d
 | ACR (Basic) | Single registry, no promotion tiers |
 | Storage account (Standard_LRS, StorageV2) + `payer-experiences` blob container | Holds every biller's immutable experience artifacts and active pointer. The publisher identity gets `Storage Blob Data Contributor`; the API workload identity gets `Storage Blob Data Reader`; optional service principals can receive contributor/reader access through `payerExperienceBlobContributorPrincipalIds`/`payerExperienceBlobReaderPrincipalIds`; keys and anonymous access are disabled |
 | Cosmos DB (serverless), two accounts | `cosmos-ic-hack-<suffix>` (prod) and `cosmos-ic-hack-nonprod-<suffix>` (per-PR nonprod) — same containers per entities.md, partitioned `/biller_id` (`/id` for `billers`), so nonprod smoke tests never touch prod data |
-| AI Foundry account + project | Hosts agents and an optional authenticated `ic-shared-context-mcp` project connection (services.md's "AI Foundry" plane) |
+| AI Foundry account + project | Hosts agents and an optional authenticated `ic-shared-context-mcp` project connection (services.md's "AI Foundry" plane). The prod workload identity receives `Foundry Agent Consumer`; optional CI principals receive `Foundry Owner` through `foundryOwnerPrincipalIds` |
 | AKS (2-4 node autoscale, kubenet, managed Entra ID + Azure RBAC) | Runs services + agents; optional `aksDeploymentPrincipalIds` receive Cluster User + RBAC Cluster Admin (needed to apply the overlays' own Role/RoleBinding and Gateway API CRs) via Entra/Azure RBAC, never the `system:masters` administrator certificate |
 | User-assigned managed identities | `uami-ic-hack-workload` authenticates to **prod** Cosmos, AI Foundry, and Blob read; `uami-ic-hack-nonprod-workload` authenticates to **nonprod** Cosmos only (per-env data-plane isolation — a nonprod pod can never reach prod Cosmos); `uami-ic-hack-publisher` authenticates to Cosmos and Blob write. All secret-less |
 | Application Insights (workspace-based, on `log-ic-hack`) | Correlated traces/logs for services using the Azure Monitor OpenTelemetry Distro — just needs the `appInsightsConnectionString` output, no in-cluster OTEL collector |

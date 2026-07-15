@@ -76,3 +76,23 @@ jobs:
 
       - name: Test
         run: npm test
+
+  compliance-definition:
+    name: Compliance agent definition
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install pinned Foundry SDK
+        run: pip install azure-ai-projects==2.3.0 azure-identity==1.25.1
+
+      - name: Validate compliance definition
+        run: |
+          python -m json.tool agents/compliance/tools.json > /dev/null
+          python -m py_compile scripts/index-compliance-knowledge.py
+          python scripts/index-compliance-knowledge.py --dry-run

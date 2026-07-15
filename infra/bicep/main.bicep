@@ -27,6 +27,8 @@ param mcpApiKey string = ''
 // and API workload reader identities below.
 param payerExperienceBlobContributorPrincipalIds array = []
 param payerExperienceBlobReaderPrincipalIds array = []
+// CI identities that publish prompt-agent versions and upload the compliance file-search corpus.
+param foundryOwnerPrincipalIds array = []
 
 // Observability alerting (action group + log-search alert rules over Application Insights).
 param deployObservabilityAlerts bool = true
@@ -142,6 +144,7 @@ module aiFoundry 'modules/aiFoundry.bicep' = {
     name: 'aif-${prefix}-${suffix}'
     location: location
     workloadIdentityPrincipalId: workloadIdentity.outputs.principalId
+    foundryOwnerPrincipalIds: foundryOwnerPrincipalIds
     appInsightsId: appInsights.outputs.id
     appInsightsConnectionString: appInsights.outputs.connectionString
     mcpConnectionEnabled: mcpConnectionEnabled
