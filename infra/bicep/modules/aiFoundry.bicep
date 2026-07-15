@@ -45,7 +45,7 @@ resource project 'Microsoft.CognitiveServices/accounts/projects@2025-04-01-previ
 resource gpt54 'Microsoft.CognitiveServices/accounts/deployments@2025-04-01-preview' = {
   parent: account
   name: 'gpt-5.4'
-  sku: { name: 'GlobalStandard', capacity: 10 }
+  sku: { name: 'GlobalStandard', capacity: 500 }
   properties: {
     model: { format: 'OpenAI', name: 'gpt-5.4', version: '2026-03-05' }
   }
@@ -54,7 +54,7 @@ resource gpt54 'Microsoft.CognitiveServices/accounts/deployments@2025-04-01-prev
 resource gpt54Mini 'Microsoft.CognitiveServices/accounts/deployments@2025-04-01-preview' = {
   parent: account
   name: 'gpt-5.4-mini'
-  sku: { name: 'GlobalStandard', capacity: 10 }
+  sku: { name: 'GlobalStandard', capacity: 500 }
   properties: {
     model: { format: 'OpenAI', name: 'gpt-5.4-mini', version: '2026-03-17' }
   }
