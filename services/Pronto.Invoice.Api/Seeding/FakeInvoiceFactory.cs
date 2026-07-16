@@ -105,12 +105,13 @@ public static class FakeInvoiceFactory
 
     /// <summary>
     /// A stable invoice id derived from the biller, account, and the invoice's <em>slot</em> in the
-    /// seed set (its position, not its content). Re-seeding the same account overwrites slot-for-slot
-    /// via upsert, so re-publishing after onboarding changed the profile replaces the earlier demo
-    /// invoices instead of piling a second set alongside them (the account reflects only the latest
-    /// seed). Deriving the id from the description instead would let a changed category set produce
-    /// new ids and accumulate stale invoices. The Cosmos and in-memory repositories both upsert by
-    /// <c>id</c>.
+    /// seed set (its position, not its content). Re-seeding the same account overwrites slot-for-slot,
+    /// so re-publishing after onboarding changed the profile replaces the earlier demo invoices
+    /// instead of piling a second set alongside them. Deriving the id from the description instead
+    /// would let a changed category set produce new ids and accumulate stale invoices. Slots that a
+    /// <em>smaller</em> new set no longer covers are removed by the seed's account-scoped replacement
+    /// (<see cref="Repositories.IInvoiceRepository.ReplaceAccountAsync"/>), so the account reflects
+    /// only the latest seed even when it shrinks.
     /// </summary>
     private static string SeedId(string billerId, string accountNumber, int slot)
     {

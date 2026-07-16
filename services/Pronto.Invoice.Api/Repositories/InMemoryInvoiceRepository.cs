@@ -36,6 +36,25 @@ public sealed class InMemoryInvoiceRepository : IInvoiceRepository
         return Task.CompletedTask;
     }
 
+    public Task ReplaceAccountAsync(
+        string billerId,
+        string accountNumber,
+        IReadOnlyList<InvoiceDocument> invoices,
+        CancellationToken cancellationToken = default)
+    {
+        var partition = _byBiller.GetOrAdd(billerId, static _ => new List<InvoiceDocument>());
+        lock (partition)
+        {
+            // Drop every prior invoice for this account (including slots that a smaller new set no
+            // longer covers), then add the new set. Mirrors the Cosmos delete-then-upsert below.
+            partition.RemoveAll(
+                existing => string.Equals(existing.AccountNumber, accountNumber, StringComparison.Ordinal));
+            partition.AddRange(invoices);
+        }
+
+        return Task.CompletedTask;
+    }
+
     public Task PurgeByBillerAsync(string billerId, CancellationToken cancellationToken = default)
     {
         _byBiller.TryRemove(billerId, out _);

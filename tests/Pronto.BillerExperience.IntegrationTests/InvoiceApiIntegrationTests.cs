@@ -140,6 +140,40 @@ public sealed class InvoiceApiIntegrationTests : IClassFixture<TestingAppFactory
         Assert.All(list.Invoices, invoice => Assert.DoesNotContain("statement", invoice.Description));
     }
 
+    [Fact]
+    public async Task ReSeedingWithFewerInvoicesDropsTheEarlierExtraSlots()
+    {
+        var client = _factory.CreateClient();
+        const string biller = "shrinking-profile-biller";
+        const string account = "4421";
+        var seedBase = $"/billers/{biller}/invoices";
+
+        // First publish: five categories → five slots. A later re-publish (e.g. requeuing a failed
+        // deployment after the biller reduced categories) yields only two. The account must not
+        // retain the three shrunk-away slots.
+        var larger = new[]
+        {
+            new SeedSpec("Water & sewer", 5200, 14, "Alex Rivera", "Water & sewer", "yellow"),
+            new SeedSpec("Stormwater", 2600, 21, "Jordan Chen", "Stormwater", "green"),
+            new SeedSpec("Waste collection", 3100, 30, "Sam Okafor", "Waste collection", "green"),
+            new SeedSpec("Recycling", 1500, 30, "Sam Okafor", "Recycling", "green"),
+            new SeedSpec("Street lighting", 900, 30, "Sam Okafor", "Street lighting", "green"),
+        };
+        var smaller = new[]
+        {
+            new SeedSpec("Water & sewer", 5200, 14, "Alex Rivera", "Water & sewer", "yellow"),
+            new SeedSpec("Stormwater", 2600, 21, "Jordan Chen", "Stormwater", "green"),
+        };
+
+        await client.PostAsJsonAsync($"{seedBase}/seed", new SeedRequest(null, account, larger), Wire);
+        await client.PostAsJsonAsync($"{seedBase}/seed", new SeedRequest(null, account, smaller), Wire);
+
+        var list = await client.GetFromJsonAsync<InvoiceList>($"{seedBase}?account_number={account}", Wire);
+        Assert.NotNull(list);
+        Assert.Equal(2, list!.Invoices.Count);
+        Assert.All(list.Invoices, invoice => Assert.DoesNotContain("Waste", invoice.Description));
+    }
+
     private sealed record SeedRequest(int? Count, string? AccountNumber, IReadOnlyList<SeedSpec>? Invoices = null);
 
     private sealed record SeedSpec(
