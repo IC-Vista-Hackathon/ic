@@ -40,6 +40,15 @@ public static partial class ResearchBrandApplicator
         var secondary = IsBlank(brand.SecondaryColor)
             ? NormalizeHex(Lookup(evidence, BrandEvidenceFacts.SecondaryColor)) ?? brand.SecondaryColor
             : brand.SecondaryColor;
+
+        // A biller site often exposes a single brand hue. Rather than fabricate an unrelated second
+        // color (or leave the draft unpublishable — the compliance gate requires two valid colors),
+        // derive the secondary as a shade of the researched/explicit primary so it stays on-brand.
+        if (IsBlank(secondary) && DeriveSecondary(primary) is { } derived)
+        {
+            secondary = derived;
+        }
+
         var logo = IsBlank(brand.LogoAssetId)
             ? SameOriginLogo(Lookup(evidence, BrandEvidenceFacts.LogoUrl), biller.Website) ?? brand.LogoAssetId
             : brand.LogoAssetId;
@@ -141,6 +150,28 @@ public static partial class ResearchBrandApplicator
         }
 
         return digits.Length == 6 && digits.All(Uri.IsHexDigit) ? $"#{digits.ToLowerInvariant()}" : null;
+    }
+
+    // Produces an on-brand companion color from a single primary: light primaries are darkened and
+    // dark primaries are lightened by ~25%, so the two are always visibly distinct. Returns null for
+    // anything that isn't a valid hex color.
+    private static string? DeriveSecondary(string? primary)
+    {
+        if (NormalizeHex(primary) is not { } hex)
+        {
+            return null;
+        }
+
+        var red = Convert.ToInt32(hex.Substring(1, 2), 16);
+        var green = Convert.ToInt32(hex.Substring(3, 2), 16);
+        var blue = Convert.ToInt32(hex.Substring(5, 2), 16);
+        var lighten = (red + green + blue) / 3 < 128;
+
+        static int Shift(int channel, bool lighten) => lighten
+            ? channel + (int)Math.Round((255 - channel) * 0.25)
+            : (int)Math.Round(channel * 0.75);
+
+        return $"#{Shift(red, lighten):x2}{Shift(green, lighten):x2}{Shift(blue, lighten):x2}";
     }
 
     // Only a first-party, absolute HTTPS logo on the biller's own host is accepted as a brand asset

@@ -132,6 +132,22 @@ public sealed class BrandEvidenceResearchTests
     }
 
     [Fact]
+    public void ApplyDerivesSecondaryFromPrimaryWhenSiteHasOneColor()
+    {
+        var definition = UnbrandedDefinition();
+        var research = ResearchWith(
+            (BrandEvidenceFacts.PrimaryColor, "#ff5a1f"),
+            (BrandEvidenceFacts.LogoUrl, "https://vista.example/logo.svg"));
+
+        var applied = ResearchBrandApplicator.Apply(definition, Biller(), research);
+
+        Assert.Equal("#ff5a1f", applied.Brand.PrimaryColor);
+        // A single researched color yields a derived, on-brand secondary so the draft can publish.
+        Assert.Matches("^#[0-9a-f]{6}$", applied.Brand.SecondaryColor);
+        Assert.NotEqual(applied.Brand.PrimaryColor, applied.Brand.SecondaryColor);
+    }
+
+    [Fact]
     public void ApplyWithoutFactsReturnsDraftUnchanged()
     {
         var definition = UnbrandedDefinition();
