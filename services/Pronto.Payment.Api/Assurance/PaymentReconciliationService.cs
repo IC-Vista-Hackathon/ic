@@ -96,9 +96,11 @@ public sealed partial class PaymentReconciliationService
 
             CheckTotal(record, findings);
 
-            // Confirmations are only client-visible once finalized; a pending record's provisional
-            // code is not a claimable confirmation, so it is excluded from uniqueness/mapping.
-            if (record.IsFinalized && !string.IsNullOrWhiteSpace(record.Confirmation))
+            // Only a genuinely settled payment (Succeeded/Scheduled) owns a claimable confirmation.
+            // A pending record's code is provisional, and a failed payment keeps its minted code but
+            // never actually settled — treating either as an owner would let a hallucinated
+            // confirmation backed by a non-settled record pass reconciliation.
+            if (IsSettled(record.Lifecycle) && !string.IsNullOrWhiteSpace(record.Confirmation))
             {
                 if (!confirmationOwners.TryGetValue(record.Confirmation, out var owners))
                 {
@@ -132,6 +134,9 @@ public sealed partial class PaymentReconciliationService
         EmitTelemetry(billerId, result);
         return result;
     }
+
+    private static bool IsSettled(PaymentLifecycle lifecycle) =>
+        lifecycle is PaymentLifecycle.Succeeded or PaymentLifecycle.Scheduled;
 
     private static void CheckTotal(PaymentRecord record, List<ReconciliationFinding> findings)
     {

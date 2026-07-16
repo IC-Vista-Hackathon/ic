@@ -103,6 +103,23 @@ public sealed class PaymentReconciliationServiceTests
     }
 
     [Fact]
+    public async Task ClaimedConfirmationBackedOnlyByFailedPaymentIsFlagged()
+    {
+        var biller = Guid.NewGuid().ToString();
+        // A failed payment keeps its minted confirmation but never settled; a UI-claimed
+        // confirmation matching only it is a hallucination, not a valid mapping.
+        await store.BeginAsync(Record(biller, PaymentLifecycle.Failed, "PRONTO-FAIL01"));
+
+        var result = await NewService().ReconcileAsync(
+            null, new ReconciliationRequest(["PRONTO-FAIL01"]), default);
+
+        Assert.False(result.Ok);
+        var finding = Assert.Single(
+            result.Findings, f => f.Code == ReconciliationFindingCodes.ConfirmationWithoutRecord);
+        Assert.Equal("PRONTO-FAIL01", finding.Confirmation);
+    }
+
+    [Fact]
     public async Task ClaimedConfirmationWithRecordPasses()
     {
         var biller = Guid.NewGuid().ToString();
