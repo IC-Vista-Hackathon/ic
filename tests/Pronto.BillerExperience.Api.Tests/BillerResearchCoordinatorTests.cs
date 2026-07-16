@@ -78,6 +78,23 @@ public sealed class BillerResearchCoordinatorTests
     }
 
     [Fact]
+    public async Task NoCitedFactsFromOneAgentDoesNotDegradeRun()
+    {
+        var catalog = new StubCatalog([Agent("one", "biller_research"), Agent("two", "biller_research")]);
+        var dispatcher = new StubDispatcher((agent, _) => agent.Id == "one"
+            ? Completed("shared")
+            : CompletedWith(agent.Id, ResearchOutcome.Skipped, "research.no_cited_facts",
+                "No verified first-party website was identified."));
+        var coordinator = Create(catalog, dispatcher, ["one", "two"]);
+
+        var response = await coordinator.ResearchAsync(Request());
+
+        Assert.Equal(ResearchOutcome.Completed, response.Outcome);
+        Assert.Null(response.ErrorCode);
+        Assert.Contains("research.no_cited_facts", response.Warnings);
+    }
+
+    [Fact]
     public async Task ConsolidationAdvisoryWarningDoesNotDegradeRun()
     {
         var catalog = new StubCatalog([Agent("one", "biller_research"), Agent("two", "biller_research")]);

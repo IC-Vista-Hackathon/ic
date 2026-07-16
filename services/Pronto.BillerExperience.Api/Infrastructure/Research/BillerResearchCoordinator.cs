@@ -184,10 +184,22 @@ public sealed partial class BillerResearchCoordinator(
         return response;
     }
 
+    // "research.*" codes that describe a legitimate empty/skip outcome rather than a system fault.
+    // "We searched and found no citable first-party source" is not a degradation — the agents ran
+    // fine, there was simply nothing to cite — so these do not flip the badge to Degraded.
+    private static readonly HashSet<string> NonDegradingResearchCodes = new(StringComparer.Ordinal)
+    {
+        "research.no_cited_facts",
+        "research.skipped",
+        "research.agent_ineligible",
+        "research.not_configured",
+    };
+
     // A run is degraded only when an operational warning is present. Operational warnings are the
-    // orchestration's own "research.*" codes (an agent failed, timed out, was skipped, consolidation
-    // or MCP context failed). Free-form data-quality caveats an agent writes into its own result are
-    // advisory and are surfaced without flipping the badge, so a clean run reports Completed.
+    // orchestration's own "research.*" codes for genuine system faults (an agent failed, timed out,
+    // consolidation or MCP context failed) — excluding the no-evidence/skip outcomes above. Free-form
+    // data-quality caveats an agent writes into its own result are advisory and are surfaced without
+    // flipping the badge, so a clean or no-evidence run reports Completed.
     private BillerResearchResponse FinalizeOutcome(BillerResearchResponse response)
     {
         var warnings = response.Warnings.Distinct(StringComparer.Ordinal).ToArray();
@@ -217,7 +229,7 @@ public sealed partial class BillerResearchCoordinator(
     }
 
     private static bool IsOperationalWarning(string code) =>
-        code.StartsWith("research.", StringComparison.Ordinal);
+        code.StartsWith("research.", StringComparison.Ordinal) && !NonDegradingResearchCodes.Contains(code);
 
     private async Task<AgentResult> DispatchAsync(
         ResearchAgentDescriptor agent,
