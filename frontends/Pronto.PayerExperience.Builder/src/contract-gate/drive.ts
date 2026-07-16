@@ -44,7 +44,16 @@ export async function drivePaymentFlowByRoles(page: Page, url: string, serverCon
     // Confirm the payment. Exclude "Review Payment" by anchoring on the start of the label.
     const payButton = main.getByRole('button', { name: /^(pay|processing|confirm|schedule)/i }).first();
     await payButton.waitFor({ state: 'visible', timeout });
-    await payButton.click();
+    // Fire the confirm control twice in the same synchronous tick — a real rapid double-press —
+    // to actually exercise the bundle's exactly-once / in-flight guard. Paired with the harness's
+    // payment latency (delayMs), the second press races the first still-in-flight request: a
+    // compliant bundle collapses this to a single POST, while one lacking double-submit
+    // protection emits two and fails the gate. Dispatching in-page (rather than two awaited
+    // Playwright clicks) is what makes the two presses race instead of serialize.
+    await payButton.evaluate((el: { click: () => void }) => {
+      el.click();
+      el.click();
+    });
 
     const rendered = await readRenderedConfirmation(page, serverConfirmation, timeout);
     return { renderedConfirmation: rendered };

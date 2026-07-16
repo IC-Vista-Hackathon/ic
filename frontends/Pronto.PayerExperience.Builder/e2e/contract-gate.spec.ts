@@ -55,7 +55,13 @@ function fixtureHtml(variant: Variant): string {
       show('method');
     });
     document.getElementById('to-review').addEventListener('click', () => show('review'));
+    // Every variant except 'double-post' guards against re-entry while a payment is in flight,
+    // like the real bundle — so the driver's rapid double-press collapses to a single POST.
+    // 'double-post' omits the guard, modelling a bundle that double-charges on a double press.
+    let paying = false;
     document.getElementById('pay').addEventListener('click', async () => {
+      if (VARIANT !== 'double-post' && paying) return;
+      paying = true;
       const body = {
         biller_id: 'biller-1',
         invoice_id: VARIANT === 'fabricated-invoice' ? 'inv-FAKE' : invoiceId,
@@ -67,9 +73,7 @@ function fixtureHtml(variant: Variant): string {
       if (VARIANT === 'client-fee') body.total_cents = 12750;
       const headers = { 'content-type': 'application/json' };
       if (VARIANT !== 'no-idempotency') headers['idempotency-key'] = crypto.randomUUID();
-      const post = () => fetch('/payments', { method: 'POST', headers, body: JSON.stringify(body) });
-      const res = await post();
-      if (VARIANT === 'double-post') await post();
+      const res = await fetch('/payments', { method: 'POST', headers, body: JSON.stringify(body) });
       const payment = await res.json();
       document.getElementById('code').textContent =
         VARIANT === 'hallucinated-confirmation' ? 'PRONTO-HALLUCINATED' : payment.confirmation;

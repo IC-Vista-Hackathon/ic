@@ -40,6 +40,9 @@ export interface UrlGateInputs {
   definition: unknown;
   invoices?: InvoiceFixture[];
   serverConfirmation?: string;
+  // How long the mocked payment response is held so the driver's rapid second confirm press
+  // races the first in-flight request (defaults to 250ms).
+  paymentLatencyMs?: number;
 }
 
 // Same gate against an already-served URL, launching its own browser — the seam the runtime
@@ -67,6 +70,10 @@ export async function runContractGateOnPage(page: Page, inputs: UrlGateInputs): 
     invoices: inputs.invoices,
     paymentResponse: { confirmation: serverConfirmation, amount_cents: 12500, fee_cents: 250, total_cents: 12750, status: 'succeeded' },
     recorder,
+    // Hold the payment response briefly so the driver's rapid second confirm press races the
+    // first request while it's still in flight — this is what actually exercises the bundle's
+    // exactly-once guard rather than letting the two presses serialize.
+    delayMs: inputs.paymentLatencyMs ?? 250,
   });
 
   const drive = await drivePaymentFlowByRoles(page, inputs.url, serverConfirmation);
