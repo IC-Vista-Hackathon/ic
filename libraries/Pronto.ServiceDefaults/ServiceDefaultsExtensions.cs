@@ -54,7 +54,7 @@ public static class ServiceDefaultsExtensions
         const float keepEverything = 1.0f;
         if (string.IsNullOrWhiteSpace(configuredValue)
             || !float.TryParse(configuredValue, NumberStyles.Float, CultureInfo.InvariantCulture, out var ratio)
-            || ratio <= 0f || ratio > 1f)
+            || !(ratio > 0f && ratio <= 1f))
         {
             return keepEverything;
         }
