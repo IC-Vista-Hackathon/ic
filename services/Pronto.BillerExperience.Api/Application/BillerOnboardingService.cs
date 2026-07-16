@@ -30,7 +30,7 @@ public sealed partial class BillerOnboardingService(
     IInvoiceSeeder? invoiceSeeder = null,
     AgentContextService? agentContextService = null,
     IComplianceReviewService? complianceReviewService = null,
-    BillingDiscoveryEngine? billingDiscovery = null)
+    IBillingDiscovery? billingDiscovery = null)
 {
     private const string RunId = "onboarding";
     private readonly IComplianceReviewService _compliance = complianceReviewService ?? CreateDefaultComplianceService();

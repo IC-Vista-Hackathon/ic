@@ -3,6 +3,9 @@
     <Description>Shared host defaults for Pronto service APIs: error envelope, JSON wire policy, health checks.</Description>
   </PropertyGroup>
   <ItemGroup>
+    <InternalsVisibleTo Include="Pronto.ServiceDefaults.Tests" />
+  </ItemGroup>
+  <ItemGroup>
     <FrameworkReference Include="Microsoft.AspNetCore.App" />
     <PackageReference Include="Microsoft.AspNetCore.Authentication.JwtBearer" />
     <PackageReference Include="Azure.Identity" />

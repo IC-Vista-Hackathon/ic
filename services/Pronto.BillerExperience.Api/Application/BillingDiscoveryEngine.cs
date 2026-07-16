@@ -11,7 +11,7 @@ namespace Pronto.BillerExperience.Api.Application;
 /// these questions. When the biller omits an answer, the engine may apply bounded conservative
 /// defaults, but every assumed value is retained as explicit provenance and remains editable.
 /// </summary>
-public sealed partial class BillingDiscoveryEngine(ILogger<BillingDiscoveryEngine> logger)
+public sealed partial class BillingDiscoveryEngine(ILogger<BillingDiscoveryEngine> logger) : IBillingDiscovery
 {
     private static readonly Regex SplitCategories = new(@"\s*(?:,|;|\band\b|&)\s*", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
     private static readonly Regex GracePeriod = new(@"\b(?<days>\d{1,3})\s*[- ]?day(?:s)?\b", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
