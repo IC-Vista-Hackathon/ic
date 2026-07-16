@@ -9,8 +9,9 @@ namespace Pronto.BillerExperience.Api.Tests;
 
 /// <summary>
 /// Contract tests for the payer seeder's HTTP behavior: it posts a well-formed snake_case
-/// <c>RegisterPayerRequest</c> to <c>/payers</c>, treats a <c>409 Conflict</c> as an idempotent
-/// no-op (re-publishing must not create a second demo payer), and retries transient failures.
+/// <c>RegisterPayerRequest</c> to the dedicated <c>/payers/seed</c> endpoint, treats a
+/// <c>409 Conflict</c> as an idempotent no-op (re-publishing must not create a second demo payer),
+/// and retries transient failures.
 /// </summary>
 public sealed class HttpPayerSeederTests
 {
@@ -33,7 +34,7 @@ public sealed class HttpPayerSeederTests
 
         var request = Assert.Single(handler.Requests);
         Assert.Equal(HttpMethod.Post, request.Method);
-        Assert.Equal("http://payer-account.local/payers", request.Uri);
+        Assert.Equal("http://payer-account.local/payers/seed", request.Uri);
 
         using var doc = JsonDocument.Parse(request.Body);
         var root = doc.RootElement;

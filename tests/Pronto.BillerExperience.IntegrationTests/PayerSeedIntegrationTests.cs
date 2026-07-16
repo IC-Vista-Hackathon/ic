@@ -42,7 +42,7 @@ public sealed class PayerSeedIntegrationTests : IClassFixture<PayerAccountAppFac
         const string biller = "seed-biller-a";
         const string account = "4421";
 
-        var seed = await client.PostAsJsonAsync("payers", DemoPayer(biller, account), Wire);
+        var seed = await client.PostAsJsonAsync("payers/seed", DemoPayer(biller, account), Wire);
         Assert.Equal(HttpStatusCode.Created, seed.StatusCode);
         var created = await seed.Content.ReadFromJsonAsync<PayerResponse>(Wire);
 
@@ -61,17 +61,19 @@ public sealed class PayerSeedIntegrationTests : IClassFixture<PayerAccountAppFac
         const string biller = "seed-biller-b";
         const string account = "4421";
 
-        var first = await client.PostAsJsonAsync("payers", DemoPayer(biller, account), Wire);
+        var first = await client.PostAsJsonAsync("payers/seed", DemoPayer(biller, account), Wire);
         Assert.Equal(HttpStatusCode.Created, first.StatusCode);
         var firstPayer = await first.Content.ReadFromJsonAsync<PayerResponse>(Wire);
 
-        // The seeder maps this conflict to a successful no-op; the service must reject the duplicate
-        // rather than create a second payer.
-        var second = await client.PostAsJsonAsync("payers", DemoPayer(biller, account), Wire);
-        Assert.Equal(HttpStatusCode.Conflict, second.StatusCode);
+        // The seed endpoint is idempotent: re-seeding returns the existing payer (200 OK) rather
+        // than creating a second one, so re-publishing never duplicates the demo payer.
+        var second = await client.PostAsJsonAsync("payers/seed", DemoPayer(biller, account), Wire);
+        Assert.Equal(HttpStatusCode.OK, second.StatusCode);
+        var secondPayer = await second.Content.ReadFromJsonAsync<PayerResponse>(Wire);
+        Assert.Equal(firstPayer!.PayerId, secondPayer!.PayerId);
 
         var found = await client.GetFromJsonAsync<PayerResponse>(
             $"payers?biller_id={biller}&account_number={account}", Wire);
-        Assert.Equal(firstPayer!.PayerId, found!.PayerId);
+        Assert.Equal(firstPayer.PayerId, found!.PayerId);
     }
 }

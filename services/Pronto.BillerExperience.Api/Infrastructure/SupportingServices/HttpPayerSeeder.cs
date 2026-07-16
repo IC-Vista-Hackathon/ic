@@ -9,11 +9,11 @@ namespace Pronto.BillerExperience.Api.Infrastructure.SupportingServices;
 
 /// <summary>
 /// Seeds the demo payer into the PayerAccount service over HTTP, mirroring
-/// <see cref="HttpInvoiceSeeder"/>: it picks a deterministic demo payer, POSTs it to
-/// <c>/payers</c>, and propagates the correlation/biller headers. Idempotency is inherent — the
-/// PayerAccount service rejects a duplicate per-biller email or an already-linked account with
-/// <c>409 Conflict</c>, which this seeder treats as a successful no-op so re-publishing never
-/// creates a second demo payer.
+/// <see cref="HttpInvoiceSeeder"/>: it picks a deterministic demo payer, POSTs it to the dedicated
+/// <c>/payers/seed</c> endpoint (distinct from payer-facing registration), and propagates the
+/// correlation/biller headers. Idempotency is inherent — the seed endpoint returns the existing
+/// demo payer (<c>200</c>) when one is already registered for the account, so re-publishing never
+/// creates a second demo payer. A <c>409 Conflict</c> is also tolerated defensively as a no-op.
 /// </summary>
 public sealed partial class HttpPayerSeeder(
     HttpClient http,
@@ -58,14 +58,14 @@ public sealed partial class HttpPayerSeeder(
             {
                 try
                 {
-                    using var message = new HttpRequestMessage(HttpMethod.Post, "payers")
+                    using var message = new HttpRequestMessage(HttpMethod.Post, "payers/seed")
                     {
                         Content = JsonContent.Create(request, options: WireOptions)
                     };
                     using var response = await http.SendAsync(message, cancellationToken);
 
-                    // The demo payer already exists (duplicate email or already-linked account):
-                    // seeding is idempotent, so a conflict is a successful no-op, not an error.
+                    // Defensive: the seed endpoint returns 200 for an already-seeded payer, but a
+                    // race could still surface a conflict — treat it as an idempotent no-op too.
                     if (response.StatusCode == HttpStatusCode.Conflict)
                     {
                         LogAlreadySeeded(logger, billerId, Activity.Current?.TraceId.ToString());
