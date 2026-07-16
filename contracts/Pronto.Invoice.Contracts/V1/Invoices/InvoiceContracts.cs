@@ -34,10 +34,37 @@ public sealed class InvoiceStatusJsonConverter : JsonStringEnumConverter<Invoice
 /// Body for <c>POST /billers/{id}/invoices/seed</c> (internal fake-data seed at onboarding).
 /// All fields optional — the service seeds a sensible default demo set when omitted.
 /// </summary>
+/// <remarks>
+/// Per "agents configure, deterministic services execute": the caller (Biller Experience side,
+/// which owns onboarding and the biller profile) may supply <see cref="Invoices"/> — pre-generated,
+/// biller-relevant demo line items — and the Invoice service persists them as-is. When
+/// <see cref="Invoices"/> is omitted the service falls back to a generic index-driven demo set
+/// (optionally themed by <see cref="BillType"/>). The Invoice service never hand-authors a fixed
+/// set keyed on <see cref="BillType"/>.
+/// </remarks>
 public sealed record SeedInvoicesRequest(
     int? Count = null,
     string? AccountNumber = null,
-    string? BillType = null);
+    string? BillType = null,
+    IReadOnlyList<SeedInvoiceSpec>? Invoices = null);
+
+/// <summary>
+/// A caller-supplied demo invoice line item. The caller chooses biller-relevant content; the
+/// Invoice service stamps biller/account scoping, a lifecycle status of <c>due</c>, and anchors
+/// <see cref="DueInDays"/> to its own clock. Money is integer cents; <see cref="DueInDays"/> is a
+/// relative offset from "today" so seeded due dates stay stable regardless of when the seed runs.
+/// <see cref="Type"/>, <see cref="StatusColor"/>, <see cref="Note"/>, and <see cref="NoteEmphasis"/>
+/// are optional demo presentation hints layered on top of the payment lifecycle status.
+/// </summary>
+public sealed record SeedInvoiceSpec(
+    string Description,
+    int AmountCents,
+    int DueInDays,
+    string? PayerName = null,
+    string? Type = null,
+    string? StatusColor = null,
+    string? Note = null,
+    bool NoteEmphasis = false);
 
 /// <summary>Result of a seed run — echoes what was generated so the caller can preview it.</summary>
 public sealed record SeedInvoicesResponse(

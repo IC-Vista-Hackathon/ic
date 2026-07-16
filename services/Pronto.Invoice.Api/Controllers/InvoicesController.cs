@@ -58,7 +58,7 @@ public sealed partial class InvoicesController : ControllerBase
 
         var today = DateOnly.FromDateTime(_timeProvider.GetUtcNow().UtcDateTime);
         var invoices = FakeInvoiceFactory.Create(
-            billerId, accountNumber, request.Count, request.BillType, today);
+            billerId, accountNumber, request.Count, request.BillType, today, request.Invoices);
 
         await _repository.AddRangeAsync(invoices, cancellationToken);
         LogInvoicesSeeded(_logger, billerId, accountNumber, invoices.Count, Activity.Current?.TraceId.ToString());

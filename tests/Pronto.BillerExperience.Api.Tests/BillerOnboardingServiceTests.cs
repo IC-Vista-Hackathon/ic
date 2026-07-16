@@ -335,9 +335,9 @@ public sealed class BillerOnboardingServiceTests
         {
             BaseAddress = new Uri("http://invoice.test/"),
         };
-        var seeder = new HttpInvoiceSeeder(client, NullLogger<HttpInvoiceSeeder>.Instance);
+        var seeder = new HttpInvoiceSeeder(client, new DeterministicSeedInvoiceGenerator(), NullLogger<HttpInvoiceSeeder>.Instance);
 
-        await seeder.SeedAsync("biller-77", "Utility", CancellationToken.None);
+        await seeder.SeedAsync(new SeedBillerContext("biller-77", "City of Vista", "Utility", null), CancellationToken.None);
 
         Assert.Equal("corr-xyz", handler.CorrelationHeader);
         Assert.Equal("biller-77", handler.BillerHeader);
@@ -539,12 +539,15 @@ public sealed class BillerOnboardingServiceTests
     {
         var handler = new RecordingHttpHandler();
         var client = new HttpClient(handler) { BaseAddress = new Uri("http://invoice.test/") };
-        var seeder = new HttpInvoiceSeeder(client, NullLogger<HttpInvoiceSeeder>.Instance);
+        var seeder = new HttpInvoiceSeeder(client, new DeterministicSeedInvoiceGenerator(), NullLogger<HttpInvoiceSeeder>.Instance);
 
-        await seeder.SeedAsync("biller-1", "Utility", CancellationToken.None);
+        await seeder.SeedAsync(new SeedBillerContext("biller-1", "City of Vista", "Utility", null), CancellationToken.None);
 
         Assert.Contains("\"account_number\":\"4421\"", handler.RequestBody, StringComparison.Ordinal);
         Assert.Contains("\"bill_type\":\"Utility\"", handler.RequestBody, StringComparison.Ordinal);
+        // The seeder now carries agent-chosen, biller-relevant line items rather than letting the
+        // Invoice service guess from bill_type.
+        Assert.Contains("\"invoices\":[", handler.RequestBody, StringComparison.Ordinal);
     }
 
     private static BillerOnboardingService CreateService(
@@ -570,11 +573,11 @@ public sealed class BillerOnboardingServiceTests
         public string? BillerId { get; private set; }
         public string? BillType { get; private set; }
 
-        public ValueTask SeedAsync(string billerId, string billType, CancellationToken cancellationToken)
+        public ValueTask SeedAsync(SeedBillerContext biller, CancellationToken cancellationToken)
         {
             if (failure is not null) throw failure;
-            BillerId = billerId;
-            BillType = billType;
+            BillerId = biller.BillerId;
+            BillType = biller.BillType;
             return ValueTask.CompletedTask;
         }
     }
