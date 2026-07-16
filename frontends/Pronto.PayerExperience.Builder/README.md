@@ -14,14 +14,37 @@ assemble design brief
   -> containment gate      (AST allowlist + fixed-core hash manifest — hard fail)   <-- F5
   -> build bundle          (tsc typecheck gate + vite build, base=/pay/{slug}/)
   -> inject CSP            (strict Content-Security-Policy into dist/index.html)     <-- F5
-  -> validate bundle       (scripted Playwright happy-path gate, mocked backend)
+  -> validate bundle       (Playwright UX/a11y smoke, mocked backend)
+  -> contract gate         (runtime boundary/payment-contract conformance, mocked backend) <-- F6
   -> publish bundle        (upload full dist/ to Blob Storage, flip active pointer last)
 ```
 
 The AI only ever authors the **skin** (`src/skin/theme.css` + `src/skin/chrome.tsx` in the
-PWA) — the payment flow, service calls, and money logic are stable core with fixed
-`data-testid`s the gate drives. A generated bundle that fails typecheck, build, or the
-Playwright happy path is rejected before it can be published.
+PWA) — the payment flow, service calls, and money logic are stable core. A generated bundle
+that fails typecheck, build, the UX smoke, or the contract gate is rejected before publish.
+
+### Contract gate (`src/contract-gate/`)
+
+The correctness precondition for publish. Where the Playwright run is now a pure **UX/a11y
+smoke** (flow reachable and operable by accessibility roles) and the F5 static gate proves the
+generated *source* stays inside the authorable allowlist, the contract gate proves the built
+*bundle* correctly **invokes** the sanctioned payment contract at runtime. It mounts the built
+bundle, mocks the backend with the shared harness (`src/contract-gate/harness.ts`), drives the
+flow by **accessibility roles/labels** (never `data-testid`s, so it survives a widened,
+generated structure), intercepts the network calls, and asserts the emitted requests conform:
+
+- the payment POST carries a well-formed `Idempotency-Key`;
+- it references a real invoice id returned by the lookup (no fabricated ids);
+- it sets **no** client-controlled amount or fee/total (money comes from server quote/response);
+- the confirmation the UI renders equals the confirmation in the (mocked) server response — a
+  fabricated/hallucinated confirmation fails the gate;
+- one user confirmation → exactly one payment POST (double-submit safe).
+
+The rule engine (`evaluate.ts`) is a pure function, unit-tested exhaustively without a browser
+(`evaluate.test.ts`); the browser-driven fixture e2e (`e2e/contract-gate.spec.ts`) proves the
+full role-driven capture pipeline — a compliant flow passes and each misbehaving flow fails
+with a specific violation. The gate emits a machine-readable report
+(`.artifacts/{slug}/{rev}/contract-gate-report.json`) consistent with the F5 gate report.
 
 ## Static containment gate (`src/gate/`)
 
