@@ -136,7 +136,6 @@ public sealed partial class CanaryPaymentRunner
     private CanaryOutcome Assert(
         CanaryTarget target, PaymentRecord record, BillerPaymentConfig config, bool idempotentReplay)
     {
-        var (expectedFee, expectedTotal) = FeeCalculator.Calculate(config, record.Method, record.AmountCents);
         var settled = record.Lifecycle == PaymentLifecycle.Succeeded;
 
         string? failureCode = null;
@@ -151,11 +150,26 @@ public sealed partial class CanaryPaymentRunner
             failureCode = "missing_confirmation";
             failureDetail = "settled canary payment has no confirmation";
         }
-        else if (record.FeeCents != expectedFee || record.TotalCents != expectedTotal)
+        else if (!idempotentReplay)
         {
-            failureCode = "fee_mismatch";
+            // Fresh settlement: assert the fee/total exactly match the server-side calculator for
+            // the current config — the invariant the canary exists to prove.
+            var (expectedFee, expectedTotal) = FeeCalculator.Calculate(config, record.Method, record.AmountCents);
+            if (record.FeeCents != expectedFee || record.TotalCents != expectedTotal)
+            {
+                failureCode = "fee_mismatch";
+                failureDetail =
+                    $"stored fee/total {record.FeeCents}/{record.TotalCents} != calculator {expectedFee}/{expectedTotal}";
+            }
+        }
+        else if (!IsTotalConsistent(record))
+        {
+            // Replay of a prior settlement: the biller's fee config may have changed since, so
+            // recomputing against the current config would raise a false mismatch. Verify only that
+            // the stored fee/total remain internally consistent (amount, or amount + fee).
+            failureCode = "total_inconsistent";
             failureDetail =
-                $"stored fee/total {record.FeeCents}/{record.TotalCents} != calculator {expectedFee}/{expectedTotal}";
+                $"stored total {record.TotalCents} inconsistent with amount {record.AmountCents} + fee {record.FeeCents}";
         }
 
         var outcomeSettled = settled && failureCode is null;
@@ -202,6 +216,12 @@ public sealed partial class CanaryPaymentRunner
             AmountCents: 0, FeeCents: 0, TotalCents: 0,
             FailureCode: code, FailureDetail: detail);
     }
+
+    private static bool IsTotalConsistent(PaymentRecord record) =>
+        record.AmountCents >= 0
+        && record.FeeCents >= 0
+        && (record.TotalCents == record.AmountCents
+            || record.TotalCents == record.AmountCents + record.FeeCents);
 
     private static string MintConfirmation()
     {

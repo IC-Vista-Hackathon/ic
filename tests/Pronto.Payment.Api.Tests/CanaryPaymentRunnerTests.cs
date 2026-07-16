@@ -107,6 +107,33 @@ public sealed class CanaryPaymentRunnerTests
     }
 
     [Fact]
+    public async Task ReplayAfterFeeConfigChangeStillSettles()
+    {
+        var mutable = new MutableBillerConfigClient();
+        var workflow = new PaymentWorkflow(store, invoices, clock, NullLogger<PaymentWorkflow>.Instance);
+        var mutableRunner = new CanaryPaymentRunner(
+            store, invoices, mutable, workflow, clock, NullLogger<CanaryPaymentRunner>.Instance);
+
+        var biller = Guid.NewGuid().ToString();
+        var invoice = invoices.AddDueInvoice(biller, 10000);
+        var target = new CanaryTarget(biller, invoice.Id, "card", $"canary:{biller}");
+
+        var first = await mutableRunner.RunAsync(target, default);
+        Assert.True(first.Settled);
+        Assert.Equal(250, first.FeeCents); // 2.5% of 10000
+
+        // The biller changes its card fee after the original settlement; a replay must not flag the
+        // still-consistent stored fee/total as a mismatch against the new config.
+        mutable.CardPercent = 3.5m;
+        var replay = await mutableRunner.RunAsync(target, default);
+
+        Assert.True(replay.Settled);
+        Assert.True(replay.IdempotentReplay);
+        Assert.Null(replay.FailureCode);
+        Assert.Equal(250, replay.FeeCents);
+    }
+
+    [Fact]
     public async Task RunAllReportsAggregateOk()
     {
         var good = SeedTarget();
@@ -117,5 +144,18 @@ public sealed class CanaryPaymentRunnerTests
         Assert.Equal(2, result.TargetCount);
         Assert.False(result.Ok);
         Assert.Single(result.Outcomes, o => o.Settled);
+    }
+
+    private sealed class MutableBillerConfigClient : IBillerConfigClient
+    {
+        public decimal CardPercent { get; set; } = 2.5m;
+
+        public Task<BillerPaymentConfig> GetAsync(string billerId, CancellationToken cancellationToken)
+            => Task.FromResult(new BillerPaymentConfig(
+                PaymentMethods: ["card", "ach"],
+                CardPercent: CardPercent,
+                AchFlatCents: 150,
+                PayerPaysFee: true,
+                ReceiptMessage: "Thanks!"));
     }
 }
