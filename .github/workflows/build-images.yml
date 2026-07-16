@@ -95,6 +95,8 @@ jobs:
             api:
               - *dotnet
               - 'services/Pronto.BillerExperience.Api/**'
+              # This image bakes in the agent definitions (csproj Content + Dockerfile COPY agents/).
+              - 'agents/**'
             worker:
               - *dotnet
               - 'services/Pronto.BillerExperience.Worker/**'
@@ -121,6 +123,8 @@ jobs:
             builder:
               - '.dockerignore'
               - 'frontends/Pronto.PayerExperience.Builder/**'
+              # The builder image COPYs and installs the payments PWA source it renders from.
+              - 'frontends/Pronto.BillerPayments.Pwa/**'
 
       - name: Force full rebuild when no base is available
         if: steps.filter.outcome == 'skipped'
