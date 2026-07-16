@@ -25,9 +25,9 @@ public static partial class ResearchBrandApplicator
         }
 
         var evidence = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
-        foreach (var fact in research.Facts)
+        foreach (var fact in research.Facts.Where(fact => !string.IsNullOrWhiteSpace(fact.Value)))
         {
-            if (!evidence.ContainsKey(fact.Name) && !string.IsNullOrWhiteSpace(fact.Value))
+            if (!evidence.ContainsKey(fact.Name))
             {
                 evidence[fact.Name] = fact.Value.Trim();
             }

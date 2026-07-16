@@ -100,12 +100,10 @@ public static partial class BrandEvidenceExtractor
         }
 
         foreach (var hex in counts.OrderByDescending(pair => pair.Value).ThenBy(pair => pair.Key, StringComparer.Ordinal)
-                     .Select(pair => pair.Key))
+                     .Select(pair => pair.Key)
+                     .Where(hex => !ordered.Contains(hex, StringComparer.OrdinalIgnoreCase)))
         {
-            if (!ordered.Contains(hex, StringComparer.OrdinalIgnoreCase))
-            {
-                ordered.Add(hex);
-            }
+            ordered.Add(hex);
         }
 
         if (ordered.Count > 0)
@@ -206,9 +204,8 @@ public static partial class BrandEvidenceExtractor
     {
         var byName = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
         var byProperty = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
-        foreach (Match tag in MetaTagRegex().Matches(html))
+        foreach (var attributes in MetaTagRegex().Matches(html).Select(tag => ReadAttributes(tag.Value)))
         {
-            var attributes = ReadAttributes(tag.Value);
             if (!attributes.TryGetValue("content", out var content) || string.IsNullOrWhiteSpace(content))
             {
                 continue;
@@ -230,9 +227,8 @@ public static partial class BrandEvidenceExtractor
     private static List<LinkTag> ParseLinks(string html)
     {
         var links = new List<LinkTag>();
-        foreach (Match tag in LinkTagRegex().Matches(html))
+        foreach (var attributes in LinkTagRegex().Matches(html).Select(tag => ReadAttributes(tag.Value)))
         {
-            var attributes = ReadAttributes(tag.Value);
             if (attributes.TryGetValue("rel", out var rel) && attributes.TryGetValue("href", out var href))
             {
                 links.Add(new LinkTag(rel, href));
@@ -244,9 +240,8 @@ public static partial class BrandEvidenceExtractor
 
     private static string? ExtractLogoImage(string html)
     {
-        foreach (Match tag in ImgTagRegex().Matches(html))
+        foreach (var attributes in ImgTagRegex().Matches(html).Select(tag => ReadAttributes(tag.Value)))
         {
-            var attributes = ReadAttributes(tag.Value);
             var descriptor = string.Join(
                 ' ',
                 new[] { Value(attributes, "class"), Value(attributes, "id"), Value(attributes, "alt") });
