@@ -37,4 +37,8 @@ customEvents | where name startswith "pwa." | project timestamp, name, customDim
 
 `npm test` runs the vitest suite covering the allowlist and client bootstrap;
 `tests/browser-smoke/telemetry-smoke.mjs` verifies end-to-end delivery against a deployed
-environment (wired into the nonprod deploy workflow).
+environment (wired into the nonprod deploy workflow). It asserts the frontend behaviour — the SDK
+POSTs the expected session event carrying its flow id — and prefers a clean `200` from ingestion,
+retrying a few times. Application Insights ingestion throttling (HTTP `439`, "Daily quota
+exceeded") is an infra/quota condition rather than a frontend regression, so a persistent `439` is
+surfaced as a warning instead of failing the deploy; any other non-`200` status is a hard failure.
