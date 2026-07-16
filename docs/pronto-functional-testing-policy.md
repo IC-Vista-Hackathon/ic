@@ -60,9 +60,12 @@ gate and stays there — this is the ratchet that grows our confidence over time
 ### Environment & data isolation
 
 - Every test biller uses a unique random slug (`fn-<guid>`).
-- The suite purges everything it creates via the nonprod-only maintenance endpoint
-  (`DELETE /api/internal/test-data?biller_id=…`, enabled by `Maintenance:PurgeEnabled`, 404 in prod).
-- Cleanup is best-effort in `Dispose` and never fails a run; nonprod tolerates orphaned demo billers.
+- The suite purges what it creates via the nonprod-only maintenance endpoints (enabled by
+  `Maintenance:PurgeEnabled`, 404 in prod). Because each service owns its own store with no
+  cross-service cascade, cleanup hits each service directly: `DELETE /api/internal/test-data`
+  (biller-experience: configs/runs/deployments/biller) and `DELETE /invoices/internal/test-data`
+  (the seeded demo invoices). The suite does not create PayerAccount records, so none are purged.
+- Cleanup is best-effort in `Dispose` and never fails a run; nonprod tolerates orphaned demo data.
 
 ### Flake, timeouts, retries
 

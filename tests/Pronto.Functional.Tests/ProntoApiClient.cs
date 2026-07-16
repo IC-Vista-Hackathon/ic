@@ -100,8 +100,14 @@ public sealed class ProntoApiClient : IDisposable
 
     public async Task<bool> TryPurgeAsync(string billerId, CancellationToken ct = default)
     {
-        using var response = await _billerApi.DeleteAsync($"internal/test-data?biller_id={billerId}", ct);
-        return response.StatusCode is HttpStatusCode.NoContent;
+        // Each service owns its own store (no cross-service cascade — see CLAUDE.md), so purge the
+        // biller-experience records (configs/runs/deployments/biller) and the seeded demo invoices
+        // independently. The suite never creates PayerAccount records, so there is nothing to purge
+        // there. Both endpoints are nonprod-only (Maintenance:PurgeEnabled) and return 204.
+        using var billerResponse = await _billerApi.DeleteAsync($"internal/test-data?biller_id={billerId}", ct);
+        using var invoiceResponse = await _invoiceApi.DeleteAsync($"internal/test-data?biller_id={billerId}", ct);
+        return billerResponse.StatusCode is HttpStatusCode.NoContent
+            && invoiceResponse.StatusCode is HttpStatusCode.NoContent;
     }
 
     private static async Task<JsonNode> ReadNodeAsync(HttpResponseMessage response, CancellationToken ct)

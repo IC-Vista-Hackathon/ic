@@ -236,8 +236,10 @@ Tests: `HealthAndConfigTests.ApiLivenessAndReadinessProbesReturnOk`,
 
 - **Nonprod, never prod.** Functional tests target the nonprod gateway; they must never run against
   `pronto.eastus2.cloudapp.azure.com`.
-- **Unique, isolated test data.** Each test biller uses a unique random slug and is purged via the
-  nonprod-only `DELETE /api/internal/test-data?biller_id=…` maintenance endpoint after the run.
+- **Unique, isolated test data.** Each test biller uses a unique random slug and is purged after the
+  run via the nonprod-only maintenance endpoints on each service that owns data it created:
+  `DELETE /api/internal/test-data` (biller-experience) and `DELETE /invoices/internal/test-data`
+  (seeded demo invoices).
 - **Hard vs. degraded.** Tests distinguish outright failures from degraded/advisory research.
 - **Diagnostics.** Failures surface the request URI, status code, and response body; research checks
   read the activity feed (agent id, status, error code).
