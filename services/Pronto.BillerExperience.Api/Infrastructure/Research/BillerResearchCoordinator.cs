@@ -170,6 +170,12 @@ public sealed partial class BillerResearchCoordinator(
     {
         var warnings = response.Warnings.Distinct(StringComparer.Ordinal).ToArray();
         var operational = warnings.Where(IsOperationalWarning).ToArray();
+        var advisory = warnings.Where(warning => !IsOperationalWarning(warning)).ToArray();
+        if (advisory.Length > 0)
+        {
+            LogAdvisoryWarnings(logger, string.Join(", ", advisory), Activity.Current?.TraceId.ToString());
+        }
+
         if (operational.Length == 0)
         {
             return response with
@@ -442,6 +448,9 @@ public sealed partial class BillerResearchCoordinator(
 
     [LoggerMessage(2659, LogLevel.Warning, "Research completed degraded with operational warnings {Warnings}; trace {TraceId}")]
     private static partial void LogDegraded(ILogger logger, string warnings, string? traceId);
+
+    [LoggerMessage(2660, LogLevel.Information, "Research completed with advisory data-quality warnings {Warnings}; trace {TraceId}")]
+    private static partial void LogAdvisoryWarnings(ILogger logger, string warnings, string? traceId);
 
     [LoggerMessage(2655, LogLevel.Error, "Research coordinator consolidation threw an unexpected error; trace {TraceId}")]
     private static partial void LogConsolidationException(ILogger logger, string? traceId, Exception exception);
