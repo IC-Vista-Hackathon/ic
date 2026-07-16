@@ -13,7 +13,19 @@ public sealed record BillerExperienceDefinition(
     ExperienceUi? Ui = null,
     ExperiencePreferences? Preferences = null,
     DesignBrief? Brief = null,
-    BillingPresentation? Billing = null);
+    BillingPresentation? Billing = null,
+    TelemetryPolicy? Telemetry = null);
+
+/// <summary>
+/// Declarative posture for what the published experience is allowed to emit as browser telemetry.
+/// The payer PWA structurally excludes PII (see its <c>telemetryPolicy.ts</c>); this mirrors that
+/// intent into the config so the deterministic compliance suite can certify, per revision, that no
+/// PII field was configured for capture. Absent/empty means "no custom telemetry capture", which is
+/// the safe default.
+/// </summary>
+public sealed record TelemetryPolicy(
+    bool BrowserTelemetryEnabled = false,
+    IReadOnlyList<string>? CapturedFields = null);
 
 /// <summary>
 /// Public-safe projection of the server-owned billing policy. It contains only the details
@@ -116,7 +128,9 @@ public sealed record ExperienceContent(
     string Introduction,
     string SupportText,
     Uri PrivacyPolicyUrl,
-    Uri TermsOfServiceUrl);
+    Uri TermsOfServiceUrl,
+    Uri? RefundPolicyUrl = null,
+    string? FeeDisclosure = null);
 
 public sealed record PwaConfiguration(
     string Name,

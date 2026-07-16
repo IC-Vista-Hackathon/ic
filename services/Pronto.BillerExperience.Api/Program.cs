@@ -10,6 +10,7 @@ using Pronto.BillerExperience.Api;
 using Pronto.BillerExperience.Api.Application;
 using Pronto.BillerExperience.Api.Application.Agents;
 using Pronto.BillerExperience.Api.Application.Compliance;
+using Pronto.BillerExperience.Api.Application.Compliance.Checkers;
 using Pronto.BillerExperience.Api.Configuration;
 using Pronto.BillerExperience.Api.Infrastructure;
 using Pronto.BillerExperience.Api.Infrastructure.AI;
@@ -151,6 +152,17 @@ builder.Services.AddSingleton<IComplianceReviewService>(services => new Complian
     services.GetRequiredService<Microsoft.Extensions.Options.IOptions<BillerExperienceOptions>>(),
     services.GetRequiredService<ILogger<ComplianceReviewService>>(),
     services.GetService<IComplianceKnowledgeReviewer>()));
+
+// Deterministic compliance checker suite + signed attestation: this is the certifying gate for
+// publish (the LLM reviewer above stays advisory).
+builder.Services.AddSingleton(JurisdictionPaymentMethodPolicy.Default);
+builder.Services.AddSingleton<IComplianceChecker, FeeDisclosureChecker>();
+builder.Services.AddSingleton<IComplianceChecker, PaymentMethodJurisdictionChecker>();
+builder.Services.AddSingleton<IComplianceChecker, LegalLinksChecker>();
+builder.Services.AddSingleton<IComplianceChecker, ColorContrastChecker>();
+builder.Services.AddSingleton<IComplianceChecker, TelemetryPiiChecker>();
+builder.Services.AddSingleton(new ComplianceAttestationSigner(options.Compliance.AttestationSigningKey));
+builder.Services.AddSingleton<IComplianceAttestationService, ComplianceAttestationService>();
 builder.Services.AddSingleton<ISeedInvoiceGenerator, DeterministicSeedInvoiceGenerator>();
 if (Uri.TryCreate(options.SupportingServices.InvoiceBaseUrl, UriKind.Absolute, out var invoiceBaseUri))
 {

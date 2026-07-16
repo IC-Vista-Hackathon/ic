@@ -27,6 +27,13 @@ public sealed class ComplianceOptions
     public string FoundryAgentId { get; set; } = string.Empty;
     public bool RequireFoundryEvidence { get; set; }
     public string PolicyVersion { get; set; } = "2026-07-15";
+
+    /// <summary>
+    /// HMAC key the deterministic compliance suite signs attestations with. A development default
+    /// keeps the local/in-memory path working; production overrides it with a real secret. Must be at
+    /// least 32 characters when set explicitly (validated at startup).
+    /// </summary>
+    public string AttestationSigningKey { get; set; } = "dev-compliance-attestation-signing-key-change-me";
 }
 
 public sealed class McpOptions

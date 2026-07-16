@@ -6,6 +6,8 @@ using Pronto.Agentic.Orchestration.Abstractions;
 using Pronto.Agentic.Orchestration.Execution;
 using Pronto.BillerExperience.Api.Application;
 using Pronto.BillerExperience.Api.Application.Compliance;
+using Pronto.BillerExperience.Api.Application.Compliance.Checkers;
+using Pronto.BillerExperience.Api.Configuration;
 using Pronto.BillerExperience.Api.Infrastructure;
 using Pronto.BillerExperience.Api.Infrastructure.AI;
 using Pronto.BillerExperience.Api.Infrastructure.Persistence;
@@ -20,6 +22,7 @@ using Pronto.BillerExperience.Contracts.V1.Research;
 using Pronto.ServiceDefaults;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
+using Microsoft.Extensions.Options;
 using Newtonsoft.Json;
 using Xunit;
 
@@ -259,6 +262,84 @@ public sealed class BillerOnboardingServiceTests
         Assert.Equal(ExperienceRevisionState.Publishing, retriedExperience?.State);
         Assert.Equal(OnboardingSessionState.Publishing, retriedRun?.State);
         Assert.Equal(2, compliance.Reviews.Count(review => review.Stage == ComplianceReviewStage.Publish));
+    }
+
+    [Fact]
+    public async Task PublishIsBlockedWhenADeterministicHardCheckerFails()
+    {
+        var repository = new InMemoryBillerExperienceRepository();
+        var service = new BillerOnboardingService(
+            repository,
+            new DeterministicExperienceDraftGenerator(NullLogger<DeterministicExperienceDraftGenerator>.Instance),
+            new OrchestrationRunner(),
+            NullLogger<BillerOnboardingService>.Instance);
+        var created = await service.CreateAsync(CreateRequest(), CancellationToken.None);
+
+        // A washed-out primary color is valid hex (so it clears approval), but fails the WCAG AA
+        // contrast checker at publish — a deterministic hard failure.
+        var lowContrast = created.Draft.Definition with
+        {
+            Brand = created.Draft.Definition.Brand with { PrimaryColor = "#EEEEEE" }
+        };
+        var updated = await service.UpdateDraftAsync(
+            created.Biller.BillerId,
+            new UpdateExperienceRequest(lowContrast, created.Draft.ETag),
+            CancellationToken.None);
+        var approved = await service.ApproveAsync(
+            created.Biller.BillerId,
+            new ApproveExperienceRequest(updated.Revision, "test-user"),
+            CancellationToken.None);
+
+        var exception = await Assert.ThrowsAsync<ExperienceValidationException>(async () =>
+            await service.PublishAsync(
+                created.Biller.BillerId,
+                new PublishExperienceRequest(created.Biller.BillerId, approved.Revision),
+                CancellationToken.None));
+
+        Assert.Contains(exception.Findings, finding => finding.Code == "BRAND_CONTRAST_INSUFFICIENT");
+        var deploymentId = approved.Revision.Replace("config-", "deployment-", StringComparison.Ordinal);
+        Assert.Null(await repository.GetDeploymentAsync(
+            created.Biller.BillerId, deploymentId, CancellationToken.None));
+    }
+
+    [Fact]
+    public async Task PublishSucceedsAndPersistsASignedAttestationWhenAllCheckersPass()
+    {
+        var repository = new InMemoryBillerExperienceRepository();
+        var service = new BillerOnboardingService(
+            repository,
+            new DeterministicExperienceDraftGenerator(NullLogger<DeterministicExperienceDraftGenerator>.Instance),
+            new OrchestrationRunner(),
+            NullLogger<BillerOnboardingService>.Instance);
+        var created = await service.CreateAsync(CreateRequest(), CancellationToken.None);
+        var chat = await service.SendMessageAsync(created.Biller.BillerId, new("Ready for review"), CancellationToken.None);
+        var approved = await service.ApproveAsync(
+            created.Biller.BillerId,
+            new(chat.Draft!.Revision, "test-user"),
+            CancellationToken.None);
+
+        var deployment = await service.PublishAsync(
+            created.Biller.BillerId,
+            new PublishExperienceRequest(created.Biller.BillerId, approved.Revision),
+            CancellationToken.None);
+
+        Assert.NotNull(deployment.Attestation);
+        Assert.True(deployment.Attestation!.Passed);
+        Assert.Equal(5, deployment.Attestation.Results.Count);
+        Assert.Equal(approved.Revision, deployment.Attestation.Revision);
+
+        var record = await repository.GetDeploymentAsync(
+            created.Biller.BillerId, deployment.DeploymentId, CancellationToken.None);
+        Assert.NotNull(record?.Attestation);
+
+        // The persisted attestation verifies against the exact revision it certifies.
+        var options = Options.Create(new BillerExperienceOptions());
+        var verifier = new ComplianceAttestationService(
+            ComplianceCheckerCatalog.CreateDefault(),
+            new ComplianceAttestationSigner(options.Value.Compliance.AttestationSigningKey),
+            options);
+        var experience = await repository.GetLatestExperienceAsync(created.Biller.BillerId, CancellationToken.None);
+        Assert.True(verifier.Verify(record!.Attestation!, experience!.Definition));
     }
 
     [Fact]

@@ -5,6 +5,7 @@ using Pronto.Agentic.Orchestration.Abstractions;
 using Pronto.BillerExperience.Api.Application.Orchestration;
 using Pronto.BillerExperience.Api.Application.Agents;
 using Pronto.BillerExperience.Api.Application.Compliance;
+using Pronto.BillerExperience.Api.Application.Compliance.Checkers;
 using Pronto.BillerExperience.Api.Configuration;
 using Pronto.BillerExperience.Api.Domain;
 using Pronto.BillerExperience.Api.Infrastructure;
@@ -15,6 +16,7 @@ using Pronto.BillerExperience.Api.Infrastructure.SupportingServices;
 using Pronto.BillerExperience.Contracts.V1.Billers;
 using Pronto.BillerExperience.Contracts.V1.Billing;
 using Pronto.BillerExperience.Contracts.V1.AgentContext;
+using Pronto.BillerExperience.Contracts.V1.Compliance;
 using Pronto.BillerExperience.Contracts.V1.Deployments;
 using Pronto.BillerExperience.Contracts.V1.Experiences;
 using Pronto.BillerExperience.Contracts.V1.Onboarding;
@@ -31,10 +33,12 @@ public sealed partial class BillerOnboardingService(
     AgentContextService? agentContextService = null,
     IComplianceReviewService? complianceReviewService = null,
     IBillingDiscovery? billingDiscovery = null,
-    IPayerSeeder? payerSeeder = null)
+    IPayerSeeder? payerSeeder = null,
+    IComplianceAttestationService? complianceAttestationService = null)
 {
     private const string RunId = "onboarding";
     private readonly IComplianceReviewService _compliance = complianceReviewService ?? CreateDefaultComplianceService();
+    private readonly IComplianceAttestationService _attestation = complianceAttestationService ?? CreateDefaultAttestationService();
 
     public async ValueTask<(BillerResponse Biller, OnboardingSessionResponse Session, ExperienceRevisionResponse Draft)> CreateAsync(
         CreateBillerRequest request,
@@ -511,18 +515,24 @@ public sealed partial class BillerOnboardingService(
         var now = DateTimeOffset.UtcNow;
         var existing = await repository.GetDeploymentAsync(billerId, deploymentId, cancellationToken);
         IReadOnlyList<ComplianceFinding>? publishFindings = null;
+        ComplianceAttestation? attestation = existing?.Attestation;
         var requeuingFailedPublication =
             experience.State == ExperienceRevisionState.Failed &&
             existing?.Status == "failed";
         if (experience.State == ExperienceRevisionState.Approved || requeuingFailedPublication)
         {
+            // Deterministic compliance suite is the certifying gate for publish: it produces a signed,
+            // auditable attestation and any failing hard checker blocks publication. The LLM reviewer
+            // still runs but stays advisory — its blocking findings (e.g. fail-closed knowledge outage)
+            // are merged in without weakening the deterministic gate.
+            attestation = _attestation.Attest(biller, experience.Definition, experience.Id, experience.Version);
             publishFindings = await _compliance.ReviewAsync(
                 biller,
                 experience.Definition,
                 ComplianceReviewStage.Publish,
                 cancellationToken);
-            var blockingFindings = publishFindings
-                .Where(finding => finding.Severity == ComplianceFindingSeverity.Blocking)
+            var blockingFindings = _attestation.GatingFindings(attestation)
+                .Concat(publishFindings.Where(finding => finding.Severity == ComplianceFindingSeverity.Blocking))
                 .ToArray();
             if (blockingFindings.Length > 0)
             {
@@ -557,7 +567,8 @@ public sealed partial class BillerOnboardingService(
                             FailureMessage = null,
                             Traceparent = FormatTraceparent(Activity.Current),
                             ClaimedAt = null,
-                            LeaseExpiresAt = null
+                            LeaseExpiresAt = null,
+                            Attestation = attestation ?? existing.Attestation
                         },
                         existing.ETag,
                         cancellationToken);
@@ -585,7 +596,8 @@ public sealed partial class BillerOnboardingService(
 
             deployment = await repository.CreateDeploymentAsync(
                 new DeploymentRecord(deploymentId, billerId, experience.Version, "requested", now,
-                    Traceparent: FormatTraceparent(Activity.Current)),
+                    Traceparent: FormatTraceparent(Activity.Current),
+                    Attestation: attestation),
                 cancellationToken);
             initiatingPublication = true;
             LogPublicationRequested(logger, billerId, experience.Id, deployment.Id);
@@ -873,7 +885,9 @@ public sealed partial class BillerOnboardingService(
                 $"A simple, secure way to pay {biller.Name}.",
                 biller.Support is null ? $"Contact {biller.Name} for support." : $"Questions? Contact {biller.Support.Email}.",
                 new Uri(root, "/privacy"),
-                new Uri(root, "/terms")),
+                new Uri(root, "/terms"),
+                new Uri(root, "/refunds"),
+                $"A service fee may apply and is shown before you confirm any payment to {biller.Name}."),
             new PwaConfiguration(biller.Name, biller.Name[..Math.Min(12, biller.Name.Length)], primary, "#FFFFFF", null),
             capabilities,
             new ExperienceUi(
@@ -947,7 +961,8 @@ public sealed partial class BillerOnboardingService(
 
     private static DeploymentStatusResponse Map(DeploymentRecord record) =>
         new(record.Id, record.BillerId, $"config-{record.ConfigVersion}", ParseDeploymentState(record.Status),
-            record.PublishedUrl, record.FailureCode, record.FailureMessage, record.UpdatedAt ?? record.RequestedAt);
+            record.PublishedUrl, record.FailureCode, record.FailureMessage, record.UpdatedAt ?? record.RequestedAt,
+            record.Attestation);
 
     private static DeploymentState ParseDeploymentState(string state) => state switch
     {
@@ -968,6 +983,15 @@ public sealed partial class BillerOnboardingService(
             new CompliancePolicyEngine(options),
             options,
             Microsoft.Extensions.Logging.Abstractions.NullLogger<ComplianceReviewService>.Instance);
+    }
+
+    private static ComplianceAttestationService CreateDefaultAttestationService()
+    {
+        var options = Microsoft.Extensions.Options.Options.Create(new BillerExperienceOptions());
+        return new ComplianceAttestationService(
+            ComplianceCheckerCatalog.CreateDefault(),
+            new ComplianceAttestationSigner(options.Value.Compliance.AttestationSigningKey),
+            options);
     }
 
     private static Activity? StartActivity(string name) => BillerExperienceTelemetry.Source.StartActivity(name);
