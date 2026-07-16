@@ -123,6 +123,8 @@ if (accepted) {
   // Every attempt confirmed the frontend emits the expected event, but Application Insights
   // ingestion kept throttling (439). Treat this as a non-fatal infra warning rather than failing
   // the deploy — the frontend behaviour under test is correct.
-  log(`::warning::Application Insights ingestion throttled (${throttledStatus}) across ${maxAttempts} attempts; the ${expectedEvent} beacon was sent correctly but not accepted. This is an ingestion quota/throttle condition, not a frontend regression.`);
+  // Write the workflow command directly (no `[telemetry-smoke] ` prefix): GitHub Actions only
+  // recognizes `::warning::` as an annotation when it starts the line.
+  console.error(`::warning::Application Insights ingestion throttled (${throttledStatus}) across ${maxAttempts} attempts; the ${expectedEvent} beacon was sent correctly but not accepted. This is an ingestion quota/throttle condition, not a frontend regression.`);
   console.log(JSON.stringify({ flowId: lastThrottled.flowId, expectedEvent, beaconSeen: true, ingestionStatus: lastThrottled.status, throttled: true }));
 }
