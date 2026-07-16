@@ -48,8 +48,8 @@ log('runtime telemetry configuration present');
 
 // One attempt: load the page, confirm the telemetry client initialized (flow id) and the SDK
 // POSTed the expected event with that flow id, then return the ingestion response for inspection.
-// Frontend-behaviour failures (no flow id, no beacon, missing flow id in payload) throw so the
-// caller can retry; a null return means "retryable, try again".
+// Frontend-behaviour failures (no flow id, no beacon, missing flow id in payload) hard-fail via
+// fail() (process.exit(1)); only a throttled (439) return causes the caller to retry.
 async function attempt(browser) {
   const page = await browser.newPage();
   page.on('console', message => log(`console.${message.type()}: ${message.text().slice(0, 200)}`));
