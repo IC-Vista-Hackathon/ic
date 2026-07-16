@@ -7,13 +7,15 @@ of the road are in [`docs/pronto-functional-testing-policy.md`](../../docs/pront
 
 ## Key facts
 
-- **Not in `Pronto.slnx`** — the unit/integration `dotnet test` in CI never runs these. Run them
-  explicitly by project path.
+- **In `Pronto.slnx`** (per repo convention) so the solution-wide build/test keeps it compiling,
+  but **inert in per-PR CI**: every test skips when `PRONTO_FUNCTIONAL_BASE_URL` is unset, and CI
+  never sets it. The suite runs for real only in the nonprod deploy workflow.
 - **Target env via `PRONTO_FUNCTIONAL_BASE_URL`** — the gateway origin, e.g.
   `http://pronto-nonprod.eastus2.cloudapp.azure.com`. When unset, **every test skips**.
 - **Nonprod only.** Never point the base URL at the prod gateway.
 - Test billers use unique random slugs and are purged after the run via the nonprod-only
-  `DELETE /api/internal/test-data` maintenance endpoint.
+  `DELETE /api/internal/test-data` (biller-experience) and `DELETE /invoices/internal/test-data`
+  (seeded invoices) maintenance endpoints.
 
 ## Categories
 

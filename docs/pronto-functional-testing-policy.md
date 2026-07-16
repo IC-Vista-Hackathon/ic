@@ -26,8 +26,10 @@ functional layer, because that is the only place it is real.
 - **Black-box over HTTP.** It drives the same gateway routes the Studio and payer PWA use
   (`/api`, `/invoices`), reading responses as raw JSON so tests assert the wire contract, not
   server internals.
-- **Deliberately excluded from `Pronto.slnx`.** The unit/integration `dotnet test` in CI never runs
-  it, so it can require a reachable environment without breaking normal builds.
+- **Registered in `Pronto.slnx`** (per the repo convention) so the solution-wide build/test keeps
+  it compiling, yet it stays inert in per-PR CI: every test skips when `PRONTO_FUNCTIONAL_BASE_URL`
+  is unset (CI never sets it), so `dotnet test Pronto.slnx` builds it and skips it rather than
+  requiring a reachable environment. The suite runs for real only in the nonprod deploy workflow.
 - **Target via `PRONTO_FUNCTIONAL_BASE_URL`** (the gateway origin, e.g.
   `http://pronto-nonprod.eastus2.cloudapp.azure.com`). When unset, **every test skips** rather than
   fails — the project is inert locally until you point it at an environment.

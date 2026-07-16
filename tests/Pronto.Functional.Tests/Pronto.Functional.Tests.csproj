@@ -2,10 +2,13 @@
 
   <!--
     Black-box functional tests that drive a DEPLOYED Pronto environment (nonprod by default)
-    over HTTP. Deliberately excluded from Pronto.slnx so the unit/integration `dotnet test`
-    in CI never runs them: they require a reachable environment and are the gate that runs
-    against nonprod before a merge promotes to prod. See tests/Pronto.Functional.Tests/README.md
-    and docs/pronto-functional-testing-policy.md.
+    over HTTP. Registered in Pronto.slnx (per the repo convention) so it is built by the
+    solution-wide `dotnet build`/`dotnet test` and can't silently rot. It stays inert in per-PR
+    CI without any special filter: every test calls ProntoEnvironment.RequireBaseUrl(), which
+    skips (does not fail) when PRONTO_FUNCTIONAL_BASE_URL is unset — CI never sets it. The suite
+    runs for real only in the nonprod deploy workflow, which sets that variable, and is the gate
+    that runs before a merge promotes to prod. See tests/Pronto.Functional.Tests/README.md and
+    docs/pronto-functional-testing-policy.md.
   -->
 
   <PropertyGroup>
