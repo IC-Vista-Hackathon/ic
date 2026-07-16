@@ -852,7 +852,7 @@ export function App() {
     // Whether we can show the logo only depends on the image rendering, so load it without CORS.
     const display = new Image();
     display.onload = () => patch({ logoFetchOk: true });
-    display.onerror = () => patch({ logoFetchOk: false, extractedColors: null });
+    display.onerror = () => patch({ logoFetchOk: false });
     display.src = url;
     // Color sampling reads pixels off a canvas, which requires a CORS-clean image. When the host
     // doesn't allow it the load fails and we keep the simulated palette rather than blocking the logo.
