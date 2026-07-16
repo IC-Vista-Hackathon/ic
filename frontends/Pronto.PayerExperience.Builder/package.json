@@ -10,17 +10,18 @@
   "scripts": {
     "build:one": "tsx src/cli.ts",
     "typecheck": "tsc --noEmit",
-    "test": "tsx --test src/*.test.ts",
-    "test:e2e": "playwright test"
+    "test": "tsx --test 'src/**/*.test.ts'",
+    "test:e2e": "playwright test",
+    "gate:manifest": "tsx src/gate/regen-manifest.ts"
   },
   "dependencies": {
     "@azure/identity": "^4.5.0",
-    "@azure/storage-blob": "^12.26.0"
+    "@azure/storage-blob": "^12.26.0",
+    "typescript": "~5.7.2"
   },
   "devDependencies": {
     "@playwright/test": "^1.49.1",
     "@types/node": "^22.10.2",
-    "tsx": "^4.19.2",
-    "typescript": "~5.7.2"
+    "tsx": "^4.19.2"
   }
 }
