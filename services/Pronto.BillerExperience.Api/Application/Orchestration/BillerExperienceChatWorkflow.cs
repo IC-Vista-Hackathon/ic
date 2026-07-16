@@ -51,7 +51,8 @@ internal sealed partial class BillerExperienceChatWorkflow(
                     "Research was unavailable; continuing with supplied biller information.", research.ErrorCode),
                 ResearchOutcome.Failed => (OrchestrationEventStatus.Failed, "Research failed.", research.ErrorCode),
                 _ => (OrchestrationEventStatus.Completed, "Research completed successfully.", null)
-            });
+            },
+            research => research.Warnings);
         var research = await researchStep.ExecuteAsync(input.Biller, context, cancellationToken);
 
         if (research.Outcome == ResearchOutcome.Failed)

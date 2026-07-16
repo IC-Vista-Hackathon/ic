@@ -1,4 +1,5 @@
 using System.ComponentModel;
+using System.Diagnostics;
 using Pronto.BillerExperience.Api.Application;
 using Pronto.BillerExperience.Contracts.V1.AgentContext;
 using ModelContextProtocol.Server;
@@ -17,16 +18,10 @@ public sealed partial class AgentContextMcpTools(
         [Description("Short-lived biller/run/agent capability issued by IC orchestration.")] string capabilityToken,
         CancellationToken cancellationToken)
     {
-        try
-        {
-            var capability = capabilities.Validate(capabilityToken, writeRequired: false);
-            return await contextService.GetAsync(capability.BillerId, capability.RunId, cancellationToken);
-        }
-        catch (Exception exception) when (exception is not OperationCanceledException)
-        {
-            LogGetFailed(logger, System.Diagnostics.Activity.Current?.TraceId.ToString(), exception);
-            throw;
-        }
+        var capability = ValidateCapability("get_goal_context", capabilityToken, writeRequired: false);
+        return await InvokeAsync("get_goal_context", capability,
+            () => contextService.GetAsync(capability.BillerId, capability.RunId, cancellationToken),
+            exception => LogGetFailed(logger, Activity.Current?.TraceId.ToString(), exception));
     }
 
     [McpServerTool(Name = "append_context", Destructive = false, Idempotent = false, OpenWorld = false, UseStructuredContent = true)]
@@ -41,16 +36,16 @@ public sealed partial class AgentContextMcpTools(
         [Description("True when the content is based on public web or another external source.")] bool external,
         CancellationToken cancellationToken)
     {
-        try
+        var capability = ValidateCapability("append_context", capabilityToken, writeRequired: true);
+        return await InvokeAsync("append_context", capability, () =>
         {
-            var capability = capabilities.Validate(capabilityToken, writeRequired: true);
             var sourceUris = sources.Select(source =>
             {
                 if (!Uri.TryCreate(source, UriKind.Absolute, out var uri) || uri.Scheme != Uri.UriSchemeHttps)
                     throw new ArgumentException("Every MCP context source must be an absolute HTTPS URI.", nameof(sources));
                 return uri;
             }).ToArray();
-            return await contextService.AppendAsync(
+            return contextService.AppendAsync(
                 capability.BillerId,
                 capability.RunId,
                 new AppendAgentContextRequest(
@@ -62,10 +57,43 @@ public sealed partial class AgentContextMcpTools(
                     sourceUris,
                     external),
                 cancellationToken);
+        }, exception => LogAppendFailed(logger, scope, Activity.Current?.TraceId.ToString(), exception));
+    }
+
+    // Validate before starting the tool activity so an invalid/missing capability is recorded as a
+    // denial rather than silently vanishing — this is the path the coordinator's tokenless call hit.
+    private AgentContextCapability ValidateCapability(string toolName, string capabilityToken, bool writeRequired)
+    {
+        try
+        {
+            return capabilities.Validate(capabilityToken, writeRequired);
+        }
+        catch (UnauthorizedAccessException)
+        {
+            McpTelemetry.RecordDenied(toolName);
+            throw;
+        }
+    }
+
+    private static async ValueTask<T> InvokeAsync<T>(
+        string toolName, AgentContextCapability capability, Func<ValueTask<T>> action, Action<Exception> logFailure)
+    {
+        using var activity = McpTelemetry.StartToolActivity(toolName, capability);
+        var startedAt = Stopwatch.GetTimestamp();
+        McpTelemetry.RecordInvoked(toolName, capability, activity);
+        try
+        {
+            var result = await action();
+            McpTelemetry.RecordCompleted(
+                toolName, capability, Stopwatch.GetElapsedTime(startedAt).TotalMilliseconds, activity);
+            return result;
         }
         catch (Exception exception) when (exception is not OperationCanceledException)
         {
-            LogAppendFailed(logger, scope, System.Diagnostics.Activity.Current?.TraceId.ToString(), exception);
+            var (category, statusCode) = McpTelemetry.Categorize(exception);
+            McpTelemetry.RecordFailed(
+                toolName, capability, Stopwatch.GetElapsedTime(startedAt).TotalMilliseconds, category, statusCode, activity);
+            logFailure(exception);
             throw;
         }
     }

@@ -62,6 +62,40 @@ public sealed class OrchestrationRunnerTests
     }
 
     [Fact]
+    public async Task ObservableStepSurfacesWarningsOnCompletionEvent()
+    {
+        var sink = new CollectingSink();
+        var step = new ObservableOrchestrationStep<string, string>(
+            "research", "Research", "Searching",
+            static (input, _, _) => ValueTask.FromResult(input),
+            sink,
+            completion: _ => (OrchestrationEventStatus.Completed, "Research completed successfully.", null),
+            warnings: _ => ["conflicting phone numbers found", "some values unverifiable"]);
+
+        await step.ExecuteAsync("request", OrchestrationContext.Create());
+
+        var completed = Assert.Single(sink.Events, item => item.Status == OrchestrationEventStatus.Completed);
+        Assert.NotNull(completed.Warnings);
+        Assert.Equal(["conflicting phone numbers found", "some values unverifiable"], completed.Warnings);
+    }
+
+    [Fact]
+    public async Task ObservableStepOmitsWarningsWhenNoneProduced()
+    {
+        var sink = new CollectingSink();
+        var step = new ObservableOrchestrationStep<string, string>(
+            "research", "Research", "Searching",
+            static (input, _, _) => ValueTask.FromResult(input),
+            sink,
+            warnings: _ => []);
+
+        await step.ExecuteAsync("request", OrchestrationContext.Create());
+
+        var completed = Assert.Single(sink.Events, item => item.Status == OrchestrationEventStatus.Completed);
+        Assert.Null(completed.Warnings);
+    }
+
+    [Fact]
     public async Task ObservableStepPublishesSafeFailureDetails()
     {
         var sink = new CollectingSink();

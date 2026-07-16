@@ -26,7 +26,7 @@ public sealed partial class AgentActivityRepositorySink(
             var mapped = new AgentActivityEvent(activity.EventId, activity.Sequence, activity.RunId,
                 activity.AgentId, activity.DisplayName, MapStatus(activity.Status),
                 activity.Summary, activity.OccurredAt, activity.TraceId, activity.ErrorCode,
-                activity.Retryable, activity.Attempt, activity.DurationMs) with { Sequence = nextSequence };
+                activity.Retryable, activity.Attempt, activity.DurationMs, activity.Warnings) with { Sequence = nextSequence };
             await repository.AppendAgentActivityAsync(billerId, runId, mapped, cancellationToken);
             LogActivity(logger, billerId, activity.AgentId, activity.Status.ToString(), activity.EventId);
         }
