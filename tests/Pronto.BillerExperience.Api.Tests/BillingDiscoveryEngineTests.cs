@@ -83,6 +83,20 @@ public sealed class BillingDiscoveryEngineTests
         Assert.Empty(turn.State.Profile.Categories);
     }
 
+    [Theory]
+    [InlineData("Auto, home, and life insurance premiums", 3)]
+    [InlineData("Electric, water, gas, and sewer/municipal services", 4)]
+    [InlineData("Property tax, court fees, and municipal permit fees", 3)]
+    [InlineData("Dues, fees, and one-time charges", 3)]
+    public void PluralCategoryKeywordsAreAccepted(string answer, int expectedCategoryCount)
+    {
+        var turn = _engine.ApplyAnswer("biller", null, answer);
+
+        Assert.True(turn.AnswerAccepted);
+        Assert.Equal(expectedCategoryCount, turn.State.Profile.Categories.Count);
+        Assert.Equal(BillingDiscoveryDimension.Cadence, turn.State.CurrentQuestion?.Dimension);
+    }
+
     [Fact]
     public void AcceptedAnswersCreateBoundedGapSpecificFollowUps()
     {

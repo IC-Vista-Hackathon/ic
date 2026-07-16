@@ -169,7 +169,7 @@ public sealed partial class BillingDiscoveryEngine(ILogger<BillingDiscoveryEngin
     {
         var text = message.Trim();
         if (text.StartsWith("build ", StringComparison.OrdinalIgnoreCase) ||
-            !Regex.IsMatch(text, @"\b(premiums?|polic(?:y|ies)|dues?|assessments?|fines?|fees?|charges?|bills?|invoices?|rent|tax(?:es)?|subscriptions?|services?|water|sewer|electric(?:ity)?|gas|permits?|court)\b", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant))
+            !Regex.IsMatch(text, @"\b(premiums?|polic(?:y|ies)|dues?|assessments?|fines?|fees?|charges?|bills?|invoices?|rents?|tax(?:es)?|subscriptions?|services?|water|sewer|electric(?:ity)?|gas|permits?|court)\b", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant))
             return profile;
 
         var parenthetical = Regex.Match(text, @"(?<prefix>[^()]*(?:premium|policy)[^()]*)\((?<items>[^)]+)\)", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
