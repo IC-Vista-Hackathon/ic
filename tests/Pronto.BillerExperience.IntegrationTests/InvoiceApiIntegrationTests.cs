@@ -110,6 +110,36 @@ public sealed class InvoiceApiIntegrationTests : IClassFixture<TestingAppFactory
         Assert.Equal(4, list!.Invoices.Count);
     }
 
+    [Fact]
+    public async Task ReSeedingWithAChangedProfileReplacesRatherThanAccumulates()
+    {
+        var client = _factory.CreateClient();
+        const string biller = "changed-profile-biller";
+        const string account = "4421";
+        var seedBase = $"/billers/{biller}/invoices";
+
+        // Mirrors create (assumed profile) then publish (finalized, different categories): the same
+        // number of slots but different descriptions. The account must reflect only the latest set.
+        var assumed = new[]
+        {
+            new SeedSpec("Monthly statement", 4200, 14, "Alex Rivera", "General", "green"),
+            new SeedSpec("Service charge", 3100, 21, "Jordan Chen", "General", "green"),
+        };
+        var finalized = new[]
+        {
+            new SeedSpec("Water & sewer", 5200, 14, "Alex Rivera", "Water & sewer", "yellow"),
+            new SeedSpec("Stormwater", 2600, 21, "Jordan Chen", "Stormwater", "green"),
+        };
+
+        await client.PostAsJsonAsync($"{seedBase}/seed", new SeedRequest(null, account, assumed), Wire);
+        await client.PostAsJsonAsync($"{seedBase}/seed", new SeedRequest(null, account, finalized), Wire);
+
+        var list = await client.GetFromJsonAsync<InvoiceList>($"{seedBase}?account_number={account}", Wire);
+        Assert.NotNull(list);
+        Assert.Equal(2, list!.Invoices.Count);
+        Assert.All(list.Invoices, invoice => Assert.DoesNotContain("statement", invoice.Description));
+    }
+
     private sealed record SeedRequest(int? Count, string? AccountNumber, IReadOnlyList<SeedSpec>? Invoices = null);
 
     private sealed record SeedSpec(
@@ -119,5 +149,5 @@ public sealed class InvoiceApiIntegrationTests : IClassFixture<TestingAppFactory
 
     private sealed record InvoiceList(IReadOnlyList<InvoiceItem> Invoices);
 
-    private sealed record InvoiceItem(string Id, string AccountNumber);
+    private sealed record InvoiceItem(string Id, string AccountNumber, string Description);
 }

@@ -65,7 +65,7 @@ public static class FakeInvoiceFactory
             var description = descriptions[i % descriptions.Length];
             invoices.Add(new InvoiceDocument
             {
-                Id = SeedId(billerId, accountNumber, $"{billType}|{i}|{description}"),
+                Id = SeedId(billerId, accountNumber, i),
                 BillerId = billerId,
                 AccountNumber = accountNumber,
                 PayerName = PayerNames[i % PayerNames.Length],
@@ -87,7 +87,7 @@ public static class FakeInvoiceFactory
         int index,
         DateOnly today) => new()
     {
-        Id = SeedId(billerId, accountNumber, $"{index}|{spec.Description}"),
+        Id = SeedId(billerId, accountNumber, index),
         BillerId = billerId,
         AccountNumber = accountNumber,
         PayerName = string.IsNullOrWhiteSpace(spec.PayerName)
@@ -104,14 +104,18 @@ public static class FakeInvoiceFactory
     };
 
     /// <summary>
-    /// A stable invoice id derived from the biller, account, and a per-line key, so re-seeding the
-    /// same set upserts the same documents instead of appending duplicates (re-publishing must not
-    /// duplicate). The Cosmos and in-memory repositories both upsert by <c>id</c>.
+    /// A stable invoice id derived from the biller, account, and the invoice's <em>slot</em> in the
+    /// seed set (its position, not its content). Re-seeding the same account overwrites slot-for-slot
+    /// via upsert, so re-publishing after onboarding changed the profile replaces the earlier demo
+    /// invoices instead of piling a second set alongside them (the account reflects only the latest
+    /// seed). Deriving the id from the description instead would let a changed category set produce
+    /// new ids and accumulate stale invoices. The Cosmos and in-memory repositories both upsert by
+    /// <c>id</c>.
     /// </summary>
-    private static string SeedId(string billerId, string accountNumber, string key)
+    private static string SeedId(string billerId, string accountNumber, int slot)
     {
-        var lo = Fnv1a($"{billerId}|{accountNumber}|{key}");
-        var hi = Fnv1a($"{key}|{accountNumber}|{billerId}");
+        var lo = Fnv1a($"{billerId}|{accountNumber}|{slot}");
+        var hi = Fnv1a($"{slot}|{accountNumber}|{billerId}");
         Span<byte> bytes = stackalloc byte[16];
         BinaryPrimitives.WriteUInt64LittleEndian(bytes[..8], lo);
         BinaryPrimitives.WriteUInt64LittleEndian(bytes[8..], hi);
