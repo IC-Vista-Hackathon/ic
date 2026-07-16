@@ -98,22 +98,31 @@ async function attempt(browser) {
 }
 
 const browser = await chromium.launch();
+let accepted;
+let lastThrottled;
 try {
-  let lastThrottled;
   for (let i = 1; i <= maxAttempts; i++) {
     log(`attempt ${i}/${maxAttempts}`);
     const result = await attempt(browser);
     if (!result.throttled) {
-      console.log(JSON.stringify({ flowId: result.flowId, expectedEvent, beaconSeen: true, ingestionStatus: result.status, throttled: false }));
-      process.exit(0);
+      accepted = result;
+      break;
     }
     lastThrottled = result;
   }
+} finally {
+  await browser.close();
+}
+
+// Emit the result and let the process exit naturally (exit code 0): calling process.exit right
+// after console.log can truncate stdout when it is a pipe (the deploy workflow captures this via
+// command substitution and the docs pipe it into jq).
+if (accepted) {
+  console.log(JSON.stringify({ flowId: accepted.flowId, expectedEvent, beaconSeen: true, ingestionStatus: accepted.status, throttled: false }));
+} else {
   // Every attempt confirmed the frontend emits the expected event, but Application Insights
   // ingestion kept throttling (439). Treat this as a non-fatal infra warning rather than failing
   // the deploy — the frontend behaviour under test is correct.
   log(`::warning::Application Insights ingestion throttled (${throttledStatus}) across ${maxAttempts} attempts; the ${expectedEvent} beacon was sent correctly but not accepted. This is an ingestion quota/throttle condition, not a frontend regression.`);
   console.log(JSON.stringify({ flowId: lastThrottled.flowId, expectedEvent, beaconSeen: true, ingestionStatus: lastThrottled.status, throttled: true }));
-} finally {
-  await browser.close();
 }
