@@ -231,10 +231,15 @@ public sealed partial class BillerOnboardingService(
                     if (!discoveryTurn.AnswerAccepted) break;
                     while (discoveryTurn.State.CurrentQuestion?.Dimension == answer.Dimension)
                     {
+                        var questionBefore = discoveryTurn.State.CurrentQuestion?.QuestionId;
                         var sibling = billingDiscovery.ApplyAnswer(billerId, profile, answerText);
                         if (!sibling.AnswerAccepted) break;
                         discoveryTurn = sibling;
                         profile = discoveryTurn.State.Profile;
+                        // Only keep fanning while each apply advances to a *different* sibling question.
+                        // An accepted answer that leaves the same question current is not making progress
+                        // (a non-idempotent accept), and continuing would spin this loop indefinitely.
+                        if (discoveryTurn.State.CurrentQuestion?.QuestionId == questionBefore) break;
                     }
                 }
             }
