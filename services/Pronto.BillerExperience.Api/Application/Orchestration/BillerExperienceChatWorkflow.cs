@@ -44,7 +44,7 @@ internal sealed partial class BillerExperienceChatWorkflow(
             research => research.Outcome switch
             {
                 ResearchOutcome.Skipped => (OrchestrationEventStatus.Skipped,
-                    "Research was skipped because no research provider was available.", research.ErrorCode),
+                    DescribeSkippedResearch(research.ErrorCode), research.ErrorCode),
                 ResearchOutcome.Degraded => (OrchestrationEventStatus.Degraded,
                     "Research completed with warnings.", research.ErrorCode),
                 ResearchOutcome.Failed when !researchRequired => (OrchestrationEventStatus.Degraded,
@@ -99,6 +99,16 @@ internal sealed partial class BillerExperienceChatWorkflow(
                 .ToArray()
         };
     }
+
+    // A skipped research outcome has two very different meanings: no provider was configured/eligible
+    // at all, versus a provider that ran but surfaced nothing citable. Reporting the latter as
+    // "no research provider was available" reads as a broken agent, so keep the message honest.
+    private static string DescribeSkippedResearch(string? errorCode) => errorCode switch
+    {
+        "research.not_configured" or "research.no_eligible_agents" =>
+            "Research was skipped because no research provider was available.",
+        _ => "Research ran but found no citable public information; using the supplied biller details.",
+    };
 
     private ValueTask<BillerResearchResponse> ResearchAsync(
         BillerRecord biller,

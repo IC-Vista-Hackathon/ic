@@ -494,6 +494,24 @@ public sealed class BillerOnboardingServiceTests
     }
 
     [Fact]
+    public async Task ResearchWithoutCitableFactsReportsHonestSkipSummary()
+    {
+        var coordinator = new StubResearchCoordinator(new BillerResearchResponse(
+            ResearchOutcome.Skipped, [], [], ["research.no_cited_facts"], "research.no_cited_facts"));
+        var service = CreateService(researchCoordinator: coordinator);
+        var created = await service.CreateAsync(CreateRequest(), CancellationToken.None);
+
+        await service.SendMessageAsync(created.Biller.BillerId, new("Ready for review"), CancellationToken.None);
+
+        var (_, activity) = await service.GetSessionActivityAsync(created.Biller.BillerId, CancellationToken.None);
+        var research = Assert.Single(activity, item =>
+            item.AgentId == "research-orchestration" && item.Status == AgentActivityStatus.Skipped);
+        // A provider that ran but found nothing citable must not be reported as "no provider available".
+        Assert.DoesNotContain("no research provider", research.Summary, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("citable", research.Summary, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
     public async Task CreatingBillerSeedsItsInvoiceData()
     {
         var seeder = new RecordingInvoiceSeeder();
