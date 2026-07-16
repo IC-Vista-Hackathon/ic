@@ -129,11 +129,7 @@ public sealed partial class BillerResearchCoordinator(
         warnings.AddRange(successful.SelectMany(response => response.Warnings));
         warnings = warnings.Distinct(StringComparer.Ordinal).ToList();
 
-        var merged = new BillerResearchResponse(
-            warnings.Count == 0 && successful.Length == agents.Length ? ResearchOutcome.Completed : ResearchOutcome.Degraded,
-            facts,
-            sources,
-            warnings);
+        var merged = new BillerResearchResponse(ResearchOutcome.Completed, facts, sources, warnings);
         if (consolidator is not null && successful.Length > 1)
         {
             try
@@ -144,13 +140,10 @@ public sealed partial class BillerResearchCoordinator(
                     activity?.SetTag("research.consolidated", true);
                     activity?.SetTag("research.agent.succeeded", successful.Length);
                     activity?.SetStatus(ActivityStatusCode.Ok);
-                    return consolidated with
-                    {
-                        Outcome = warnings.Count == 0 && successful.Length == agents.Length
-                            ? consolidated.Outcome
-                            : ResearchOutcome.Degraded,
-                        Warnings = consolidated.Warnings.Concat(warnings).Distinct(StringComparer.Ordinal).ToArray()
-                    };
+                    var consolidatedWarnings = consolidated.Warnings.Concat(warnings)
+                        .Distinct(StringComparer.Ordinal)
+                        .ToArray();
+                    return FinalizeOutcome(consolidated with { Warnings = consolidatedWarnings });
                 }
 
                 var code = consolidated.ErrorCode ?? "research.consolidation_failed";
@@ -166,12 +159,37 @@ public sealed partial class BillerResearchCoordinator(
 
         activity?.SetTag("research.agent.succeeded", successful.Length);
         activity?.SetStatus(ActivityStatusCode.Ok);
-        return merged with
+        return FinalizeOutcome(merged with { Warnings = warnings });
+    }
+
+    // A run is degraded only when an operational warning is present. Operational warnings are the
+    // orchestration's own "research.*" codes (an agent failed, timed out, was skipped, consolidation
+    // or MCP context failed). Free-form data-quality caveats an agent writes into its own result are
+    // advisory and are surfaced without flipping the badge, so a clean run reports Completed.
+    private BillerResearchResponse FinalizeOutcome(BillerResearchResponse response)
+    {
+        var warnings = response.Warnings.Distinct(StringComparer.Ordinal).ToArray();
+        var operational = warnings.Where(IsOperationalWarning).ToArray();
+        if (operational.Length == 0)
         {
-            Outcome = warnings.Count == 0 ? merged.Outcome : ResearchOutcome.Degraded,
-            Warnings = warnings.Distinct(StringComparer.Ordinal).ToArray()
+            return response with
+            {
+                Outcome = response.Outcome == ResearchOutcome.Failed ? ResearchOutcome.Failed : ResearchOutcome.Completed,
+                Warnings = warnings
+            };
+        }
+
+        LogDegraded(logger, string.Join(", ", operational), Activity.Current?.TraceId.ToString());
+        return response with
+        {
+            Outcome = ResearchOutcome.Degraded,
+            Warnings = warnings,
+            ErrorCode = response.ErrorCode ?? operational[0]
         };
     }
+
+    private static bool IsOperationalWarning(string code) =>
+        code.StartsWith("research.", StringComparison.Ordinal);
 
     private async Task<AgentResult> DispatchAsync(
         ResearchAgentDescriptor agent,
@@ -421,6 +439,9 @@ public sealed partial class BillerResearchCoordinator(
 
     [LoggerMessage(2654, LogLevel.Error, "Research coordinator consolidation failed with {ErrorCode}; trace {TraceId}")]
     private static partial void LogConsolidationFailure(ILogger logger, string errorCode, string? traceId);
+
+    [LoggerMessage(2659, LogLevel.Warning, "Research completed degraded with operational warnings {Warnings}; trace {TraceId}")]
+    private static partial void LogDegraded(ILogger logger, string warnings, string? traceId);
 
     [LoggerMessage(2655, LogLevel.Error, "Research coordinator consolidation threw an unexpected error; trace {TraceId}")]
     private static partial void LogConsolidationException(ILogger logger, string? traceId, Exception exception);

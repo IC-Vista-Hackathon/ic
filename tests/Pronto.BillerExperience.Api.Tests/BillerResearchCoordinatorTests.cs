@@ -46,6 +46,54 @@ public sealed class BillerResearchCoordinatorTests
     }
 
     [Fact]
+    public async Task AdvisoryDataQualityWarningDoesNotDegradeRun()
+    {
+        var catalog = new StubCatalog([Agent("one", "biller_research")]);
+        var dispatcher = new StubDispatcher((agent, _) => CompletedWith(agent.Id, ResearchOutcome.Degraded,
+            "conflicting phone numbers found", "some values unverifiable"));
+        var coordinator = Create(catalog, dispatcher, ["one"]);
+
+        var response = await coordinator.ResearchAsync(Request());
+
+        Assert.Equal(ResearchOutcome.Completed, response.Outcome);
+        Assert.Null(response.ErrorCode);
+        Assert.Contains("conflicting phone numbers found", response.Warnings);
+        Assert.Single(response.Facts);
+    }
+
+    [Fact]
+    public async Task OperationalWarningStillDegradesAndSurfacesErrorCode()
+    {
+        var catalog = new StubCatalog([Agent("one", "biller_research"), Agent("two", "biller_research")]);
+        var dispatcher = new StubDispatcher((agent, _) => agent.Id == "one"
+            ? Completed("shared")
+            : throw new InvalidOperationException("provider detail"));
+        var coordinator = Create(catalog, dispatcher, ["one", "two"]);
+
+        var response = await coordinator.ResearchAsync(Request());
+
+        Assert.Equal(ResearchOutcome.Degraded, response.Outcome);
+        Assert.Equal("research.agent_failed", response.ErrorCode);
+        Assert.Contains("research.agent_failed", response.Warnings);
+    }
+
+    [Fact]
+    public async Task ConsolidationAdvisoryWarningDoesNotDegradeRun()
+    {
+        var catalog = new StubCatalog([Agent("one", "biller_research"), Agent("two", "biller_research")]);
+        var dispatcher = new StubDispatcher((agent, _) => Completed(agent.Id));
+        var consolidator = new StubConsolidator(CompletedWith("consolidated", ResearchOutcome.Completed,
+            "low confidence in mailing address"));
+        var coordinator = Create(catalog, dispatcher, ["one", "two"], consolidator);
+
+        var response = await coordinator.ResearchAsync(Request());
+
+        Assert.Equal(ResearchOutcome.Completed, response.Outcome);
+        Assert.Null(response.ErrorCode);
+        Assert.Contains("low confidence in mailing address", response.Warnings);
+    }
+
+    [Fact]
     public async Task ResearchUsesCoordinatorAgentToConsolidateSwarmResults()
     {
         var catalog = new StubCatalog([Agent("one", "biller_research"), Agent("two", "biller_research")]);
@@ -265,6 +313,9 @@ public sealed class BillerResearchCoordinatorTests
             [new ResearchSource(uri, "Example", DateTimeOffset.UtcNow)],
             []);
     }
+
+    private static BillerResearchResponse CompletedWith(string value, ResearchOutcome outcome, params string[] warnings)
+        => Completed(value) with { Outcome = outcome, Warnings = warnings };
 
     private sealed class StubCatalog(IReadOnlyList<ResearchAgentDescriptor> agents) : IResearchAgentCatalog
     {
