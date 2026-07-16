@@ -68,6 +68,21 @@ if (options.Mcp.Enabled)
     }
 }
 
+if (!builder.Environment.IsDevelopment())
+{
+    // Outside Development the attestation signing key must be a real, sufficiently strong secret —
+    // never the publicly-known development default — so signed attestations remain tamper-evident.
+    if (options.Compliance.AttestationSigningKey.Length < 32 ||
+        string.Equals(
+            options.Compliance.AttestationSigningKey,
+            ComplianceOptions.DevelopmentAttestationSigningKey,
+            StringComparison.Ordinal))
+    {
+        throw new InvalidOperationException(
+            "BillerExperience:Compliance:AttestationSigningKey must be set to a non-default secret of at least 32 characters outside Development.");
+    }
+}
+
 builder.Services.Configure<BillerExperienceOptions>(builder.Configuration.GetSection(BillerExperienceOptions.SectionName));
 builder.Services.Configure<MaintenanceOptions>(builder.Configuration.GetSection(MaintenanceOptions.SectionName));
 builder.Services.AddSingleton<IOrchestrationRunner, OrchestrationRunner>();
