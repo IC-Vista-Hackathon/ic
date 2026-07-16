@@ -67,21 +67,20 @@ The seeded demo invoices must reflect what the biller actually bills for — der
 the biller's type, name, website, and discovered billing categories. They must **not** be a fixed,
 hand-authored set keyed on `bill_type`.
 
-> **Known gap (issue #1).** `Pronto.Invoice.Api/Seeding/FakeInvoiceFactory.cs` returns a fixed
-> curated set for `bill_type` `insurance` and `other` (auto/home/life policies; HOA dues, a pool
-> special assessment, and a "$100 fine for playing All I Want for Christmas is You" joke),
-> **ignoring who the biller is**. So an online apparel store onboarded as `other` gets HOA invoices,
-> and two unrelated `other` billers get byte-identical invoices.
+> **Resolved (issue #1).** Onboarding now derives biller-relevant demo line items from the biller's
+> name, website, and vertical on the Biller Experience side (`DeterministicSeedInvoiceGenerator`) and
+> passes them to the Invoice service, which persists them (`SeedInvoicesRequest.invoices`). The
+> hand-authored `bill_type` `insurance`/`other` branches in
+> `Pronto.Invoice.Api/Seeding/FakeInvoiceFactory.cs` were removed, so an apparel store onboarded as
+> `other` no longer gets HOA invoices and two unrelated billers no longer get identical sets.
 
 ```gherkin
 Feature: Agentic demo invoices
-  @known-gap
   Scenario: Seeded invoices are relevant to the biller
     Given an online apparel store onboarded as bill type "other"
     When I read its seeded demo invoices
     Then no invoice mentions "HOA", "special assessment", or the Christmas-fine joke
 
-  @known-gap
   Scenario: Two unrelated billers do not get identical invoices
     Given an apparel store and a parks district, both bill type "other"
     When I read each biller's seeded demo invoices
