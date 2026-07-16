@@ -1,0 +1,32 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    Black-box functional tests that drive a DEPLOYED Pronto environment (nonprod by default)
+    over HTTP. Deliberately excluded from Pronto.slnx so the unit/integration `dotnet test`
+    in CI never runs them: they require a reachable environment and are the gate that runs
+    against nonprod before a merge promotes to prod. See tests/Pronto.Functional.Tests/README.md
+    and docs/pronto-functional-testing-policy.md.
+  -->
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <IsPackable>false</IsPackable>
+    <IsTestProject>true</IsTestProject>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="coverlet.collector" PrivateAssets="all" />
+    <PackageReference Include="Microsoft.NET.Test.Sdk" />
+    <PackageReference Include="xunit" />
+    <PackageReference Include="xunit.runner.visualstudio" PrivateAssets="all" />
+    <PackageReference Include="Xunit.SkippableFact" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\contracts\Pronto.BillerExperience.Contracts\Pronto.BillerExperience.Contracts.csproj" />
+    <ProjectReference Include="..\..\contracts\Pronto.Invoice.Contracts\Pronto.Invoice.Contracts.csproj" />
+  </ItemGroup>
+
+</Project>
