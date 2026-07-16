@@ -211,6 +211,38 @@ public sealed class PaymentInvariantTests
     }
 
     [Fact]
+    public async Task RetryReplaysOriginalOutcomeEvenAfterBillerBecomesIneligible()
+    {
+        var billerId = Guid.NewGuid().ToString();
+        var invoice = fakeInvoices.AddDueInvoice(billerId, amountCents: 5000);
+        var request = new CreatePaymentRequest(billerId, invoice.Id, "card", IdempotencyKey: "recover-me");
+
+        var first = await client.PostAsJsonAsync("payments", request, Wire);
+        Assert.Equal(HttpStatusCode.Created, first.StatusCode);
+        var original = await first.Content.ReadFromJsonAsync<PaymentResponse>(Wire);
+
+        // The biller loses its settle-eligibility after the payment already succeeded; a retried
+        // request (lost confirmation) must still replay the original outcome, not be refused.
+        fakeConfigs.SetSettlementState(billerId, BillerSettlementState.Unpublished);
+
+        var replay = await client.PostAsJsonAsync("payments", request, Wire);
+        Assert.Equal(HttpStatusCode.OK, replay.StatusCode);
+        var replayed = await replay.Content.ReadFromJsonAsync<PaymentResponse>(Wire);
+        Assert.Equal(original!.PaymentId, replayed!.PaymentId);
+        Assert.Equal(PaymentStatus.Succeeded, replayed.Status);
+
+        // A genuinely new payment for the now-ineligible biller is still blocked.
+        var otherInvoice = fakeInvoices.AddDueInvoice(billerId, amountCents: 5000);
+        var blocked = await client.PostAsJsonAsync(
+            "payments",
+            new CreatePaymentRequest(billerId, otherInvoice.Id, "card", IdempotencyKey: "new-one"),
+            Wire);
+        Assert.Equal(HttpStatusCode.Conflict, blocked.StatusCode);
+        Assert.Contains(
+            "biller_not_publishable", await blocked.Content.ReadAsStringAsync(), StringComparison.Ordinal);
+    }
+
+    [Fact]
     public async Task PublishedBillerCanSettle()
     {
         var billerId = Guid.NewGuid().ToString();

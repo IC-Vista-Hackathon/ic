@@ -63,11 +63,6 @@ public sealed partial class PaymentsController : ControllerBase
 
         var config = await configs.GetAsync(request.BillerId, cancellationToken).ConfigureAwait(false);
 
-        // A payment may only settle for a biller whose configuration has cleared the publish +
-        // compliance gate. This state is server-owned (never client/agent input), so it cannot be
-        // bypassed by the request body.
-        RequireSettleEligible(config);
-
         if (!config.PaymentMethods.Contains(request.Method))
         {
             throw ServiceException.BadRequest(
@@ -100,17 +95,21 @@ public sealed partial class PaymentsController : ControllerBase
 
         // Fast path: a retried request with a known key replays the original outcome (finishing a
         // still-pending record if the first attempt crashed mid-workflow) without re-reading state.
-        if (idempotencyKey is not null)
+        // It runs BEFORE the settle-eligibility gate below so a lost confirmation is always
+        // recoverable even if the biller's eligibility changed after the outcome was decided.
+        var existing = await store.FindAsync(request.BillerId, paymentId, cancellationToken)
+            .ConfigureAwait(false);
+        if (existing is not null)
         {
-            var existing = await store.FindAsync(request.BillerId, paymentId, cancellationToken)
-                .ConfigureAwait(false);
-            if (existing is not null)
-            {
-                EnsureSameRequest(existing, fingerprint);
-                var replayed = await workflow.DriveInitialAsync(existing, cancellationToken).ConfigureAwait(false);
-                return BuildResult(replayed, created: false);
-            }
+            EnsureSameRequest(existing, fingerprint);
+            var replayed = await workflow.DriveInitialAsync(existing, cancellationToken).ConfigureAwait(false);
+            return BuildResult(replayed, created: false);
         }
+
+        // A new payment may only settle for a biller whose configuration has cleared the publish +
+        // compliance gate. This state is server-owned (never client/agent input), so it cannot be
+        // bypassed by the request body.
+        RequireSettleEligible(config);
 
         var invoice = await invoices.GetAsync(request.BillerId, request.InvoiceId, cancellationToken)
                 .ConfigureAwait(false)
