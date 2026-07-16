@@ -23,6 +23,7 @@
     <Project Path="tests/Pronto.BillerExperience.Api.Tests/Pronto.BillerExperience.Api.Tests.csproj" />
     <Project Path="tests/Pronto.BillerExperience.IntegrationTests/Pronto.BillerExperience.IntegrationTests.csproj" />
     <Project Path="tests/Pronto.BillerExperience.Worker.Tests/Pronto.BillerExperience.Worker.Tests.csproj" />
+    <Project Path="tests/Pronto.Functional.Tests/Pronto.Functional.Tests.csproj" />
     <Project Path="tests/Pronto.Invoice.Api.Tests/Pronto.Invoice.Api.Tests.csproj" />
     <Project Path="tests/Pronto.Payment.Api.Tests/Pronto.Payment.Api.Tests.csproj" />
     <Project Path="tests/Pronto.Payment.Contracts.Tests/Pronto.Payment.Contracts.Tests.csproj" />

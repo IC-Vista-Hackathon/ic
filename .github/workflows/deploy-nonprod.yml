@@ -179,3 +179,40 @@ jobs:
             TARGET_PATH=/studio/ EXPECTED_EVENT=studio.session_started \
             node tests/browser-smoke/telemetry-smoke.mjs)
           echo "biller Studio result: ${STUDIO_RESULT}"
+
+      - name: Set up .NET for functional tests
+        uses: actions/setup-dotnet@v4
+        with:
+          global-json-file: global.json
+
+      # Deployed functional tests: black-box HTTP acceptance tests that exercise the just-deployed
+      # nonprod stack through the gateway (see docs/pronto-functional-testing-policy.md). The
+      # blocking gate (functional & !known-gap) must pass before nonprod is promoted to prod; the
+      # known-gap suite documents behaviors we intend to fix and runs non-blocking (|| true) until
+      # each fix removes its `known-gap` trait, moving it into the blocking gate.
+      - name: Deployed functional tests (nonprod)
+        run: |
+          GATEWAY_SVC=$(kubectl get svc -n ic-nonprod \
+            -l gateway.networking.k8s.io/gateway-name=ic-nonprod-gateway \
+            -o jsonpath='{.items[0].metadata.name}' 2>/dev/null || true)
+          GATEWAY_SVC="${GATEWAY_SVC:-ic-nonprod-gateway}"
+          kubectl port-forward -n ic-nonprod "svc/${GATEWAY_SVC}" 18082:80 >/dev/null 2>&1 &
+          PF_PID=$!
+          trap 'kill $PF_PID 2>/dev/null || true' EXIT
+          for _ in $(seq 1 30); do
+            curl -fsS -o /dev/null "http://127.0.0.1:18082/api/health/ready" && break
+            sleep 1
+          done
+
+          export PRONTO_FUNCTIONAL_BASE_URL=http://127.0.0.1:18082
+
+          echo "::group::Blocking functional gate"
+          dotnet test tests/Pronto.Functional.Tests/Pronto.Functional.Tests.csproj \
+            --filter 'Category=functional&Category!=known-gap'
+          echo "::endgroup::"
+
+          echo "::group::Known-gap functional tests (non-blocking; expected to fail until fixed)"
+          dotnet test tests/Pronto.Functional.Tests/Pronto.Functional.Tests.csproj \
+            --filter 'Category=known-gap' \
+            || echo "::warning::Known-gap functional tests failed as expected; see docs/pronto-functional-requirements.md"
+          echo "::endgroup::"
