@@ -27,6 +27,7 @@ jobs:
     with:
       image_tag: ${{ github.event.pull_request.head.sha }}
       source_ref: ${{ github.event.pull_request.head.sha }}
+      base_ref: ${{ github.event.pull_request.base.sha }}
     secrets:
       AZURE_CREDENTIALS: ${{ secrets.AZURE_CREDENTIALS }}
 

@@ -1,9 +1,21 @@
 name: Build images
 
-# Reusable workflow: builds every service image server-side with ACR Tasks
-# (`az acr build`, no Docker daemon needed) and pushes it tagged with the caller's
-# immutable image tag (typically the git SHA). AKS already has AcrPull on the
-# registry, so no pull secrets are needed.
+# Reusable workflow: builds every service/frontend image and pushes it tagged with the caller's
+# immutable image tag (typically the git SHA). Two speedups over the previous `az acr build` model:
+#
+#   1. Change detection (path filters). Only images whose inputs changed are rebuilt; unchanged
+#      images are re-tagged server-side from the base commit's already-built image via
+#      `az acr import` (a fast manifest copy, no rebuild). Filters are deliberately conservative —
+#      shared code (libraries/, contracts/, root build props, .dockerignore) rebuilds every .NET
+#      image — because deploying a stale image is far worse than a redundant build.
+#
+#   2. Cross-run layer caching. Builds run on the GitHub runner with Buildx and a registry-backed
+#      cache (`:buildcache` per image), so an image that must rebuild reuses unchanged layers
+#      (restore/publish) instead of starting cold. Running on the runner also removes the ACR Tasks
+#      queue that serialized the previous 9 concurrent server-side builds.
+#
+# AKS already has AcrPull on the registry, so no pull secrets are needed. Every image is still
+# pushed at `image_tag`, so the deploy's uniform `newTag: <sha>` pin resolves for all images.
 
 on:
   workflow_call:
@@ -15,6 +27,13 @@ on:
       source_ref:
         description: Git ref to check out and build.
         required: true
+        type: string
+      base_ref:
+        description: >-
+          Base commit to diff against for change detection and to re-tag unchanged images from
+          (e.g. the PR base SHA, or the previous main SHA on push). Empty forces a full rebuild.
+        required: false
+        default: ''
         type: string
       registry:
         description: ACR login server.
@@ -34,8 +53,86 @@ permissions:
   contents: read
 
 jobs:
+  changes:
+    name: Detect changed images
+    runs-on: ubuntu-latest
+    outputs:
+      api: ${{ steps.filter.outputs.api }}
+      worker: ${{ steps.filter.outputs.worker }}
+      studio: ${{ steps.filter.outputs.studio }}
+      pwa: ${{ steps.filter.outputs.pwa }}
+      router: ${{ steps.filter.outputs.router }}
+      builder: ${{ steps.filter.outputs.builder }}
+      invoice: ${{ steps.filter.outputs.invoice }}
+      payment: ${{ steps.filter.outputs.payment }}
+      payeraccount: ${{ steps.filter.outputs.payeraccount }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.source_ref }}
+          fetch-depth: 0
+
+      # With an empty base_ref (forced full rebuild) every filter must report changed. dorny/
+      # paths-filter needs a base; when we don't have one, skip it and mark everything changed.
+      - name: Detect changes
+        id: filter
+        if: inputs.base_ref != '' && !contains(inputs.base_ref, '0000000000000000000000000000000000000000')
+        uses: dorny/paths-filter@v3
+        with:
+          base: ${{ inputs.base_ref }}
+          ref: ${{ inputs.source_ref }}
+          # Shared .NET inputs (&dotnet) rebuild every .NET image. Frontends rebuild on their own
+          # sources plus the nginx config they bake in. .dockerignore affects all contexts.
+          filters: |
+            dotnet: &dotnet
+              - 'global.json'
+              - 'NuGet.config'
+              - 'Directory.Build.props'
+              - 'Directory.Packages.props'
+              - '.dockerignore'
+              - 'libraries/**'
+              - 'contracts/**'
+            api:
+              - *dotnet
+              - 'services/Pronto.BillerExperience.Api/**'
+              # This image bakes in the agent definitions (csproj Content + Dockerfile COPY agents/).
+              - 'agents/**'
+            worker:
+              - *dotnet
+              - 'services/Pronto.BillerExperience.Worker/**'
+            router:
+              - *dotnet
+              - 'services/Pronto.PayerExperience.Router/**'
+            invoice:
+              - *dotnet
+              - 'services/Pronto.Invoice.Api/**'
+            payment:
+              - *dotnet
+              - 'services/Pronto.Payment.Api/**'
+            payeraccount:
+              - *dotnet
+              - 'services/Pronto.PayerAccount.Api/**'
+            studio:
+              - '.dockerignore'
+              - 'frontends/Pronto.BillerExperience.Studio/**'
+              - 'deploy/nginx/**'
+            pwa:
+              - '.dockerignore'
+              - 'frontends/Pronto.BillerPayments.Pwa/**'
+              - 'deploy/nginx/**'
+            builder:
+              - '.dockerignore'
+              - 'frontends/Pronto.PayerExperience.Builder/**'
+              # The builder image COPYs and installs the payments PWA source it renders from.
+              - 'frontends/Pronto.BillerPayments.Pwa/**'
+
+      - name: Force full rebuild when no base is available
+        if: steps.filter.outcome == 'skipped'
+        run: echo "No usable base_ref; all images will be rebuilt."
+
   build:
     name: Build ${{ matrix.image }}
+    needs: changes
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
@@ -43,22 +140,31 @@ jobs:
         include:
           - image: ic-biller-experience-api
             dockerfile: services/Pronto.BillerExperience.Api/Dockerfile
+            key: api
           - image: ic-biller-experience-worker
             dockerfile: services/Pronto.BillerExperience.Worker/Dockerfile
+            key: worker
           - image: ic-biller-experience-studio
             dockerfile: frontends/Pronto.BillerExperience.Studio/Dockerfile
+            key: studio
           - image: ic-biller-payments-pwa
             dockerfile: frontends/Pronto.BillerPayments.Pwa/Dockerfile
+            key: pwa
           - image: ic-payer-experience-router
             dockerfile: services/Pronto.PayerExperience.Router/Dockerfile
+            key: router
           - image: ic-payer-experience-builder
             dockerfile: frontends/Pronto.PayerExperience.Builder/Dockerfile
+            key: builder
           - image: ic-invoice-api
             dockerfile: services/Pronto.Invoice.Api/Dockerfile
+            key: invoice
           - image: ic-payment-api
             dockerfile: services/Pronto.Payment.Api/Dockerfile
+            key: payment
           - image: ic-payer-account-api
             dockerfile: services/Pronto.PayerAccount.Api/Dockerfile
+            key: payeraccount
     steps:
       - uses: actions/checkout@v4
         with:
@@ -69,10 +175,49 @@ jobs:
         with:
           creds: ${{ secrets.AZURE_CREDENTIALS }}
 
-      - name: Build & push ${{ matrix.image }}
+      # Unchanged image: re-tag the base commit's build to the new tag (fast server-side manifest
+      # copy). If that base image doesn't exist (new image, or first run before it was cached),
+      # fall back to a full build so the deploy always finds image_tag.
+      - name: Decide build vs. re-tag
+        id: decide
+        env:
+          CHANGED: ${{ needs.changes.outputs[matrix.key] }}
+          BASE_REF: ${{ inputs.base_ref }}
         run: |
-          az acr build \
-            --registry "${{ inputs.acr_name }}" \
-            --image "${{ matrix.image }}:${{ inputs.image_tag }}" \
-            --file "${{ matrix.dockerfile }}" \
-            .
+          set -euo pipefail
+          if [ "${CHANGED}" != "false" ] || [ -z "${BASE_REF}" ]; then
+            echo "build=true" >> "$GITHUB_OUTPUT"
+            echo "Image ${{ matrix.image }}: inputs changed (or no base) -> rebuild."
+            exit 0
+          fi
+          if az acr import \
+              --name "${{ inputs.acr_name }}" \
+              --source "${{ inputs.registry }}/${{ matrix.image }}:${BASE_REF}" \
+              --image "${{ matrix.image }}:${{ inputs.image_tag }}" \
+              --force 2>/dev/null; then
+            echo "build=false" >> "$GITHUB_OUTPUT"
+            echo "Image ${{ matrix.image }}: unchanged -> re-tagged from ${BASE_REF}."
+          else
+            echo "build=true" >> "$GITHUB_OUTPUT"
+            echo "::warning::Base image ${{ matrix.image }}:${BASE_REF} not found; rebuilding."
+          fi
+
+      - name: Set up Buildx
+        if: steps.decide.outputs.build == 'true'
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to ACR
+        if: steps.decide.outputs.build == 'true'
+        run: az acr login --name "${{ inputs.acr_name }}"
+
+      - name: Build & push ${{ matrix.image }}
+        if: steps.decide.outputs.build == 'true'
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ${{ matrix.dockerfile }}
+          push: true
+          tags: ${{ inputs.registry }}/${{ matrix.image }}:${{ inputs.image_tag }}
+          cache-from: type=registry,ref=${{ inputs.registry }}/${{ matrix.image }}:buildcache
+          cache-to: type=registry,ref=${{ inputs.registry }}/${{ matrix.image }}:buildcache,mode=max
+          provenance: false
