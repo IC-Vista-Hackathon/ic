@@ -508,4 +508,7 @@ The API exposes `/`, `/health/live`, `/health/ready`, and controller routes root
 Logs are emitted as newline-delimited JSON for AKS/Container Insights ingestion. Application
 Insights is enabled when `APPLICATIONINSIGHTS_CONNECTION_STRING` is present; traces and metrics
 include the custom Biller Experience and orchestration sources without recording prompts or raw
-model output.
+model output. Set `APPLICATIONINSIGHTS_SAMPLING_RATIO` (a value in `(0, 1]`, default `1.0` = keep
+everything) to apply fixed-rate, parent-consistent trace sampling per environment — e.g. `0.25`
+keeps ~25% of traces as headroom against the App Insights daily ingestion cap. Unset or invalid
+values fall back to `1.0`.

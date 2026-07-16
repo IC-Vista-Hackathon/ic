@@ -126,7 +126,8 @@ jobs:
             deployment/ic-invoice-api \
             deployment/ic-payment-api \
             deployment/ic-payer-account-api \
-            APPLICATIONINSIGHTS_CONNECTION_STRING="$APPINSIGHTS"
+            APPLICATIONINSIGHTS_CONNECTION_STRING="$APPINSIGHTS" \
+            APPLICATIONINSIGHTS_SAMPLING_RATIO="0.5"
           kubectl -n ic-nonprod rollout status deployment/ic-biller-experience-api --timeout=180s
           kubectl -n ic-nonprod rollout status deployment/ic-invoice-api --timeout=180s
           kubectl -n ic-nonprod rollout status deployment/ic-payment-api --timeout=180s
