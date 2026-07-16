@@ -12,7 +12,8 @@ public sealed class ObservableOrchestrationStep<TInput, TOutput>(
     Func<TInput, OrchestrationContext, CancellationToken, ValueTask<TOutput>> execute,
     IOrchestrationEventSink eventSink,
     ILogger? logger = null,
-    Func<TOutput, (OrchestrationEventStatus Status, string Summary, string? ErrorCode)>? completion = null)
+    Func<TOutput, (OrchestrationEventStatus Status, string Summary, string? ErrorCode)>? completion = null,
+    Func<TOutput, IReadOnlyList<string>>? warnings = null)
     : IOrchestrationStep<TInput, TOutput>
 {
     private static readonly Action<ILogger, string, string, string?, string, string?, Exception> LogStepFailure =
@@ -42,12 +43,22 @@ public sealed class ObservableOrchestrationStep<TInput, TOutput>(
         {
             var result = await execute(input, context, cancellationToken);
             var durationMs = Stopwatch.GetElapsedTime(startedAt).TotalMilliseconds;
-            activity?.SetStatus(ActivityStatusCode.Ok);
-            OrchestrationTelemetry.StepCompleted.Add(1, tags);
-            OrchestrationTelemetry.StepDuration.Record(durationMs, tags);
             var outcome = completion?.Invoke(result) ?? (OrchestrationEventStatus.Completed, "Completed", null);
+            // Carry the resolved outcome (Completed/Degraded/Skipped/NeedsInput) as a metric dimension and
+            // trace tag so degraded/skipped steps stay countable and trace-filterable — a bare
+            // StepCompleted with only an agent tag hides them behind the same counter as clean runs.
+            var status = outcome.Item1.ToString();
+            var outcomeTags = new TagList { { "agent", name }, { "status", status } };
+            activity?.SetTag("ic.orchestration.status", status);
+            if (outcome.Item3 is not null)
+            {
+                activity?.SetTag("ic.orchestration.error_code", outcome.Item3);
+            }
+            activity?.SetStatus(ActivityStatusCode.Ok);
+            OrchestrationTelemetry.StepCompleted.Add(1, outcomeTags);
+            OrchestrationTelemetry.StepDuration.Record(durationMs, outcomeTags);
             await PublishSafeAsync(Event(outcome.Item1, outcome.Item2, sequence + 1, activity,
-                errorCode: outcome.Item3, durationMs: durationMs), cancellationToken);
+                errorCode: outcome.Item3, durationMs: durationMs, warnings: warnings?.Invoke(result)), cancellationToken);
             return result;
         }
         catch (Exception exception)
@@ -55,9 +66,12 @@ public sealed class ObservableOrchestrationStep<TInput, TOutput>(
             var durationMs = Stopwatch.GetElapsedTime(startedAt).TotalMilliseconds;
             var errorCode = exception is OperationCanceledException ? "cancelled" : $"{name}_failed";
             activity?.SetStatus(ActivityStatusCode.Error, exception.GetType().Name);
+            activity?.SetTag("ic.orchestration.status", OrchestrationEventStatus.Failed.ToString());
+            activity?.SetTag("ic.orchestration.error_code", errorCode);
             activity?.AddException(exception);
-            OrchestrationTelemetry.StepFailed.Add(1, tags);
-            OrchestrationTelemetry.StepDuration.Record(durationMs, tags);
+            var failedTags = new TagList { { "agent", name }, { "status", OrchestrationEventStatus.Failed.ToString() } };
+            OrchestrationTelemetry.StepFailed.Add(1, failedTags);
+            OrchestrationTelemetry.StepDuration.Record(durationMs, failedTags);
             if (logger is not null)
             {
                 LogStepFailure(logger, name, context.RunId, context.BillerId, errorCode, activity?.TraceId.ToString(), exception);
@@ -91,8 +105,10 @@ public sealed class ObservableOrchestrationStep<TInput, TOutput>(
             Activity? trace,
             string? errorCode = null,
             bool retryable = false,
-            double? durationMs = null) =>
+            double? durationMs = null,
+            IReadOnlyList<string>? warnings = null) =>
             new(Guid.NewGuid().ToString("N"), eventSequence, context.RunId, name, displayName, status, message,
-                DateTimeOffset.UtcNow, trace?.TraceId.ToString(), errorCode, retryable, 1, durationMs);
+                DateTimeOffset.UtcNow, trace?.TraceId.ToString(), errorCode, retryable, 1, durationMs,
+                warnings is { Count: > 0 } ? warnings : null);
     }
 }

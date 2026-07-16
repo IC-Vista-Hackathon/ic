@@ -26,6 +26,8 @@ public sealed partial class BillerResearchCoordinator(
         CancellationToken cancellationToken = default)
     {
         using var activity = BillerExperienceTelemetry.Source.StartActivity("research.coordinate");
+        var startedAt = Stopwatch.GetTimestamp();
+        ResearchTelemetry.Requests.Add(1);
         IReadOnlyList<ResearchAgentDescriptor> discovered;
         try
         {
@@ -34,8 +36,7 @@ public sealed partial class BillerResearchCoordinator(
         catch (Exception exception) when (exception is not OperationCanceledException)
         {
             LogCatalogFailure(logger, exception, Activity.Current?.TraceId.ToString());
-            activity?.SetStatus(ActivityStatusCode.Error, "research.catalog_failed");
-            return Failed("research.catalog_failed", retryable: true);
+            return Record(activity, startedAt, Failed("research.catalog_failed", retryable: true));
         }
         catch (OperationCanceledException)
         {
@@ -80,8 +81,7 @@ public sealed partial class BillerResearchCoordinator(
         if (agents.Length == 0)
         {
             LogNoEligibleAgents(logger, discovered.Count, Activity.Current?.TraceId.ToString());
-            activity?.SetStatus(ActivityStatusCode.Error, "research.no_eligible_agents");
-            return Failed("research.no_eligible_agents", retryable: false);
+            return Record(activity, startedAt, Failed("research.no_eligible_agents", retryable: false));
         }
 
         activity?.SetTag("research.agent.count", agents.Length);
@@ -101,8 +101,8 @@ public sealed partial class BillerResearchCoordinator(
         {
             var errorCode = warnings.Count == 1 ? warnings[0] : "research.all_agents_failed";
             var retryable = results.Any(result => result.Retryable);
-            activity?.SetStatus(ActivityStatusCode.Error, errorCode);
-            return new BillerResearchResponse(ResearchOutcome.Failed, [], [], warnings, errorCode, retryable);
+            return Record(activity, startedAt,
+                new BillerResearchResponse(ResearchOutcome.Failed, [], [], warnings, errorCode, retryable));
         }
 
         if (successful.All(response => response.Outcome == ResearchOutcome.Skipped))
@@ -114,8 +114,8 @@ public sealed partial class BillerResearchCoordinator(
             var skipCode = successful.Select(response => response.ErrorCode).FirstOrDefault(code => code is not null)
                 ?? "research.skipped";
             activity?.SetTag("research.agent.skipped", successful.Length);
-            activity?.SetStatus(ActivityStatusCode.Ok, skipCode);
-            return new BillerResearchResponse(ResearchOutcome.Skipped, [], [], skipWarnings, skipCode);
+            return Record(activity, startedAt,
+                new BillerResearchResponse(ResearchOutcome.Skipped, [], [], skipWarnings, skipCode));
         }
 
         var facts = successful.SelectMany(response => response.Facts)
@@ -139,11 +139,10 @@ public sealed partial class BillerResearchCoordinator(
                 {
                     activity?.SetTag("research.consolidated", true);
                     activity?.SetTag("research.agent.succeeded", successful.Length);
-                    activity?.SetStatus(ActivityStatusCode.Ok);
                     var consolidatedWarnings = consolidated.Warnings.Concat(warnings)
                         .Distinct(StringComparer.Ordinal)
                         .ToArray();
-                    return FinalizeOutcome(consolidated with { Warnings = consolidatedWarnings });
+                    return Record(activity, startedAt, FinalizeOutcome(consolidated with { Warnings = consolidatedWarnings }));
                 }
 
                 var code = consolidated.ErrorCode ?? "research.consolidation_failed";
@@ -158,8 +157,31 @@ public sealed partial class BillerResearchCoordinator(
         }
 
         activity?.SetTag("research.agent.succeeded", successful.Length);
-        activity?.SetStatus(ActivityStatusCode.Ok);
-        return FinalizeOutcome(merged with { Warnings = warnings });
+        return Record(activity, startedAt, FinalizeOutcome(merged with { Warnings = warnings }));
+    }
+
+    // Single exit stamp for the coordinator span + metrics so outcome (including Degraded) is
+    // countable and trace-filterable. Degraded is a successful-but-caveated result, so the span
+    // status stays Ok (filter on the research.outcome tag); only genuine failures set Error.
+    private static BillerResearchResponse Record(Activity? activity, long startedAt, BillerResearchResponse response)
+    {
+        var durationMs = Stopwatch.GetElapsedTime(startedAt).TotalMilliseconds;
+        var outcome = response.Outcome.ToString();
+        ResearchTelemetry.CoordinationDuration.Record(durationMs, new KeyValuePair<string, object?>("outcome", outcome));
+        ResearchTelemetry.Coordinations.Add(1, new("outcome", outcome), new("error_type", response.ErrorCode ?? "none"));
+        if (response.Outcome == ResearchOutcome.Failed)
+        {
+            ResearchTelemetry.Failures.Add(1, new KeyValuePair<string, object?>("error_type", response.ErrorCode ?? "research.failed"));
+        }
+        activity?.SetTag("research.outcome", outcome);
+        if (response.ErrorCode is not null)
+        {
+            activity?.SetTag("research.error_code", response.ErrorCode);
+        }
+        activity?.SetStatus(
+            response.Outcome == ResearchOutcome.Failed ? ActivityStatusCode.Error : ActivityStatusCode.Ok,
+            response.ErrorCode);
+        return response;
     }
 
     // A run is degraded only when an operational warning is present. Operational warnings are the
@@ -210,6 +232,14 @@ public sealed partial class BillerResearchCoordinator(
                 $"Invoking {agent.Provider} agent for cited biller research.",
                 cancellationToken: cancellationToken);
             var startedAt = Stopwatch.GetTimestamp();
+
+            void RecordDispatch(string outcome, string? errorType) =>
+                ResearchTelemetry.AgentDispatches.Add(1,
+                    new("agent", agent.Id),
+                    new("provider", agent.Provider),
+                    new("outcome", outcome),
+                    new("error_type", errorType ?? "none"));
+
             using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
             timeout.CancelAfter(TimeSpan.FromSeconds(Math.Max(1, _options.AgentTimeoutSeconds)));
         try
@@ -226,6 +256,7 @@ public sealed partial class BillerResearchCoordinator(
                     await PublishActivityAsync(executionContext, agent, OrchestrationEventStatus.Failed,
                         "Orchestration could not read shared agent context through MCP.", errorCode, true,
                         Stopwatch.GetElapsedTime(startedAt).TotalMilliseconds, CancellationToken.None);
+                    RecordDispatch("Failed", errorCode);
                     return new AgentResult(null, errorCode, true);
                 }
 
@@ -265,6 +296,8 @@ public sealed partial class BillerResearchCoordinator(
                     Stopwatch.GetElapsedTime(startedAt).TotalMilliseconds,
                     CancellationToken.None);
 
+                RecordDispatch(response.Outcome.ToString(),
+                    response.Outcome == ResearchOutcome.Failed ? response.ErrorCode ?? "research.agent_failed" : response.ErrorCode);
                 return response.Outcome == ResearchOutcome.Failed
                     ? new AgentResult(null, response.ErrorCode ?? "research.agent_failed", response.Retryable)
                     : new AgentResult(response, null, false);
@@ -275,6 +308,7 @@ public sealed partial class BillerResearchCoordinator(
                 await PublishActivityAsync(executionContext, agent, OrchestrationEventStatus.Failed,
                     "Agent research timed out.", "research.agent_timeout", true,
                     Stopwatch.GetElapsedTime(startedAt).TotalMilliseconds, CancellationToken.None);
+                RecordDispatch("Failed", "research.agent_timeout");
                 return new AgentResult(null, "research.agent_timeout", true);
             }
             catch (OperationCanceledException exception) when (cancellationToken.IsCancellationRequested)
@@ -284,6 +318,7 @@ public sealed partial class BillerResearchCoordinator(
                 await PublishActivityAsync(executionContext, agent, OrchestrationEventStatus.Failed,
                     "Agent research was cancelled because the onboarding request ended.", errorCode, true,
                     Stopwatch.GetElapsedTime(startedAt).TotalMilliseconds, CancellationToken.None);
+                RecordDispatch("Cancelled", errorCode);
                 throw;
             }
             catch (Exception exception)
@@ -292,6 +327,7 @@ public sealed partial class BillerResearchCoordinator(
                 await PublishActivityAsync(executionContext, agent, OrchestrationEventStatus.Failed,
                     "Agent research failed unexpectedly.", "research.agent_failed", true,
                     Stopwatch.GetElapsedTime(startedAt).TotalMilliseconds, CancellationToken.None);
+                RecordDispatch("Failed", "research.agent_failed");
                 return new AgentResult(null, "research.agent_failed", true);
         }
     }

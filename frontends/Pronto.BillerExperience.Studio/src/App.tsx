@@ -708,6 +708,13 @@ function AgentActivityPanel({
                 <code title={item.agent_id} style={css('display:block;margin:5px 0;font-size:11px;overflow:hidden;text-overflow:ellipsis')}>{item.agent_id}</code>
                 <small>{settled ? 'Agent did not report a result before the run finished.' : item.summary}</small>
                 <small style={css('display:block;margin-top:5px;color:var(--invoicecloud-utility-neutral-70)')}>{agentActivityMeta(item, status, !settled)}</small>
+                {item.warnings && item.warnings.length > 0 && (
+                  <ul style={css('margin:6px 0 0;padding-left:16px;color:#7a4100;font-size:12px')}>
+                    {item.warnings.map((warning, index) => (
+                      <li key={index}>{warning}</li>
+                    ))}
+                  </ul>
+                )}
               </article>
             );
           })}

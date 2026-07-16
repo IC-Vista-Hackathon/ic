@@ -13,7 +13,8 @@ public sealed record OrchestrationEvent(
     string? ErrorCode = null,
     bool Retryable = false,
     int Attempt = 1,
-    double? DurationMs = null);
+    double? DurationMs = null,
+    IReadOnlyList<string>? Warnings = null);
 
 public enum OrchestrationEventStatus
 {

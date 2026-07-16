@@ -30,7 +30,8 @@ public sealed record AgentActivityEvent(
     string? ErrorCode = null,
     bool Retryable = false,
     int Attempt = 1,
-    double? DurationMs = null);
+    double? DurationMs = null,
+    IReadOnlyList<string>? Warnings = null);
 
 public sealed record AgentActivitySnapshotResponse(
     OnboardingSessionResponse Session,
