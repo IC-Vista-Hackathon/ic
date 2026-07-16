@@ -1,8 +1,12 @@
 name: Deploy nonprod
 
-# Trusted same-repository PRs can be deployed after a maintainer applies the
-# `safe-to-deploy` label. The workflow definition comes from the base branch;
-# only then does it build and deploy the reviewed PR head.
+# Same-repository PRs can be deployed after a maintainer applies the `safe-to-deploy`
+# label. The two safeguards are: the PR head branch must live in this repo
+# (`head.repo == base repo`), which requires push access and rules out forks/anonymous
+# contributors, and a maintainer must apply the label. The author_association allowlist
+# includes CONTRIBUTOR so any established repo contributor (including automation such as
+# devin-ai-integration[bot]) can be deployed once labelled. The workflow definition comes
+# from the base branch; only then does it build and deploy the reviewed PR head.
 
 on:
   pull_request_target:
@@ -21,7 +25,7 @@ jobs:
   build-images:
     if: >-
       github.event.pull_request.head.repo.full_name == github.repository &&
-      contains(fromJSON('["OWNER", "MEMBER", "COLLABORATOR"]'), github.event.pull_request.author_association) &&
+      contains(fromJSON('["OWNER", "MEMBER", "COLLABORATOR", "CONTRIBUTOR"]'), github.event.pull_request.author_association) &&
       github.event.label.name == 'safe-to-deploy'
     uses: ./.github/workflows/build-images.yml
     with:
