@@ -32,7 +32,8 @@ const flowStorageKey = `pronto.${expectedEvent.split('.')[0]}.flow_id`;
 const beaconTimeoutMs = Number(process.env.BEACON_TIMEOUT_MS ?? 45_000);
 // Application Insights ingestion throttling (HTTP 439) is intermittent on this resource, so retry
 // a few attempts to prefer a clean 200 before tolerating the throttle.
-const maxAttempts = Number(process.env.SMOKE_ATTEMPTS ?? 3);
+const parsedAttempts = Number(process.env.SMOKE_ATTEMPTS ?? 3);
+const maxAttempts = Number.isInteger(parsedAttempts) && parsedAttempts > 0 ? parsedAttempts : 3;
 // Ingestion status returned when Application Insights is throttling the resource ("Daily quota
 // exceeded"). This is an infra/quota condition, not a frontend regression.
 const throttledStatus = 439;
