@@ -63,6 +63,11 @@ public sealed partial class PaymentsController : ControllerBase
 
         var config = await configs.GetAsync(request.BillerId, cancellationToken).ConfigureAwait(false);
 
+        // A payment may only settle for a biller whose configuration has cleared the publish +
+        // compliance gate. This state is server-owned (never client/agent input), so it cannot be
+        // bypassed by the request body.
+        RequireSettleEligible(config);
+
         if (!config.PaymentMethods.Contains(request.Method))
         {
             throw ServiceException.BadRequest(
@@ -199,6 +204,21 @@ public sealed partial class PaymentsController : ControllerBase
             throw ServiceException.BadRequest(
                 "invalid_schedule_date", $"scheduled_for cannot be more than {options.MaxScheduleDays} days in the future.");
         }
+    }
+
+    private static void RequireSettleEligible(BillerPaymentConfig config)
+    {
+        if (config.SettlementState == BillerSettlementState.Published)
+        {
+            return;
+        }
+
+        var reason = config.SettlementState == BillerSettlementState.ComplianceNotPassed
+            ? "its configuration has not passed the compliance gate"
+            : "its configuration is not published";
+        throw ServiceException.Conflict(
+            "biller_not_publishable",
+            $"payments cannot be settled for this biller because {reason}.");
     }
 
     private static void EnsureSameRequest(PaymentRecord existing, string fingerprint)
