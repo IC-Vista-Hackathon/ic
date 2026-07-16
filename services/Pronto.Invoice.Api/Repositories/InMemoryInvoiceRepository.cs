@@ -18,7 +18,18 @@ public sealed class InMemoryInvoiceRepository : IInvoiceRepository
             var partition = _byBiller.GetOrAdd(invoice.BillerId, static _ => new List<InvoiceDocument>());
             lock (partition)
             {
-                partition.Add(invoice);
+                // Upsert by id to mirror the Cosmos repository's UpsertItemAsync semantics: re-seeding
+                // a biller's deterministic set replaces the same documents instead of duplicating.
+                var index = partition.FindIndex(
+                    existing => string.Equals(existing.Id, invoice.Id, StringComparison.Ordinal));
+                if (index >= 0)
+                {
+                    partition[index] = invoice;
+                }
+                else
+                {
+                    partition.Add(invoice);
+                }
             }
         }
 

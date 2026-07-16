@@ -68,7 +68,52 @@ public sealed class InvoiceApiIntegrationTests : IClassFixture<TestingAppFactory
         Assert.All(list.Invoices, invoice => Assert.Equal(account, invoice.AccountNumber));
     }
 
-    private sealed record SeedRequest(int? Count, string? AccountNumber);
+    [Fact]
+    public async Task MultipleCategoryInvoicesAreSeededAndReturnedForOneAccount()
+    {
+        var client = _factory.CreateClient();
+        const string biller = "multi-invoice-biller";
+        const string account = "4421";
+        var seedBase = $"/billers/{biller}/invoices";
+
+        var specs = new[]
+        {
+            new SeedSpec("Water & sewer", 4200, 14, "Alex Rivera", "Water & sewer", "yellow"),
+            new SeedSpec("Stormwater", 3100, 21, "Jordan Chen", "Stormwater", "green"),
+            new SeedSpec("Waste collection", 2600, 30, "Sam Okafor", "Waste collection", "green"),
+        };
+
+        var seedResponse = await client.PostAsJsonAsync(
+            $"{seedBase}/seed", new SeedRequest(Count: null, AccountNumber: account, Invoices: specs), Wire);
+        Assert.Equal(HttpStatusCode.Created, seedResponse.StatusCode);
+
+        var list = await client.GetFromJsonAsync<InvoiceList>($"{seedBase}?account_number={account}", Wire);
+        Assert.NotNull(list);
+        Assert.Equal(3, list!.Invoices.Count);
+    }
+
+    [Fact]
+    public async Task ReSeedingTheSameSetDoesNotDuplicateInvoices()
+    {
+        var client = _factory.CreateClient();
+        const string biller = "reseed-biller";
+        const string account = "4421";
+        var seedBase = $"/billers/{biller}/invoices";
+        var request = new SeedRequest(Count: 4, AccountNumber: account, Invoices: null);
+
+        await client.PostAsJsonAsync($"{seedBase}/seed", request, Wire);
+        await client.PostAsJsonAsync($"{seedBase}/seed", request, Wire);
+
+        // Deterministic ids + upsert: re-publishing the same seed set must not duplicate invoices.
+        var list = await client.GetFromJsonAsync<InvoiceList>($"{seedBase}?account_number={account}", Wire);
+        Assert.NotNull(list);
+        Assert.Equal(4, list!.Invoices.Count);
+    }
+
+    private sealed record SeedRequest(int? Count, string? AccountNumber, IReadOnlyList<SeedSpec>? Invoices = null);
+
+    private sealed record SeedSpec(
+        string Description, int AmountCents, int DueInDays, string? PayerName, string? Type, string? StatusColor);
 
     private sealed record SeedResponse(int Seeded, string AccountNumber);
 

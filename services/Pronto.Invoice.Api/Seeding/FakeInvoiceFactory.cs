@@ -1,3 +1,4 @@
+using System.Buffers.Binary;
 using Pronto.Invoice.Api.Domain;
 using SeedInvoiceSpec = Pronto.Invoice.Contracts.V1.Invoices.SeedInvoiceSpec;
 
@@ -61,13 +62,14 @@ public static class FakeInvoiceFactory
         var invoices = new List<InvoiceDocument>(n);
         for (var i = 0; i < n; i++)
         {
+            var description = descriptions[i % descriptions.Length];
             invoices.Add(new InvoiceDocument
             {
-                Id = Guid.NewGuid().ToString(),
+                Id = SeedId(billerId, accountNumber, $"{billType}|{i}|{description}"),
                 BillerId = billerId,
                 AccountNumber = accountNumber,
                 PayerName = PayerNames[i % PayerNames.Length],
-                Description = descriptions[i % descriptions.Length],
+                Description = description,
                 AmountCents = AmountsCents[i % AmountsCents.Length],
                 // Stagger due dates a few weeks out so the demo shows a realistic spread.
                 DueDate = today.AddDays(14 + (i * 7)),
@@ -85,7 +87,7 @@ public static class FakeInvoiceFactory
         int index,
         DateOnly today) => new()
     {
-        Id = Guid.NewGuid().ToString(),
+        Id = SeedId(billerId, accountNumber, $"{index}|{spec.Description}"),
         BillerId = billerId,
         AccountNumber = accountNumber,
         PayerName = string.IsNullOrWhiteSpace(spec.PayerName)
@@ -100,6 +102,36 @@ public static class FakeInvoiceFactory
         Note = spec.Note,
         NoteEmphasis = spec.NoteEmphasis,
     };
+
+    /// <summary>
+    /// A stable invoice id derived from the biller, account, and a per-line key, so re-seeding the
+    /// same set upserts the same documents instead of appending duplicates (re-publishing must not
+    /// duplicate). The Cosmos and in-memory repositories both upsert by <c>id</c>.
+    /// </summary>
+    private static string SeedId(string billerId, string accountNumber, string key)
+    {
+        var lo = Fnv1a($"{billerId}|{accountNumber}|{key}");
+        var hi = Fnv1a($"{key}|{accountNumber}|{billerId}");
+        Span<byte> bytes = stackalloc byte[16];
+        BinaryPrimitives.WriteUInt64LittleEndian(bytes[..8], lo);
+        BinaryPrimitives.WriteUInt64LittleEndian(bytes[8..], hi);
+        return new Guid(bytes).ToString();
+    }
+
+    // FNV-1a (64-bit): process-stable (unlike string.GetHashCode) so ids reproduce across runs.
+    private static ulong Fnv1a(string value)
+    {
+        const ulong offset = 14695981039346656037;
+        const ulong prime = 1099511628211;
+        var hash = offset;
+        foreach (var ch in value)
+        {
+            hash ^= ch;
+            hash *= prime;
+        }
+
+        return hash;
+    }
 
     private static string[] DescriptionsFor(string? billType)
     {

@@ -30,6 +30,14 @@ public sealed class DeterministicSeedInvoiceGenerator : ISeedInvoiceGenerator
     public IReadOnlyList<SeedInvoiceSpec> Generate(SeedBillerContext biller, int count)
     {
         ArgumentNullException.ThrowIfNull(biller);
+
+        // When onboarding captured billing categories, seed at least one invoice per category so a
+        // multi-category biller gets multiple, category-labelled invoices.
+        if (biller.Categories.Count > 0)
+        {
+            return GenerateForCategories(biller, count);
+        }
+
         var n = Math.Clamp(count, MinCount, MaxCount);
 
         var theme = ClassifyTheme(biller);
@@ -68,6 +76,63 @@ public sealed class DeterministicSeedInvoiceGenerator : ISeedInvoiceGenerator
         }
 
         return specs;
+    }
+
+    private static List<SeedInvoiceSpec> GenerateForCategories(SeedBillerContext biller, int count)
+    {
+        var categories = biller.Categories;
+        // Guarantee coverage: at least one invoice per category, honoring the caller's count when it
+        // asks for more (extra invoices wrap back over the categories as later occurrences).
+        var n = Math.Clamp(Math.Max(count, categories.Count), MinCount, MaxCount);
+
+        var seed = StableHash($"{biller.BillerId}|{Normalize(biller.Name)}|{biller.Website?.Host ?? string.Empty}");
+        var rng = new SplitMix64(seed);
+        var reference = Base36(seed, 5);
+
+        var specs = new List<SeedInvoiceSpec>(n);
+        for (var i = 0; i < n; i++)
+        {
+            var category = categories[i % categories.Count];
+            var occurrence = (i / categories.Count) + 1;
+
+            // Amount is stable per category (a hash of the category), then jittered per biller so two
+            // billers with the same category still differ. Kept in a realistic demo range.
+            var categorySeed = StableHash($"{category.Id}|{reference}");
+            var baseAmount = 2500 + (int)(categorySeed % 90) * 100; // $25.00 – $114.00
+            var amount = baseAmount + (int)(rng.Next() % 12) * 100;
+            var payer = PayerNames[(int)(rng.Next() % (ulong)PayerNames.Length)];
+            // First invoice reads as "due soon" (a natural demo highlight); the rest spread out.
+            var statusColor = i == 0 ? "yellow" : "green";
+            var description = occurrence == 1
+                ? $"{category.DisplayName} (ref {reference}-{i + 1})"
+                : $"{category.DisplayName} #{occurrence} (ref {reference}-{i + 1})";
+
+            specs.Add(new SeedInvoiceSpec(
+                Description: description,
+                AmountCents: amount,
+                DueInDays: DueInDaysForCadence(category.Cadence, i),
+                PayerName: payer,
+                Type: category.DisplayName,
+                StatusColor: statusColor));
+        }
+
+        return specs;
+    }
+
+    // Cadence nudges the demo due dates so a monthly line reads sooner than a quarterly/annual one,
+    // with a weekly stagger so multiple seeded invoices don't all land on the same day.
+    private static int DueInDaysForCadence(string? cadence, int index)
+    {
+        var baseOffset = (cadence ?? string.Empty).ToLowerInvariant() switch
+        {
+            "onetime" or "one_time" or "adhoc" or "ad_hoc" => 10,
+            "monthly" => 14,
+            "quarterly" => 21,
+            "annual" => 30,
+            _ => 14,
+        };
+
+        return baseOffset + (index * 7);
     }
 
     private static SeedTheme ClassifyTheme(SeedBillerContext biller)

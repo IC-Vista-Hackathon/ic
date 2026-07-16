@@ -12,5 +12,11 @@
   </ItemGroup>
   <ItemGroup>
     <ProjectReference Include="..\..\services\Pronto.Invoice.Api\Pronto.Invoice.Api.csproj" />
+    <!-- Aliased: both hosts expose a top-level `Program`; the alias keeps the PayerAccount entry
+         point distinct from the Invoice one so both can be booted in-process from this project. -->
+    <ProjectReference Include="..\..\services\Pronto.PayerAccount.Api\Pronto.PayerAccount.Api.csproj">
+      <Aliases>PayerApi</Aliases>
+    </ProjectReference>
+    <ProjectReference Include="..\..\contracts\Pronto.PayerAccount.Contracts\Pronto.PayerAccount.Contracts.csproj" />
   </ItemGroup>
 </Project>

@@ -56,6 +56,23 @@ public sealed class SecurityTests : IClassFixture<TestingAppFactory>
     }
 
     [Fact]
+    public async Task RegisterAllowedForCrossBillerSeedingIdentity()
+    {
+        // The onboarding seeder holds the cross-biller service role (the same authority that seeds
+        // invoices); it may register the demo payer for any biller it is provisioning.
+        var client = _factory.CreateClient();
+        client.DefaultRequestHeaders.Add(TestAuthenticationHandler.RolesHeader, ServiceClaims.CrossBillerRole);
+
+        var response = await client.PostAsJsonAsync(
+            "payers",
+            new RegisterPayerRequest(
+                Guid.NewGuid().ToString(), "Demo Payer", $"{Guid.NewGuid()}@pronto-demo.example", null, []),
+            Wire);
+
+        Assert.Equal(HttpStatusCode.Created, response.StatusCode);
+    }
+
+    [Fact]
     public async Task RegisterAllowedForMatchingBillerClaim()
     {
         var client = _factory.CreateClient();
