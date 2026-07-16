@@ -6,8 +6,15 @@ using Pronto.Invoice.Contracts.V1.Invoices;
 
 namespace Pronto.BillerExperience.Api.Infrastructure.SupportingServices;
 
-public sealed partial class HttpInvoiceSeeder(HttpClient http, ILogger<HttpInvoiceSeeder> logger) : IInvoiceSeeder
+public sealed partial class HttpInvoiceSeeder(
+    HttpClient http,
+    ISeedInvoiceGenerator generator,
+    ILogger<HttpInvoiceSeeder> logger) : IInvoiceSeeder
 {
+    // Demo preview account every seeded biller's invoices attach to (matches the payer preview).
+    private const string PreviewAccountNumber = "4421";
+    private const int SeedCount = 4;
+
     private static readonly JsonSerializerOptions WireOptions = new(JsonSerializerDefaults.Web)
     {
         PropertyNamingPolicy = JsonNamingPolicy.SnakeCaseLower,
@@ -15,8 +22,12 @@ public sealed partial class HttpInvoiceSeeder(HttpClient http, ILogger<HttpInvoi
         Converters = { new JsonStringEnumConverter(JsonNamingPolicy.SnakeCaseLower, allowIntegerValues: false) },
     };
 
-    public async ValueTask SeedAsync(string billerId, string billType, CancellationToken cancellationToken)
+    public async ValueTask SeedAsync(SeedBillerContext biller, CancellationToken cancellationToken)
     {
+        ArgumentNullException.ThrowIfNull(biller);
+        var billerId = biller.BillerId;
+        // Agent configures: choose biller-relevant demo line items here; the Invoice service persists.
+        var invoiceSpecs = generator.Generate(biller, SeedCount);
         // Capture the correlation id from the ambient request before the child activity becomes
         // current, then carry it onto this span so CorrelationPropagationHandler propagates the
         // x-correlation-id/x-ic-biller-id headers on the outbound seed request.
@@ -33,7 +44,9 @@ public sealed partial class HttpInvoiceSeeder(HttpClient http, ILogger<HttpInvoi
                     using var request = new HttpRequestMessage(HttpMethod.Post,
                         $"billers/{Uri.EscapeDataString(billerId)}/invoices/seed")
                     {
-                        Content = JsonContent.Create(new SeedInvoicesRequest(4, "4421", billType), options: WireOptions)
+                        Content = JsonContent.Create(
+                            new SeedInvoicesRequest(invoiceSpecs.Count, PreviewAccountNumber, biller.BillType, invoiceSpecs),
+                            options: WireOptions)
                     };
                     using var response = await http.SendAsync(request, cancellationToken);
                     response.EnsureSuccessStatusCode();

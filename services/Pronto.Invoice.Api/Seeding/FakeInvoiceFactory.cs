@@ -1,28 +1,26 @@
 using Pronto.Invoice.Api.Domain;
+using SeedInvoiceSpec = Pronto.Invoice.Contracts.V1.Invoices.SeedInvoiceSpec;
 
 namespace Pronto.Invoice.Api.Seeding;
 
 /// <summary>
-/// Generates demo invoices for onboarding. Deterministic (index-driven, no RNG) so a given
-/// request produces a stable, previewable set — themed loosely by bill type.
+/// Materializes demo invoices for onboarding.
 /// </summary>
 /// <remarks>
-/// For the hackathon demo, two bill types produce hand-authored, fixed sets so the payer
-/// experience shows a realistic, curated story: <c>insurance</c> (auto/home/life policies) and
-/// <c>other</c> (the HOA demo). These sets ignore <c>count</c>. Every other bill type keeps the
-/// original index-driven generation.
+/// Per "agents configure, deterministic services execute" the biller-relevant <em>content</em> is
+/// chosen upstream (the Biller Experience side, which owns onboarding and the biller profile) and
+/// passed in as <see cref="SeedInvoiceSpec"/>s; this factory just stamps biller/account scoping, a
+/// lifecycle status of <c>due</c>, and anchors relative due dates to the caller's clock.
+///
+/// When no specs are supplied it falls back to a generic, index-driven demo set (optionally themed
+/// by <c>bill_type</c>). It deliberately does <b>not</b> hand-author a fixed set keyed on
+/// <c>bill_type</c> — that is the FR-6 defect this replaced: it made an apparel store onboarded as
+/// <c>other</c> receive HOA invoices and gave two unrelated billers byte-identical sets.
 /// </remarks>
 public static class FakeInvoiceFactory
 {
     private const int DefaultCount = 4;
     private const int MaxCount = 24;
-
-    // Demo status colors (presentation only — the payment lifecycle status stays "due").
-    private const string Green = "green";
-    private const string Yellow = "yellow";
-
-    // Curated payer for the hand-authored demo sets so every bill reads as one household/policyholder.
-    private const string DemoPayerName = "Alex Rivera";
 
     private static readonly string[] PayerNames =
     [
@@ -36,22 +34,24 @@ public static class FakeInvoiceFactory
     ];
 
     /// <summary>
-    /// Build a seed set for a biller. <paramref name="count"/> and <paramref name="billType"/>
-    /// are optional; <paramref name="accountNumber"/> is the account all invoices attach to.
-    /// <paramref name="today"/> anchors due dates (kept as a parameter for testability).
+    /// Build a seed set for a biller. When <paramref name="specs"/> is non-empty the caller-chosen,
+    /// biller-relevant line items are persisted verbatim (only biller/account/status/due-date are
+    /// stamped here). Otherwise a generic index-driven set is produced; <paramref name="count"/> and
+    /// <paramref name="billType"/> shape that fallback. <paramref name="today"/> anchors due dates.
     /// </summary>
     public static IReadOnlyList<InvoiceDocument> Create(
         string billerId,
         string accountNumber,
         int? count,
         string? billType,
-        DateOnly today)
+        DateOnly today,
+        IReadOnlyList<SeedInvoiceSpec>? specs = null)
     {
-        var curated = CuratedSetFor(billType);
-        if (curated is not null)
+        if (specs is { Count: > 0 })
         {
-            return curated
-                .Select(spec => spec.ToDocument(billerId, accountNumber))
+            return specs
+                .Take(MaxCount)
+                .Select((spec, index) => FromSpec(spec, billerId, accountNumber, index, today))
                 .ToList();
         }
 
@@ -78,32 +78,28 @@ public static class FakeInvoiceFactory
         return invoices;
     }
 
-    /// <summary>
-    /// Hand-authored demo sets keyed by biller <c>bill_type</c> (the Studio vertical id). Returns
-    /// null for bill types that use the generic index-driven generation instead.
-    /// </summary>
-    private static IReadOnlyList<DemoInvoice>? CuratedSetFor(string? billType)
+    private static InvoiceDocument FromSpec(
+        SeedInvoiceSpec spec,
+        string billerId,
+        string accountNumber,
+        int index,
+        DateOnly today) => new()
     {
-        var normalized = billType?.Trim().ToLowerInvariant();
-        return normalized switch
-        {
-            "insurance" =>
-            [
-                new DemoInvoice("Auto", "Auto policy premium", 14250, new DateOnly(2026, 7, 14), Yellow,
-                    "Overdue but in the grace period — pay today to keep your policy active with no penalty.", NoteEmphasis: true),
-                new DemoInvoice("Home", "Homeowners policy premium", 8900, new DateOnly(2026, 8, 30), Green),
-                new DemoInvoice("Life", "Life policy premium", 4500, new DateOnly(2026, 12, 31), Green),
-            ],
-            "other" =>
-            [
-                new DemoInvoice("HOA Dues", "Quarterly HOA dues", 35000, new DateOnly(2026, 7, 31), Green),
-                new DemoInvoice("Special Assessment (Pool)", "Community pool special assessment", 450000, new DateOnly(2026, 12, 31), Green,
-                    "This assessment is much larger than your other bills — a payment plan is recommended.", NoteEmphasis: true),
-                new DemoInvoice("HOA Fine", "$100 fine for playing \"All I Want for Christmas is You\" during summer", 10000, new DateOnly(2026, 7, 31), Green),
-            ],
-            _ => null,
-        };
-    }
+        Id = Guid.NewGuid().ToString(),
+        BillerId = billerId,
+        AccountNumber = accountNumber,
+        PayerName = string.IsNullOrWhiteSpace(spec.PayerName)
+            ? PayerNames[index % PayerNames.Length]
+            : spec.PayerName.Trim(),
+        Description = spec.Description,
+        AmountCents = spec.AmountCents,
+        DueDate = today.AddDays(spec.DueInDays),
+        Status = InvoiceStatus.Due,
+        Type = spec.Type,
+        StatusColor = spec.StatusColor,
+        Note = spec.Note,
+        NoteEmphasis = spec.NoteEmphasis,
+    };
 
     private static string[] DescriptionsFor(string? billType)
     {
@@ -114,33 +110,6 @@ public static class FakeInvoiceFactory
             "real estate tax" or "property tax" or "tax" =>
                 ["Property tax installment", "Assessment adjustment", "Late parcel fee", "Supplemental levy"],
             _ => ["Monthly statement", "Service charge", "Account balance", "Recurring bill"],
-        };
-    }
-
-    /// <summary>A single hand-authored demo invoice, materialized into a stored document on seed.</summary>
-    private sealed record DemoInvoice(
-        string Type,
-        string Description,
-        int AmountCents,
-        DateOnly DueDate,
-        string StatusColor,
-        string? Note = null,
-        bool NoteEmphasis = false)
-    {
-        public InvoiceDocument ToDocument(string billerId, string accountNumber) => new()
-        {
-            Id = Guid.NewGuid().ToString(),
-            BillerId = billerId,
-            AccountNumber = accountNumber,
-            PayerName = DemoPayerName,
-            Description = Description,
-            AmountCents = AmountCents,
-            DueDate = DueDate,
-            Status = InvoiceStatus.Due,
-            Type = Type,
-            StatusColor = StatusColor,
-            Note = Note,
-            NoteEmphasis = NoteEmphasis,
         };
     }
 }

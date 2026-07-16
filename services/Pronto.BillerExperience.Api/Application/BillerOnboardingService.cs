@@ -83,7 +83,8 @@ public sealed partial class BillerOnboardingService(
                     $"Create, review, approve, and publish a safe branded payment experience for {biller.Name}.",
                     cancellationToken);
             }
-            await (invoiceSeeder ?? new NullInvoiceSeeder()).SeedAsync(id, biller.BillType, cancellationToken);
+            await (invoiceSeeder ?? new NullInvoiceSeeder()).SeedAsync(
+                new SeedBillerContext(id, biller.Name, biller.BillType, biller.Website), cancellationToken);
             LogBillerCreated(logger, id, savedRun.Id, draftGenerator.Provider);
             return (Map(biller), Map(savedRun), Map(savedExperience));
         }

@@ -151,6 +151,7 @@ builder.Services.AddSingleton<IComplianceReviewService>(services => new Complian
     services.GetRequiredService<Microsoft.Extensions.Options.IOptions<BillerExperienceOptions>>(),
     services.GetRequiredService<ILogger<ComplianceReviewService>>(),
     services.GetService<IComplianceKnowledgeReviewer>()));
+builder.Services.AddSingleton<ISeedInvoiceGenerator, DeterministicSeedInvoiceGenerator>();
 if (Uri.TryCreate(options.SupportingServices.InvoiceBaseUrl, UriKind.Absolute, out var invoiceBaseUri))
 {
     builder.Services.AddHttpClient("invoice-seeder", client => client.BaseAddress = invoiceBaseUri)
@@ -158,6 +159,7 @@ if (Uri.TryCreate(options.SupportingServices.InvoiceBaseUrl, UriKind.Absolute, o
         .AddServiceBearerToken(builder.Configuration, builder.Environment);
     builder.Services.AddSingleton<IInvoiceSeeder>(services => new HttpInvoiceSeeder(
         services.GetRequiredService<IHttpClientFactory>().CreateClient("invoice-seeder"),
+        services.GetRequiredService<ISeedInvoiceGenerator>(),
         services.GetRequiredService<ILogger<HttpInvoiceSeeder>>()));
 }
 else

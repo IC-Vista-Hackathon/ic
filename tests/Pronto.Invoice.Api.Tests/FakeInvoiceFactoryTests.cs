@@ -1,5 +1,6 @@
 using Pronto.Invoice.Api.Domain;
 using Pronto.Invoice.Api.Seeding;
+using SeedInvoiceSpec = Pronto.Invoice.Contracts.V1.Invoices.SeedInvoiceSpec;
 using Xunit;
 
 namespace Pronto.Invoice.Api.Tests;
@@ -55,46 +56,65 @@ public sealed class FakeInvoiceFactoryTests
     }
 
     [Fact]
-    public void CreateSeedsCuratedInsuranceSetIgnoringCount()
+    public void CreateDoesNotHandAuthorAnHoaSetForOtherBillType()
     {
-        var invoices = FakeInvoiceFactory.Create("b_1", "ACCT-1", count: 12, billType: "insurance", Today);
+        // FR-6 regression guard: bill_type must never select a fixed hand-authored set. The removed
+        // "other" branch used to return HOA dues / a pool special assessment / a Christmas-fine joke.
+        var invoices = FakeInvoiceFactory.Create("b_1", "ACCT-1", count: null, billType: "other", Today);
 
-        Assert.Equal(3, invoices.Count);
+        Assert.All(invoices, i =>
+        {
+            Assert.DoesNotContain("HOA", i.Description, StringComparison.OrdinalIgnoreCase);
+            Assert.DoesNotContain("special assessment", i.Description, StringComparison.OrdinalIgnoreCase);
+            Assert.DoesNotContain("All I Want for Christmas", i.Description, StringComparison.OrdinalIgnoreCase);
+        });
+    }
+
+    [Fact]
+    public void CreateMaterializesSuppliedSpecsVerbatim()
+    {
+        SeedInvoiceSpec[] specs =
+        [
+            new("Online apparel order", AmountCents: 6800, DueInDays: 14, PayerName: "Dana Wu",
+                Type: "Order", StatusColor: "yellow", Note: "Due soon", NoteEmphasis: true),
+            new("Store credit adjustment", AmountCents: 3000, DueInDays: 21, Type: "Store Credit"),
+        ];
+
+        var invoices = FakeInvoiceFactory.Create("b_1", "ACCT-1", count: 4, billType: "other", Today, specs);
+
+        Assert.Equal(2, invoices.Count);
         Assert.Collection(invoices,
-            auto =>
+            first =>
             {
-                Assert.Equal("Auto", auto.Type);
-                Assert.Equal(new DateOnly(2026, 7, 14), auto.DueDate);
-                Assert.Equal("yellow", auto.StatusColor);
-                Assert.False(string.IsNullOrWhiteSpace(auto.Note));
+                Assert.Equal("Online apparel order", first.Description);
+                Assert.Equal(6800, first.AmountCents);
+                Assert.Equal(Today.AddDays(14), first.DueDate);
+                Assert.Equal("Dana Wu", first.PayerName);
+                Assert.Equal("Order", first.Type);
+                Assert.Equal("yellow", first.StatusColor);
+                Assert.Equal("Due soon", first.Note);
+                Assert.True(first.NoteEmphasis);
+                Assert.Equal(InvoiceStatus.Due, first.Status);
             },
-            home =>
+            second =>
             {
-                Assert.Equal("Home", home.Type);
-                Assert.Equal(new DateOnly(2026, 8, 30), home.DueDate);
-                Assert.Equal("green", home.StatusColor);
-            },
-            life =>
-            {
-                Assert.Equal("Life", life.Type);
-                Assert.Equal(new DateOnly(2026, 12, 31), life.DueDate);
-                Assert.Equal("green", life.StatusColor);
+                Assert.Equal("Store credit adjustment", second.Description);
+                Assert.Equal(Today.AddDays(21), second.DueDate);
+                Assert.Equal("Store Credit", second.Type);
+                // A spec that omits a payer still gets one assigned deterministically.
+                Assert.False(string.IsNullOrWhiteSpace(second.PayerName));
             });
     }
 
     [Fact]
-    public void CreateSeedsCuratedHoaSetForOtherBillType()
+    public void CreateSuppliedSpecsOverrideBillTypeAndCount()
     {
-        var invoices = FakeInvoiceFactory.Create("b_1", "ACCT-1", count: null, billType: "other", Today);
+        SeedInvoiceSpec[] specs = [new("Facility rental permit", AmountCents: 7500, DueInDays: 14, Type: "Permit")];
 
-        Assert.Equal(3, invoices.Count);
-        Assert.Equal("HOA Dues", invoices[0].Type);
-        Assert.Equal("Special Assessment (Pool)", invoices[1].Type);
-        Assert.True(invoices[1].NoteEmphasis);
-        Assert.True(invoices[1].AmountCents > invoices[0].AmountCents);
-        Assert.Equal("HOA Fine", invoices[2].Type);
-        Assert.Contains("All I Want for Christmas", invoices[2].Description, StringComparison.Ordinal);
-        Assert.All(invoices, i => Assert.Equal(InvoiceStatus.Due, i.Status));
+        var invoices = FakeInvoiceFactory.Create("b_1", "ACCT-1", count: 10, billType: "utility", Today, specs);
+
+        var invoice = Assert.Single(invoices);
+        Assert.Equal("Facility rental permit", invoice.Description);
     }
 
     [Fact]
