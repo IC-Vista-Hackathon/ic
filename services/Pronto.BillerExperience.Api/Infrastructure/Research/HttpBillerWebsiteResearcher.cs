@@ -49,6 +49,7 @@ public sealed partial class HttpBillerWebsiteResearcher(
             var facts = new List<ResearchFact>();
             var sources = new List<ResearchSource>();
             var warnings = new List<string>();
+            var brandEvidenceCaptured = false;
             pending.Enqueue(website);
 
             while (pending.Count > 0 && visited.Count < pageLimit)
@@ -78,6 +79,16 @@ public sealed partial class HttpBillerWebsiteResearcher(
                 sources.Add(new ResearchSource(page.FinalUri!, title, retrievedAt));
                 AddFact(facts, "page_title", title, page.FinalUri!);
                 AddFact(facts, "page_description", description, page.FinalUri!);
+
+                // Pull first-party brand tokens (logo, colors, typography, name, tagline) from the
+                // landing page only — that is where a site's brand is expressed, and it keeps one
+                // authoritative value per token instead of merging conflicting per-page signals.
+                if (!brandEvidenceCaptured)
+                {
+                    facts.AddRange(BrandEvidenceExtractor.Extract(page.Html!, page.FinalUri!));
+                    brandEvidenceCaptured = true;
+                }
+
                 ResearchTelemetry.Pages.Add(1);
 
                 foreach (var link in ExtractLinks(page.Html!, page.FinalUri!, website.Host)

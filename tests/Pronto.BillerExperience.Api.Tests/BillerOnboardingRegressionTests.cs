@@ -5,6 +5,7 @@ using Pronto.BillerExperience.Api.Application;
 using Pronto.BillerExperience.Api.Domain;
 using Pronto.BillerExperience.Api.Infrastructure.AI;
 using Pronto.BillerExperience.Api.Infrastructure.Persistence;
+using Pronto.BillerExperience.Api.Infrastructure.Research;
 using Pronto.BillerExperience.Api.Infrastructure.SupportingServices;
 using Pronto.BillerExperience.Contracts.V1.Billers;
 using Pronto.BillerExperience.Contracts.V1.Experiences;
@@ -20,7 +21,9 @@ public sealed class BillerOnboardingRegressionTests
     public async Task ApprovedRevisionCannotBeChangedThroughChat()
     {
         var repository = new InMemoryBillerExperienceRepository();
-        var service = CreateService(repository);
+        var service = CreateService(
+            repository,
+            researchCoordinator: new TestResearch.StubCoordinator(TestResearch.BrandEvidence()));
         var created = await service.CreateAsync(Request(), CancellationToken.None);
         var chat = await service.SendMessageAsync(
             created.Biller.BillerId,
@@ -162,13 +165,15 @@ public sealed class BillerOnboardingRegressionTests
 
     private static BillerOnboardingService CreateService(
         IBillerExperienceRepository repository,
-        IInvoiceSeeder? seeder = null) =>
+        IInvoiceSeeder? seeder = null,
+        IBillerResearchCoordinator? researchCoordinator = null) =>
         new(
             repository,
             new DeterministicExperienceDraftGenerator(
                 NullLogger<DeterministicExperienceDraftGenerator>.Instance),
             new OrchestrationRunner(),
             NullLogger<BillerOnboardingService>.Instance,
+            researchCoordinator: researchCoordinator,
             agentContextService: new AgentContextService(
                 repository,
                 NullLogger<AgentContextService>.Instance),

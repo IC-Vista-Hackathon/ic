@@ -122,6 +122,7 @@ public sealed class BillersControllerTests
             new DeterministicExperienceDraftGenerator(NullLogger<DeterministicExperienceDraftGenerator>.Instance),
             new OrchestrationRunner(),
             NullLogger<BillerOnboardingService>.Instance,
+            new TestResearch.StubCoordinator(TestResearch.BrandEvidence()),
             invoiceSeeder: null);
         var controller = new BillersController(
             onboarding,
