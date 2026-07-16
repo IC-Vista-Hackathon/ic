@@ -77,6 +77,14 @@ public sealed record PaymentRecord
     public string? FailureReason { get; init; }
 
     /// <summary>
+    /// True for a synthetic canary payment minted by the post-publish assurance layer to prove the
+    /// live payer path still settles. Canary records run the genuine end-to-end workflow on the
+    /// fake rail but are excluded from reconciliation of genuine traffic and from real reporting,
+    /// so a synthetic settlement is never mistaken for a real one.
+    /// </summary>
+    public bool IsCanary { get; init; }
+
+    /// <summary>
     /// Exclusive lease held by a processor while it drives a pending/scheduled record forward.
     /// A record may be re-claimed once this passes, so a crashed processor never wedges it.
     /// </summary>
