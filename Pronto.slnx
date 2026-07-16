@@ -30,6 +30,7 @@
     <Project Path="tests/Pronto.PayerAccount.Api.Tests/Pronto.PayerAccount.Api.Tests.csproj" />
     <Project Path="tests/Pronto.PayerAccount.Contracts.Tests/Pronto.PayerAccount.Contracts.Tests.csproj" />
     <Project Path="tests/Pronto.PayerExperience.Router.Tests/Pronto.PayerExperience.Router.Tests.csproj" />
+    <Project Path="tests/Pronto.ServiceDefaults.Tests/Pronto.ServiceDefaults.Tests.csproj" />
     <Project Path="tests/Pronto.Persistence.Cosmos.Tests/Pronto.Persistence.Cosmos.Tests.csproj" />
   </Folder>
 </Solution>
