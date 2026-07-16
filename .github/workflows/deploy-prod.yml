@@ -23,6 +23,7 @@ jobs:
     with:
       image_tag: ${{ github.sha }}
       source_ref: ${{ github.sha }}
+      base_ref: ${{ github.event.before }}
     secrets:
       AZURE_CREDENTIALS: ${{ secrets.AZURE_CREDENTIALS }}
 
