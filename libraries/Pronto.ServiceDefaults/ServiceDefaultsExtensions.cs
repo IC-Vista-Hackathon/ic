@@ -1,3 +1,4 @@
+using System.Globalization;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using Azure.Monitor.OpenTelemetry.AspNetCore;
@@ -34,9 +35,30 @@ public static class ServiceDefaultsExtensions
             .ConfigureResource(resource => resource.AddService(serviceName));
         if (!string.IsNullOrWhiteSpace(builder.Configuration["APPLICATIONINSIGHTS_CONNECTION_STRING"]))
         {
-            telemetry.UseAzureMonitor();
+            var samplingRatio = ResolveSamplingRatio(builder.Configuration["APPLICATIONINSIGHTS_SAMPLING_RATIO"]);
+            telemetry.UseAzureMonitor(options => options.SamplingRatio = samplingRatio);
         }
         return builder;
+    }
+
+    /// <summary>
+    /// Fixed-rate trace sampling ratio for Azure Monitor, as headroom against the Application
+    /// Insights daily ingestion cap. Defaults to 1.0 (keep everything) so behaviour is unchanged
+    /// unless <c>APPLICATIONINSIGHTS_SAMPLING_RATIO</c> is set for an environment (e.g. <c>0.25</c>
+    /// keeps ~25% of traces). Azure Monitor's sampler is parent-consistent — a sampled-out request
+    /// drops its whole trace, so ratios stay meaningful across services. Values outside (0, 1] or
+    /// unparseable input fall back to 1.0 rather than silently disabling telemetry.
+    /// </summary>
+    internal static float ResolveSamplingRatio(string? configuredValue)
+    {
+        const float keepEverything = 1.0f;
+        if (string.IsNullOrWhiteSpace(configuredValue)
+            || !float.TryParse(configuredValue, NumberStyles.Float, CultureInfo.InvariantCulture, out var ratio)
+            || ratio <= 0f || ratio > 1f)
+        {
+            return keepEverything;
+        }
+        return ratio;
     }
 
     /// <summary>
