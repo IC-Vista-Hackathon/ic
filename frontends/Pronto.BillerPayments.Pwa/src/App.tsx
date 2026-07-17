@@ -43,6 +43,9 @@ export function App() {
   // One stable Idempotency-Key per invoice; reused across retries so a partially-failed
   // batch never double-charges an invoice that already settled.
   const paymentKeys = useRef<Map<string, string>>(new Map());
+  // Invoice::method pairs already quoted or in flight, so toggling the selection only fetches
+  // newly-added pairs and never re-requests (or blanks) quotes already cached for other invoices.
+  const requestedQuotes = useRef<Set<string>>(new Set());
 
   useEffect(() => {
     setConfigState('loading'); setError('');
@@ -73,22 +76,25 @@ export function App() {
   const quoteOf = (invoiceId: string, forMethod: PaymentMethod) => quotes[`${invoiceId}::${forMethod}`];
   const quote = invoice ? quoteOf(invoice.id, method) : undefined;
   useEffect(() => {
-    setQuotes({});
-    setQuoteErrors({});
     if (!provider || selectedInvoices.length === 0) return;
-    let cancelled = false;
     const methods = PAYMENT_METHODS.filter(value => acceptedMethods.includes(value));
     for (const item of selectedInvoices) {
       for (const value of methods) {
+        const key = `${item.id}::${value}`;
+        // Dedupe against pairs already quoted or in flight (tracked in requestedQuotes) so
+        // toggling the selection only fetches newly-added pairs — it never re-requests or
+        // blanks quotes already fetched for the other still-selected invoices.
+        if (requestedQuotes.current.has(key)) continue;
+        requestedQuotes.current.add(key);
         provider.quote(item.id, value)
-          .then(result => { if (!cancelled) setQuotes(previous => ({ ...previous, [`${item.id}::${value}`]: result })); })
+          .then(result => setQuotes(previous => ({ ...previous, [key]: result })))
           .catch(caught => {
             logError('pwa.payment.quote_failed', caught, { method: value });
-            if (!cancelled) setQuoteErrors(previous => ({ ...previous, [value]: errorMessage(caught) }));
+            requestedQuotes.current.delete(key); // allow a retry to re-request this pair
+            setQuoteErrors(previous => ({ ...previous, [value]: errorMessage(caught) }));
           });
       }
     }
-    return () => { cancelled = true; };
   }, [acceptedMethods, provider, selectedInvoices, quoteAttempt]);
 
   // Aggregate money for the current method over the selected invoices. All sums are computed
@@ -107,8 +113,11 @@ export function App() {
 
   useEffect(() => { if (!acceptedMethods.includes(method)) setMethod(acceptedMethods.includes('ach') ? 'ach' : 'card'); }, [acceptedMethods, method]);
 
-  async function lookup(event: FormEvent<HTMLFormElement>) { event.preventDefault(); if (!provider) return; setBusy(true); setError(''); paymentKeys.current = new Map(); setOutcomes([]); setReceipt(undefined); try { const data = new FormData(event.currentTarget); const account = String(data.get('account')); const loaded = await provider.getInvoices(account); const open = loaded.filter(item => item.status !== 'paid'); if (open.length === 0) throw new NoOpenBillError(); setInvoices(loaded); setSelectedIds(open.map(item => item.id)); const profile = await provider.findPayer(account); setPayer(profile); if (profile) { setAutoPay(profile.preferences.autopay); setPaperless(profile.preferences.paperless); setPayerName(profile.name); setPayerEmail(profile.email); setPayments(await provider.getPayments(profile.payer_id)); } setStep('method'); trackEvent('pwa.bill_lookup', { outcome: 'found' }); } catch (caught) { setError(`Find bill: ${errorMessage(caught)}`); logError('pwa.invoice.lookup_failed', caught); if (caught instanceof NoOpenBillError) trackEvent('pwa.bill_lookup', { outcome: 'no_open_bill' }); else trackEvent('pwa.bill_lookup', { outcome: 'failed', error_category: categorizeError(caught) }); } finally { setBusy(false); } }
+  async function lookup(event: FormEvent<HTMLFormElement>) { event.preventDefault(); if (!provider) return; setBusy(true); setError(''); paymentKeys.current = new Map(); requestedQuotes.current = new Set(); setQuotes({}); setQuoteErrors({}); setOutcomes([]); setReceipt(undefined); try { const data = new FormData(event.currentTarget); const account = String(data.get('account')); const loaded = await provider.getInvoices(account); const open = loaded.filter(item => item.status !== 'paid'); if (open.length === 0) throw new NoOpenBillError(); setInvoices(loaded); setSelectedIds(open.map(item => item.id)); const profile = await provider.findPayer(account); setPayer(profile); if (profile) { setAutoPay(profile.preferences.autopay); setPaperless(profile.preferences.paperless); setPayerName(profile.name); setPayerEmail(profile.email); setPayments(await provider.getPayments(profile.payer_id)); } setStep('method'); trackEvent('pwa.bill_lookup', { outcome: 'found' }); } catch (caught) { setError(`Find bill: ${errorMessage(caught)}`); logError('pwa.invoice.lookup_failed', caught); if (caught instanceof NoOpenBillError) trackEvent('pwa.bill_lookup', { outcome: 'no_open_bill' }); else trackEvent('pwa.bill_lookup', { outcome: 'failed', error_category: categorizeError(caught) }); } finally { setBusy(false); } }
 
+  // Re-request only the pairs that are still missing (failed pairs were dropped from the set);
+  // cached quotes are kept, so a retry never blanks quotes already fetched for other invoices.
+  function retryQuotes() { setQuoteErrors({}); setQuoteAttempt(value => value + 1); }
   function toggleInvoice(invoiceId: string) { setSelectedIds(previous => previous.includes(invoiceId) ? previous.filter(id => id !== invoiceId) : [...previous, invoiceId]); }
   function selectAllInvoices() { setSelectedIds(openInvoices.map(item => item.id)); }
   function clearSelectedInvoices() { setSelectedIds([]); }
@@ -251,7 +260,7 @@ export function App() {
         {step === 'method' && invoice && <>
           {multi && <InvoiceSelectList heading="Select the bills to pay" invoices={selectable} onToggle={toggleInvoice} onSelectAll={selectAllInvoices} onClearAll={clearSelectedInvoices} allSelected={openInvoices.length > 0 && selectedInvoices.length === openInvoices.length} />}
           <section className="card">{!multi && <Bill invoice={invoice}/>}<h2>Choose how to pay</h2><div className="choices">{acceptedMethods.includes('card') && <button data-testid="method-card" className={method === 'card' ? 'selected' : 'option'} onClick={() => selectMethod('card')}>Card <small>{multi ? methodFeeText('card') : quoteFeeText(quoteOf(invoice.id, 'card'), invoice.amountCents)}</small></button>}{acceptedMethods.includes('ach') && <button data-testid="method-ach" className={method === 'ach' ? 'selected' : 'option'} onClick={() => selectMethod('ach')}>Bank Account <small>{multi ? methodFeeText('ach') : quoteFeeText(quoteOf(invoice.id, 'ach'), invoice.amountCents)}</small></button>}</div>
-          {quoteErrors[method] && <div className="alert" role="alert" data-testid="quote-error">We couldn’t prepare this payment method. {quoteErrors[method]} <button type="button" onClick={() => setQuoteAttempt(value => value + 1)}>Retry quote</button></div>}
+          {quoteErrors[method] && <div className="alert" role="alert" data-testid="quote-error">We couldn’t prepare this payment method. {quoteErrors[method]} <button type="button" onClick={retryQuotes}>Retry quote</button></div>}
           {(preferences.offer_autopay || preferences.offer_paperless) && <fieldset><legend>Optional preferences</legend>{preferences.offer_autopay && preferences.enroll_during_payment && <label className="check"><input type="checkbox" checked={autoPay} onChange={event => changeAutoPay(event.target.checked)}/><span><strong>Enroll in AutoPay</strong><small>Use this method for future bills. Cancel anytime.</small></span></label>}{preferences.offer_paperless && <label className="check"><input type="checkbox" checked={paperless} onChange={event => changePaperless(event.target.checked)}/><span><strong>Switch to Paperless Billing</strong><small>Receive bills electronically instead of by mail.</small></span></label>}{(autoPay || paperless) && <><label>Name<input value={payerName} onChange={event => setPayerName(event.target.value)} required/></label><label>Email<input type="email" value={payerEmail} onChange={event => setPayerEmail(event.target.value)} required/></label></>}</fieldset>}
           <button data-testid="review-submit" onClick={openReview} disabled={selectedInvoices.length === 0 || !allQuoted || !!quoteErrors[method] || ((autoPay || paperless) && (!payerName || !payerEmail))}>Review Payment</button></section>
           {multi && <Cart summary={cartSummary} onRemove={toggleInvoice} emptyText="Select at least one bill to continue." />}</>}

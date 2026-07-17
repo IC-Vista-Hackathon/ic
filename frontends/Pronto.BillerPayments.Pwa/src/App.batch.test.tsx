@@ -8,14 +8,15 @@ const payCalls: PaymentRequest[] = [];
 const pay = vi.fn<(request: PaymentRequest) => Promise<PaymentReceipt>>();
 const getPayments = vi.fn<() => Promise<PaymentHistory[]>>();
 const findPayer = vi.fn<() => Promise<PayerProfile | undefined>>();
+const quote = vi.fn(async (invoiceId: string, method: string) => {
+  const amount = invoices.find(item => item.id === invoiceId)?.amountCents ?? 0;
+  const fee = method === 'card' ? 250 : 0; // card: payer pays fee; ach: biller absorbs it
+  return { feeCents: fee, totalCents: amount + fee };
+});
 
 vi.mock('./provider', () => ({
   ServicePaymentExperienceProvider: class {
-    quote = vi.fn(async (invoiceId: string, method: string) => {
-      const amount = invoices.find(item => item.id === invoiceId)?.amountCents ?? 0;
-      const fee = method === 'card' ? 250 : 0; // card: payer pays fee; ach: biller absorbs it
-      return { feeCents: fee, totalCents: amount + fee };
-    });
+    quote = quote;
     getInvoices = vi.fn().mockResolvedValue(invoices);
     findPayer = findPayer;
     getPayments = getPayments;
@@ -98,12 +99,19 @@ describe('multi-invoice cart + batch checkout', () => {
     await user.click(await screen.findByTestId('lookup-submit'));
     await screen.findByTestId('invoice-select');
 
+    // All 3 invoices × 2 methods are quoted once on load; toggling must not re-fetch them.
+    await waitFor(() => expect(quote).toHaveBeenCalledTimes(6));
+
     const option = within(screen.getByTestId('invoice-option-inv-3')).getByRole('checkbox');
     await user.click(option);
 
     expect(screen.getByTestId('cart').textContent).toContain('Your cart (2)');
     await waitFor(() => expect(screen.getByTestId('cart-subtotal').textContent).toBe('$205.00'));
     expect(screen.queryByTestId('cart-line-inv-3')).toBeNull();
+    // Deselecting drops no cached quote, and re-selecting reuses the cache — no new fetches.
+    await user.click(option);
+    expect(screen.getByTestId('cart').textContent).toContain('Your cart (3)');
+    expect(quote).toHaveBeenCalledTimes(6);
   });
 
   it('settles each selected invoice with one POST and a distinct idempotency key', async () => {
