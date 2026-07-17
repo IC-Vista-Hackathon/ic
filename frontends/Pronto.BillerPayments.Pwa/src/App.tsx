@@ -37,7 +37,10 @@ export function App() {
   const [payerEmail, setPayerEmail] = useState('');
   // Quotes are keyed `${invoiceId}::${method}` — every selected invoice is quoted per method.
   const [quotes, setQuotes] = useState<Record<string, PaymentQuote>>({});
-  const [quoteErrors, setQuoteErrors] = useState<Partial<Record<PaymentMethod, string>>>({});
+  // Quote errors are keyed `${invoiceId}::${method}` so a failure is scoped to the bill that
+  // failed; the per-method banner is derived from only the currently-selected invoices, so
+  // deselecting the offending bill clears the error without a manual retry.
+  const [quoteErrors, setQuoteErrors] = useState<Record<string, string>>({});
   const [quoteAttempt, setQuoteAttempt] = useState(0);
   const paymentInFlight = useRef(false);
   // One stable Idempotency-Key per invoice; reused across retries so a partially-failed
@@ -87,11 +90,14 @@ export function App() {
         if (requestedQuotes.current.has(key)) continue;
         requestedQuotes.current.add(key);
         provider.quote(item.id, value)
-          .then(result => setQuotes(previous => ({ ...previous, [key]: result })))
+          .then(result => {
+            setQuotes(previous => ({ ...previous, [key]: result }));
+            setQuoteErrors(previous => { if (!previous[key]) return previous; const next = { ...previous }; delete next[key]; return next; });
+          })
           .catch(caught => {
             logError('pwa.payment.quote_failed', caught, { method: value });
             requestedQuotes.current.delete(key); // allow a retry to re-request this pair
-            setQuoteErrors(previous => ({ ...previous, [value]: errorMessage(caught) }));
+            setQuoteErrors(previous => ({ ...previous, [key]: errorMessage(caught) }));
           });
       }
     }
@@ -240,6 +246,9 @@ export function App() {
       status, statusMessage: outcome?.receipt ? outcome.receipt.confirmation : outcome?.error,
     };
   });
+  // Surface a quote error only if a currently-selected invoice failed for the active method;
+  // a stale error for a deselected bill is ignored.
+  const methodQuoteError = selectedInvoices.map(item => quoteErrors[`${item.id}::${method}`]).find(Boolean);
   const methodFeeText = (forMethod: PaymentMethod) => {
     const entries = selectedInvoices.map(item => ({ item, quote: quoteOf(item.id, forMethod) }));
     if (entries.length === 0 || !entries.every(entry => entry.quote !== undefined)) return '…';
@@ -260,9 +269,9 @@ export function App() {
         {step === 'method' && invoice && <>
           {multi && <InvoiceSelectList heading="Select the bills to pay" invoices={selectable} onToggle={toggleInvoice} onSelectAll={selectAllInvoices} onClearAll={clearSelectedInvoices} allSelected={openInvoices.length > 0 && selectedInvoices.length === openInvoices.length} />}
           <section className="card">{!multi && <Bill invoice={invoice}/>}<h2>Choose how to pay</h2><div className="choices">{acceptedMethods.includes('card') && <button data-testid="method-card" className={method === 'card' ? 'selected' : 'option'} onClick={() => selectMethod('card')}>Card <small>{multi ? methodFeeText('card') : quoteFeeText(quoteOf(invoice.id, 'card'), invoice.amountCents)}</small></button>}{acceptedMethods.includes('ach') && <button data-testid="method-ach" className={method === 'ach' ? 'selected' : 'option'} onClick={() => selectMethod('ach')}>Bank Account <small>{multi ? methodFeeText('ach') : quoteFeeText(quoteOf(invoice.id, 'ach'), invoice.amountCents)}</small></button>}</div>
-          {quoteErrors[method] && <div className="alert" role="alert" data-testid="quote-error">We couldn’t prepare this payment method. {quoteErrors[method]} <button type="button" onClick={retryQuotes}>Retry quote</button></div>}
+          {methodQuoteError && <div className="alert" role="alert" data-testid="quote-error">We couldn’t prepare this payment method. {methodQuoteError} <button type="button" onClick={retryQuotes}>Retry quote</button></div>}
           {(preferences.offer_autopay || preferences.offer_paperless) && <fieldset><legend>Optional preferences</legend>{preferences.offer_autopay && preferences.enroll_during_payment && <label className="check"><input type="checkbox" checked={autoPay} onChange={event => changeAutoPay(event.target.checked)}/><span><strong>Enroll in AutoPay</strong><small>Use this method for future bills. Cancel anytime.</small></span></label>}{preferences.offer_paperless && <label className="check"><input type="checkbox" checked={paperless} onChange={event => changePaperless(event.target.checked)}/><span><strong>Switch to Paperless Billing</strong><small>Receive bills electronically instead of by mail.</small></span></label>}{(autoPay || paperless) && <><label>Name<input value={payerName} onChange={event => setPayerName(event.target.value)} required/></label><label>Email<input type="email" value={payerEmail} onChange={event => setPayerEmail(event.target.value)} required/></label></>}</fieldset>}
-          <button data-testid="review-submit" onClick={openReview} disabled={selectedInvoices.length === 0 || !allQuoted || !!quoteErrors[method] || ((autoPay || paperless) && (!payerName || !payerEmail))}>Review Payment</button></section>
+          <button data-testid="review-submit" onClick={openReview} disabled={selectedInvoices.length === 0 || !allQuoted || !!methodQuoteError || ((autoPay || paperless) && (!payerName || !payerEmail))}>Review Payment</button></section>
           {multi && <Cart summary={cartSummary} onRemove={toggleInvoice} emptyText="Select at least one bill to continue." />}</>}
         {step === 'review' && invoice && (multi
           ? <section className="card"><BatchReview heading="Review and confirm" lines={batchLines} totalLabel={cartTotalCents !== undefined ? money(cartTotalCents) : '…'} consentText={`Selecting “${primaryAction?.label ?? 'Pay Now'}” authorizes ${selectedInvoices.length} ${schedulesPayment ? 'scheduled' : 'one-time'} payment${selectedInvoices.length === 1 ? '' : 's'}, one per invoice. Optional preferences are recorded separately.`} />{(autoPay || paperless) && <div className="notice">You chose: {[autoPay && 'AutoPay', paperless && 'Paperless Billing'].filter(Boolean).join(' and ')}.</div>}<div className="actions"><button className="back" onClick={() => setStep('method')}>Back</button><button data-testid="pay-submit" disabled={busy || !allQuoted} onClick={pay}>{busy ? 'Processing…' : (cartTotalCents !== undefined ? `Pay ${money(cartTotalCents)}` : 'Quote unavailable')}</button></div></section>
