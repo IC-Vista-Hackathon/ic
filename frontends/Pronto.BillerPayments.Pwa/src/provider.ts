@@ -80,13 +80,22 @@ interface PaymentPayload { confirmation: string; amount_cents: number; fee_cents
 interface InstallmentPlanPayload { installment_plan_id: string; installment_count: number; total_amount_cents: number; installments: PaymentPayload[] }
 type PaymentOrPlanResponse = PaymentPayload | InstallmentPlanPayload;
 
-// Collapse either response shape to a single payment summary: an installment plan reports its total
-// and first installment so the receipt view has a confirmation to show. No money math happens here —
-// the server already computed every amount, fee and total.
+// Collapse either response shape to a single payment summary. For an installment plan the receipt
+// reports the whole plan: the plan principal, and the fees/totals rolled up from the server-computed
+// per-installment values (no fee/total is computed here — these are sums of amounts the server
+// already priced). The plan's status stays 'scheduled' since no installment has been charged yet,
+// and the first installment supplies the confirmation and earliest scheduled date for the receipt.
 function summarizePayment(raw: PaymentOrPlanResponse): PaymentPayload {
   if ('installments' in raw) {
     const first = raw.installments[0];
-    return { ...first, amount_cents: raw.total_amount_cents, installment_plan_id: raw.installment_plan_id, installment_count: raw.installment_count };
+    return {
+      ...first,
+      amount_cents: raw.total_amount_cents,
+      fee_cents: raw.installments.reduce((sum, installment) => sum + installment.fee_cents, 0),
+      total_cents: raw.installments.reduce((sum, installment) => sum + installment.total_cents, 0),
+      installment_plan_id: raw.installment_plan_id,
+      installment_count: raw.installment_count,
+    };
   }
   return raw;
 }

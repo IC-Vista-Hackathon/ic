@@ -146,4 +146,24 @@ describe('F4 partial-payment / installment authorable journey', () => {
     expect(pay.mock.calls[0][0].installmentCount).toBe(3);
     expect(pay.mock.calls[0][0].amountCents).toBeUndefined();
   });
+
+  it('confirms an installment enrollment as scheduled, not as money already paid', async () => {
+    // A plan receipt: principal 5000, rolled-up total 5150 across 3 scheduled installments.
+    pay.mockResolvedValue({
+      confirmation: 'PLAN-1', amountCents: 5000, feeCents: 150, totalCents: 5150,
+      status: 'scheduled', payerAccountId: 'payer-1', installmentPlanId: 'plan-1', installmentCount: 3,
+    });
+    stubConfig(installmentConfig);
+    const user = await renderAndLookup();
+    await user.click(await screen.findByTestId('plan-mode-installment'));
+    await user.click(await screen.findByTestId('installment-option-3'));
+    await user.click(screen.getByTestId('review-submit'));
+    await user.click(await screen.findByTestId('pay-submit'));
+
+    const confirmation = await screen.findByTestId('payment-confirmation');
+    expect(confirmation.textContent).toContain('Installment plan started');
+    expect(confirmation.textContent).toContain('3 scheduled payments');
+    expect(confirmation.textContent).toContain('$51.50'); // whole-plan total, not the first installment
+    expect(confirmation.textContent).not.toContain('paid');
+  });
 });

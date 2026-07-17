@@ -76,9 +76,14 @@ describe('ServicePaymentExperienceProvider.pay', () => {
     const completed = await provider.pay({ ...request('inv-1', 'key-1'), installmentCount: 3 });
 
     expect(posts[0].body).toMatchObject({ invoice_id: 'inv-1', installment_count: 3 });
-    // The plan collapses to a receipt reporting the plan total + first-installment confirmation.
+    // The plan collapses to a receipt reporting the whole plan: principal, rolled-up fees/totals
+    // (summed from the server-computed installments), first-installment confirmation, and the
+    // 'scheduled' status since no installment has been charged yet.
     expect(completed.confirmation).toBe('CONF-A');
     expect(completed.amountCents).toBe(9000);
+    expect(completed.feeCents).toBe(225); // 75 + 75 + 75
+    expect(completed.totalCents).toBe(9225); // 3075 * 3, not just the first installment
+    expect(completed.status).toBe('scheduled');
     expect(completed.installmentPlanId).toBe('plan-1');
     expect(completed.installmentCount).toBe(3);
   });
