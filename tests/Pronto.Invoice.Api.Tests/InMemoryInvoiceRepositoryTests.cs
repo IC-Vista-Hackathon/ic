@@ -9,9 +9,16 @@ public sealed class InMemoryInvoiceRepositoryTests
     private static InvoiceDocument Make(
         string billerId,
         string accountNumber,
+        InvoiceStatus status = InvoiceStatus.Due) => MakeWithId(
+            Guid.NewGuid().ToString(), billerId, accountNumber, status);
+
+    private static InvoiceDocument MakeWithId(
+        string id,
+        string billerId,
+        string accountNumber,
         InvoiceStatus status = InvoiceStatus.Due) => new()
     {
-        Id = Guid.NewGuid().ToString(),
+        Id = id,
         BillerId = billerId,
         AccountNumber = accountNumber,
         PayerName = "Test Payer",
@@ -95,6 +102,43 @@ public sealed class InMemoryInvoiceRepositoryTests
         Assert.Empty(await repo.GetOpenAsync("b_1", "ACCT-1"));
         Assert.Empty(await repo.GetOpenAsync("b_1", "ACCT-2"));
         Assert.Single(await repo.GetOpenAsync("b_2", "ACCT-1"));
+    }
+
+    [Fact]
+    public async Task ReplaceAccountDropsSlotsAShrunkSetNoLongerCovers()
+    {
+        var repo = new InMemoryInvoiceRepository();
+        // A larger prior seed: four slot ids for the account.
+        await repo.ReplaceAccountAsync("b_1", "ACCT-1",
+        [
+            MakeWithId("slot-0", "b_1", "ACCT-1"),
+            MakeWithId("slot-1", "b_1", "ACCT-1"),
+            MakeWithId("slot-2", "b_1", "ACCT-1"),
+            MakeWithId("slot-3", "b_1", "ACCT-1"),
+        ]);
+
+        // Re-seed with a smaller set (two slots): the extra slots must not linger.
+        await repo.ReplaceAccountAsync("b_1", "ACCT-1",
+        [
+            MakeWithId("slot-0", "b_1", "ACCT-1"),
+            MakeWithId("slot-1", "b_1", "ACCT-1"),
+        ]);
+
+        var remaining = await repo.GetByAccountAsync("b_1", "ACCT-1");
+        Assert.Equal(2, remaining.Count);
+        Assert.Equal(["slot-0", "slot-1"], remaining.Select(i => i.Id).OrderBy(id => id).ToArray());
+    }
+
+    [Fact]
+    public async Task ReplaceAccountLeavesOtherAccountsUntouched()
+    {
+        var repo = new InMemoryInvoiceRepository();
+        await repo.AddRangeAsync([Make("b_1", "ACCT-2")]);
+
+        await repo.ReplaceAccountAsync("b_1", "ACCT-1", [Make("b_1", "ACCT-1")]);
+
+        Assert.Single(await repo.GetByAccountAsync("b_1", "ACCT-1"));
+        Assert.Single(await repo.GetByAccountAsync("b_1", "ACCT-2"));
     }
 
     [Fact]

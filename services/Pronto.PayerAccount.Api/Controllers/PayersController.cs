@@ -33,6 +33,55 @@ public sealed partial class PayersController : ControllerBase
         RegisterPayerRequest request, CancellationToken cancellationToken)
     {
         BillerClaims.RequireBillerAccess(User, request.BillerId);
+
+        var (payer, _) = await BuildValidatedPayerAsync(request, cancellationToken).ConfigureAwait(false);
+        var stored = await store.AddAsync(payer, cancellationToken).ConfigureAwait(false);
+        LogPayerRegistered(logger, stored.PayerId, stored.BillerId, stored.AccountNumbers.Count, Activity.Current?.TraceId.ToString());
+
+        return Created($"/payers/{stored.PayerId}?biller_id={stored.BillerId}", stored);
+    }
+
+    /// <summary>
+    /// Internal onboarding seam that seeds the demo payer (the payer-side parallel to the Invoice
+    /// service's <c>/invoices/seed</c>). Gated by <see cref="ServiceAuthorization.PayersSeed"/> — a
+    /// dedicated cross-tenant seed authority — so seeding never widens the payer-facing
+    /// <see cref="ServiceAuthorization.PayersWrite"/> registration policy. Idempotent: if the demo
+    /// payer already exists for one of the requested accounts it is returned unchanged (200), so
+    /// re-publishing does not create a duplicate. <c>POST /payers/seed</c>.
+    /// </summary>
+    [HttpPost("seed")]
+    [Authorize(Policy = ServiceAuthorization.PayersSeed)]
+    public async Task<ActionResult<PayerResponse>> Seed(
+        RegisterPayerRequest request, CancellationToken cancellationToken)
+    {
+        // No tenant match: PayersSeed only admits cross-tenant seed authorities (service.payer-seed
+        // or service.cross-biller), which legitimately span billers and carry no single-biller claim.
+        if (string.IsNullOrWhiteSpace(request.BillerId))
+        {
+            throw ServiceException.BadRequest("invalid_biller", "biller_id is required.");
+        }
+
+        var (payer, accountNumbers) = await BuildValidatedPayerAsync(request, cancellationToken).ConfigureAwait(false);
+
+        foreach (var account in accountNumbers)
+        {
+            var existing = await store.FindByAccountAsync(request.BillerId, account, cancellationToken).ConfigureAwait(false);
+            if (existing is not null)
+            {
+                LogPayerSeedNoop(logger, existing.PayerId, existing.BillerId, Activity.Current?.TraceId.ToString());
+                return Ok(existing);
+            }
+        }
+
+        var stored = await store.AddAsync(payer, cancellationToken).ConfigureAwait(false);
+        LogPayerRegistered(logger, stored.PayerId, stored.BillerId, stored.AccountNumbers.Count, Activity.Current?.TraceId.ToString());
+
+        return Created($"/payers/{stored.PayerId}?biller_id={stored.BillerId}", stored);
+    }
+
+    private async Task<(PayerResponse Payer, List<string> Accounts)> BuildValidatedPayerAsync(
+        RegisterPayerRequest request, CancellationToken cancellationToken)
+    {
         if (string.IsNullOrWhiteSpace(request.Name) || string.IsNullOrWhiteSpace(request.Email))
         {
             throw ServiceException.BadRequest("validation_failed", "name and email are required");
@@ -60,10 +109,7 @@ public sealed partial class PayersController : ControllerBase
             Phone: request.Phone,
             AccountNumbers: accountNumbers,
             Preferences: preferences);
-        var stored = await store.AddAsync(payer, cancellationToken).ConfigureAwait(false);
-        LogPayerRegistered(logger, stored.PayerId, stored.BillerId, stored.AccountNumbers.Count, Activity.Current?.TraceId.ToString());
-
-        return Created($"/payers/{stored.PayerId}?biller_id={stored.BillerId}", stored);
+        return (payer, accountNumbers);
     }
 
     [HttpGet("{payerId}")]
@@ -212,6 +258,8 @@ public sealed partial class PayersController : ControllerBase
 
     [LoggerMessage(5100, LogLevel.Information, "Registered payer {PayerId} for biller {BillerId} with {AccountCount} accounts; trace {TraceId}")]
     private static partial void LogPayerRegistered(ILogger logger, string payerId, string billerId, int accountCount, string? traceId);
+    [LoggerMessage(5104, LogLevel.Information, "Demo payer seed for biller {BillerId} is a no-op; payer {PayerId} already exists; trace {TraceId}")]
+    private static partial void LogPayerSeedNoop(ILogger logger, string payerId, string billerId, string? traceId);
     [LoggerMessage(5101, LogLevel.Information, "Updated preferences for payer {PayerId}, biller {BillerId}; autopay {Autopay}, paperless {Paperless}; trace {TraceId}")]
     private static partial void LogPreferencesUpdated(ILogger logger, string payerId, string billerId, bool autopay, bool paperless, string? traceId);
     [LoggerMessage(5102, LogLevel.Information, "Linked accounts for payer {PayerId}, biller {BillerId}; now {AccountCount} accounts; trace {TraceId}")]
