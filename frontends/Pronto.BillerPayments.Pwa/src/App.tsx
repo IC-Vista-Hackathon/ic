@@ -31,9 +31,9 @@ export function App() {
   const [planMode, setPlanMode] = useState<PaymentPlanMode>('full');
   const [amountInput, setAmountInput] = useState('');
   const [installmentCount, setInstallmentCount] = useState<number>();
-  // Server-priced quote for the requested partial amount, tagged with the amount it priced so a
-  // stale quote is never shown while the payer is still typing.
-  const [planQuote, setPlanQuote] = useState<{ amountCents: number; quote: PaymentQuote }>();
+  // Server-priced quote for the requested partial amount, tagged with the amount AND method it
+  // priced so a stale quote is never shown while the payer is still typing or after switching method.
+  const [planQuote, setPlanQuote] = useState<{ amountCents: number; method: PaymentMethod; quote: PaymentQuote }>();
   const [autoPay, setAutoPay] = useState(false);
   const [paperless, setPaperless] = useState(false);
   const [receipt, setReceipt] = useState<PaymentReceipt>();
@@ -158,7 +158,7 @@ export function App() {
   // The quote that prices the current single-invoice journey: the partial quote when a valid
   // partial amount is entered, otherwise the full-balance quote (installments settle the full
   // balance too, so the full quote represents the plan total).
-  const partialQuote = planQuote && planQuote.amountCents === partialAmountCents ? planQuote.quote : undefined;
+  const partialQuote = planQuote && planQuote.amountCents === partialAmountCents && planQuote.method === method ? planQuote.quote : undefined;
   const activeQuote = !multi && planMode === 'partial' ? partialQuote : quote;
   const planReady = planMode === 'full' ? true : planMode === 'partial' ? partialReady : installmentCount !== undefined;
   const planQuoteReady = planMode === 'partial' ? partialQuote !== undefined : planMode === 'installment' ? quote !== undefined : quote !== undefined;
@@ -167,10 +167,10 @@ export function App() {
   // charge. Skipped for full/installment, which the full-balance quote already covers.
   useEffect(() => {
     if (multi || !provider || !invoice || planMode !== 'partial' || !partialReady || partialAmountCents === undefined) return;
-    if (planQuote && planQuote.amountCents === partialAmountCents) return;
+    if (planQuote && planQuote.amountCents === partialAmountCents && planQuote.method === method) return;
     let active = true;
     provider.quote(invoice.id, method, partialAmountCents)
-      .then(result => { if (active) setPlanQuote({ amountCents: partialAmountCents, quote: result }); })
+      .then(result => { if (active) setPlanQuote({ amountCents: partialAmountCents, method, quote: result }); })
       .catch(caught => logError('pwa.payment.quote_failed', caught, { method }));
     return () => { active = false; };
   }, [multi, provider, invoice, planMode, partialReady, partialAmountCents, method, planQuote]);

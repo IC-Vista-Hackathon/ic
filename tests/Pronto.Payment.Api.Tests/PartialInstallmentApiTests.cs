@@ -222,6 +222,28 @@ public sealed class PartialInstallmentApiTests : IClassFixture<TestingAppFactory
     }
 
     [Fact]
+    public async Task ScheduleBeyondWindowRejectedAndPersistsNoInstallments()
+    {
+        // A monthly schedule long enough to run past the 365-day window is invalid; the whole
+        // schedule length is validated up front, so no partial set of installments is persisted.
+        fakeConfig.Config = fakeConfig.Config with { MaxInstallments = 24 };
+        var billerId = Guid.NewGuid().ToString();
+        var invoice = fakeInvoices.AddDueInvoice(billerId, amountCents: 24000);
+
+        var response = await PostAsync(
+            new CreatePaymentRequest(billerId, invoice.Id, "card", IdempotencyKey: "long", InstallmentCount: 18));
+
+        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+        Assert.Contains("installment_schedule_too_long", await response.Content.ReadAsStringAsync(), StringComparison.Ordinal);
+
+        // Nothing was written: no orphaned scheduled installments left to auto-charge.
+        var persisted = await client.GetFromJsonAsync<PaymentResponse[]>(
+            $"payments?biller_id={billerId}&invoice_id={invoice.Id}", Wire);
+        Assert.Empty(persisted!);
+        Assert.Equal(Pronto.Invoice.Contracts.V1.Invoices.InvoiceStatus.Due, fakeInvoices.StatusOf(billerId, invoice.Id));
+    }
+
+    [Fact]
     public async Task SingleInstallmentRejected()
     {
         var billerId = Guid.NewGuid().ToString();

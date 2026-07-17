@@ -315,17 +315,20 @@ public sealed partial class PaymentsController : ControllerBase
         var maxDate = today.AddDays(options.MaxScheduleDays);
         var now = clock.GetUtcNow();
 
+        // Validate the whole schedule length before persisting anything: the final installment is
+        // the latest, so if it fits the window every installment does. Persisting first and then
+        // throwing mid-loop would leave earlier installments durably scheduled and auto-charged.
+        if (today.AddMonths(count - 1) > maxDate)
+        {
+            throw ServiceException.BadRequest(
+                "installment_schedule_too_long",
+                $"a {count}-installment monthly schedule would fall beyond the {options.MaxScheduleDays}-day scheduling window.");
+        }
+
         var installments = new List<PaymentRecord>(count);
         for (var sequence = 0; sequence < count; sequence++)
         {
             var dueDate = today.AddMonths(sequence);
-            if (dueDate > maxDate)
-            {
-                throw ServiceException.BadRequest(
-                    "installment_schedule_too_long",
-                    $"installment {sequence + 1} would fall beyond the {options.MaxScheduleDays}-day scheduling window.");
-            }
-
             var (feeCents, totalCents) = FeeCalculator.Calculate(config, request.Method, amounts[sequence]);
             var installmentKey = InstallmentKey(idempotencyKey, sequence);
             var record = new PaymentRecord

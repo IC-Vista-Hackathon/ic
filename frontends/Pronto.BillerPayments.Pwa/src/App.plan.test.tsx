@@ -119,6 +119,20 @@ describe('F4 partial-payment / installment authorable journey', () => {
     expect(pay.mock.calls[0][0].installmentCount).toBeUndefined();
   });
 
+  it('re-quotes the partial amount server-side when the payment method changes', async () => {
+    stubConfig(installmentConfig);
+    const user = await renderAndLookup();
+    await user.click(await screen.findByTestId('plan-mode-partial'));
+    await user.type(screen.getByTestId('partial-amount-input'), '20.00');
+
+    // Partial amount is priced for the initially-selected card method.
+    await waitFor(() => expect(quote).toHaveBeenCalledWith('inv-1', 'card', 2000));
+
+    // Switching method must re-price the same amount so the review total matches the new fee.
+    await user.click(screen.getByTestId('method-ach'));
+    await waitFor(() => expect(quote).toHaveBeenCalledWith('inv-1', 'ach', 2000));
+  });
+
   it('flows an installment-plan selection through pay() as installmentCount', async () => {
     stubConfig(installmentConfig);
     const user = await renderAndLookup();
