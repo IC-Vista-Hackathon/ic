@@ -1,14 +1,16 @@
 import { FormEvent, useEffect, useMemo, useRef, useState } from 'react';
 import { billerSlug } from './billerSlug';
+import { settleInvoices, type BatchOutcome } from './batch';
 import { NoOpenBillError } from './errors';
 import { randomId } from './id';
 import { trackEvent } from './insights';
 import { ServicePaymentExperienceProvider, type PaymentQuote } from './provider';
-import { Header, Intro, Footer } from './skin';
+import { BatchReview, Cart, Footer, Header, InvoiceSelectList, Intro } from './skin';
+import type { BatchReviewLine, CartSummary, SelectableInvoice } from './skin';
 import { logError, logEvent, observed } from './telemetry';
 import { categorizeError } from './telemetryPolicy';
 import { errorMessage, fetchWithTimeout, requestError } from './http';
-import type { ExperienceDefinition, ExperiencePreferences, Invoice, PayerProfile, PaymentHistory, PaymentMethod, PaymentReceipt } from './types';
+import type { ExperienceDefinition, ExperiencePreferences, Invoice, PayerProfile, PaymentHistory, PaymentMethod, PaymentReceipt, PaymentRequest } from './types';
 
 type Step = 'lookup' | 'method' | 'review' | 'complete';
 type Page = 'payment' | 'history' | 'preferences';
@@ -18,8 +20,8 @@ export function App() {
   const [config, setConfig] = useState<ExperienceDefinition>();
   const [configState, setConfigState] = useState<'loading'|'ready'|'error'>('loading');
   const [configAttempt, setConfigAttempt] = useState(0);
-  const [invoice, setInvoice] = useState<Invoice>();
   const [invoices, setInvoices] = useState<Invoice[]>([]);
+  const [selectedIds, setSelectedIds] = useState<string[]>([]);
   const [payer, setPayer] = useState<PayerProfile>();
   const [payments, setPayments] = useState<PaymentHistory[]>([]);
   const [step, setStep] = useState<Step>('lookup');
@@ -28,15 +30,19 @@ export function App() {
   const [autoPay, setAutoPay] = useState(false);
   const [paperless, setPaperless] = useState(false);
   const [receipt, setReceipt] = useState<PaymentReceipt>();
+  const [outcomes, setOutcomes] = useState<BatchOutcome[]>([]);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   const [payerName, setPayerName] = useState('');
   const [payerEmail, setPayerEmail] = useState('');
+  // Quotes are keyed `${invoiceId}::${method}` — every selected invoice is quoted per method.
   const [quotes, setQuotes] = useState<Record<string, PaymentQuote>>({});
   const [quoteErrors, setQuoteErrors] = useState<Partial<Record<PaymentMethod, string>>>({});
   const [quoteAttempt, setQuoteAttempt] = useState(0);
   const paymentInFlight = useRef(false);
-  const paymentIdempotencyKey = useRef<string | undefined>(undefined);
+  // One stable Idempotency-Key per invoice; reused across retries so a partially-failed
+  // batch never double-charges an invoice that already settled.
+  const paymentKeys = useRef<Map<string, string>>(new Map());
 
   useEffect(() => {
     setConfigState('loading'); setError('');
@@ -54,49 +60,77 @@ export function App() {
       .filter(isPaymentMethod)
       .filter(value => config?.enabled_payment_capabilities.includes(value)),
     [config?.enabled_payment_capabilities, preferences.accepted_methods]);
+
+  // Open invoices are payable; a biller with more than one open invoice gets the
+  // multi-select + cart + batch experience, a single open invoice the degenerate flow.
+  const openInvoices = useMemo(() => invoices.filter(item => item.status !== 'paid'), [invoices]);
+  const multi = openInvoices.length > 1;
+  const selectedInvoices = useMemo(() => openInvoices.filter(item => selectedIds.includes(item.id)), [openInvoices, selectedIds]);
+  const invoice = selectedInvoices[0] ?? openInvoices[0];
+
   // Server-side quotes: fees come from the Payment Service (same policy the charge applies),
   // never computed client-side. quote.totalCents === amount when the biller absorbs the fee.
-  const quote = quotes[method];
+  const quoteOf = (invoiceId: string, forMethod: PaymentMethod) => quotes[`${invoiceId}::${forMethod}`];
+  const quote = invoice ? quoteOf(invoice.id, method) : undefined;
   useEffect(() => {
     setQuotes({});
     setQuoteErrors({});
-    if (!provider || !invoice) return;
+    if (!provider || selectedInvoices.length === 0) return;
     let cancelled = false;
-    PAYMENT_METHODS.filter(value => acceptedMethods.includes(value)).forEach(value =>
-      provider.quote(invoice.id, value)
-        .then(result => { if (!cancelled) setQuotes(previous => ({ ...previous, [value]: result })); })
-        .catch(caught => {
-          logError('pwa.payment.quote_failed', caught, { method: value });
-          if (!cancelled) setQuoteErrors(previous => ({ ...previous, [value]: errorMessage(caught) }));
-        }));
+    const methods = PAYMENT_METHODS.filter(value => acceptedMethods.includes(value));
+    for (const item of selectedInvoices) {
+      for (const value of methods) {
+        provider.quote(item.id, value)
+          .then(result => { if (!cancelled) setQuotes(previous => ({ ...previous, [`${item.id}::${value}`]: result })); })
+          .catch(caught => {
+            logError('pwa.payment.quote_failed', caught, { method: value });
+            if (!cancelled) setQuoteErrors(previous => ({ ...previous, [value]: errorMessage(caught) }));
+          });
+      }
+    }
     return () => { cancelled = true; };
-  }, [acceptedMethods, provider, invoice, quoteAttempt]);
+  }, [acceptedMethods, provider, selectedInvoices, quoteAttempt]);
+
+  // Aggregate money for the current method over the selected invoices. All sums are computed
+  // here in the core from server quotes; the authorable cart/review only render the labels.
+  const selectedQuotes = selectedInvoices.map(item => quoteOf(item.id, method));
+  const allQuoted = selectedInvoices.length > 0 && selectedQuotes.every(entry => entry !== undefined);
+  const cartAmountCents = selectedInvoices.reduce((sum, item) => sum + item.amountCents, 0);
+  const cartFeeCents = allQuoted ? selectedQuotes.reduce((sum, entry) => sum + (entry?.feeCents ?? 0), 0) : undefined;
+  const cartTotalCents = allQuoted ? selectedQuotes.reduce((sum, entry) => sum + (entry?.totalCents ?? 0), 0) : undefined;
+
   const primaryAction = config?.ui?.actions.find(action => action.id === 'primary-payment-action');
   const schedulesPayment = primaryAction?.action === 1 || primaryAction?.action === 'schedule_payment';
 
   useEffect(() => { if (!acceptedMethods.includes(method)) setMethod(acceptedMethods.includes('ach') ? 'ach' : 'card'); }, [acceptedMethods, method]);
 
-  async function lookup(event: FormEvent<HTMLFormElement>) { event.preventDefault(); if (!provider) return; setBusy(true); setError(''); paymentIdempotencyKey.current = undefined; try { const data = new FormData(event.currentTarget); const account = String(data.get('account')); const loaded = await provider.getInvoices(account); const current = loaded.find(item => item.status !== 'paid'); if (!current) throw new NoOpenBillError(); setInvoices(loaded); setInvoice(current); const profile = await provider.findPayer(account); setPayer(profile); if (profile) { setAutoPay(profile.preferences.autopay); setPaperless(profile.preferences.paperless); setPayerName(profile.name); setPayerEmail(profile.email); setPayments(await provider.getPayments(profile.payer_id)); } setStep('method'); trackEvent('pwa.bill_lookup', { outcome: 'found' }); } catch (caught) { setError(`Find bill: ${errorMessage(caught)}`); logError('pwa.invoice.lookup_failed', caught); if (caught instanceof NoOpenBillError) trackEvent('pwa.bill_lookup', { outcome: 'no_open_bill' }); else trackEvent('pwa.bill_lookup', { outcome: 'failed', error_category: categorizeError(caught) }); } finally { setBusy(false); } }
-  async function pay() {
+  async function lookup(event: FormEvent<HTMLFormElement>) { event.preventDefault(); if (!provider) return; setBusy(true); setError(''); paymentKeys.current = new Map(); setOutcomes([]); setReceipt(undefined); try { const data = new FormData(event.currentTarget); const account = String(data.get('account')); const loaded = await provider.getInvoices(account); const open = loaded.filter(item => item.status !== 'paid'); if (open.length === 0) throw new NoOpenBillError(); setInvoices(loaded); setSelectedIds(open.map(item => item.id)); const profile = await provider.findPayer(account); setPayer(profile); if (profile) { setAutoPay(profile.preferences.autopay); setPaperless(profile.preferences.paperless); setPayerName(profile.name); setPayerEmail(profile.email); setPayments(await provider.getPayments(profile.payer_id)); } setStep('method'); trackEvent('pwa.bill_lookup', { outcome: 'found' }); } catch (caught) { setError(`Find bill: ${errorMessage(caught)}`); logError('pwa.invoice.lookup_failed', caught); if (caught instanceof NoOpenBillError) trackEvent('pwa.bill_lookup', { outcome: 'no_open_bill' }); else trackEvent('pwa.bill_lookup', { outcome: 'failed', error_category: categorizeError(caught) }); } finally { setBusy(false); } }
+
+  function toggleInvoice(invoiceId: string) { setSelectedIds(previous => previous.includes(invoiceId) ? previous.filter(id => id !== invoiceId) : [...previous, invoiceId]); }
+  function selectAllInvoices() { setSelectedIds(openInvoices.map(item => item.id)); }
+  function clearSelectedInvoices() { setSelectedIds([]); }
+
+  function keyFor(invoiceId: string) { let key = paymentKeys.current.get(invoiceId); if (!key) { key = randomId(); paymentKeys.current.set(invoiceId, key); } return key; }
+  function paymentRequestFor(item: Invoice): PaymentRequest {
+    return { invoiceId: item.id, method, autoPay, paperless, scheduledFor: schedulesPayment ? item.dueDate : undefined, payerName, payerEmail, accountNumber: item.accountNumber, idempotencyKey: keyFor(item.id) };
+  }
+
+  async function refreshHistory(accountNumber: string) {
+    try { const profile = await provider!.findPayer(accountNumber); setPayer(profile); if (profile) setPayments(await provider!.getPayments(profile.payer_id)); }
+    catch (caught) { logError('pwa.payment.history_refresh_failed', caught, { method }); }
+  }
+
+  async function pay() { return multi ? payBatch() : paySingle(); }
+
+  async function paySingle() {
     if (!invoice || !provider || paymentInFlight.current) return;
     paymentInFlight.current = true;
-    paymentIdempotencyKey.current ??= randomId();
     setBusy(true);
     setError('');
     trackEvent('pwa.payment_submitted', { method, scheduled: schedulesPayment, autopay_opt_in: autoPay, paperless_opt_in: paperless });
     try {
-      const completed = await provider.pay({
-        invoiceId: invoice.id,
-        method,
-        autoPay,
-        paperless,
-        scheduledFor: schedulesPayment ? invoice.dueDate : undefined,
-        payerName,
-        payerEmail,
-        accountNumber: invoice.accountNumber,
-        idempotencyKey: paymentIdempotencyKey.current,
-      });
-      paymentIdempotencyKey.current = undefined;
+      const completed = await provider.pay(paymentRequestFor(invoice));
+      paymentKeys.current.delete(invoice.id);
       setReceipt(completed);
       setStep('complete');
       if (completed.preferenceUpdateFailed) {
@@ -104,14 +138,46 @@ export function App() {
       }
       logEvent('pwa.payment.completed', { method, scheduled: schedulesPayment, autopay_opt_in: autoPay, paperless_opt_in: paperless });
       trackEvent('pwa.payment_completed', { method, scheduled: schedulesPayment, autopay_opt_in: autoPay, paperless_opt_in: paperless });
-      if (completed.payerAccountId) {
-        try {
-          const profile = await provider.findPayer(invoice.accountNumber);
-          setPayer(profile);
-          if (profile) setPayments(await provider.getPayments(profile.payer_id));
-        } catch (caught) {
-          logError('pwa.payment.history_refresh_failed', caught, { method });
-        }
+      if (completed.payerAccountId) await refreshHistory(invoice.accountNumber);
+    } catch (caught) {
+      setError(`Submit payment: ${errorMessage(caught)}`);
+      logError('pwa.payment.failed', caught, { method, scheduled: schedulesPayment });
+      trackEvent('pwa.payment_failed', { method, scheduled: schedulesPayment, error_category: categorizeError(caught) });
+    } finally {
+      paymentInFlight.current = false;
+      setBusy(false);
+    }
+  }
+
+  // Batch checkout: settle EACH selected invoice with its own Idempotency-Key by looping the
+  // existing single-invoice, exactly-once POST /payments. On a partial failure only the
+  // still-unpaid invoices are retried (same keys), so a succeeded charge is never repeated.
+  async function payBatch() {
+    if (!provider || paymentInFlight.current) return;
+    const paidIds = new Set(outcomes.filter(entry => entry.receipt).map(entry => entry.invoiceId));
+    const pending = selectedInvoices.filter(item => !paidIds.has(item.id));
+    if (pending.length === 0) return;
+    paymentInFlight.current = true;
+    setBusy(true);
+    setError('');
+    trackEvent('pwa.payment_submitted', { method, scheduled: schedulesPayment, autopay_opt_in: autoPay, paperless_opt_in: paperless });
+    try {
+      const requests = pending.map(paymentRequestFor);
+      const result = await settleInvoices(request => provider.pay(request), requests);
+      const merged = mergeOutcomes(outcomes, result.outcomes);
+      setOutcomes(merged);
+      for (const entry of result.outcomes) if (entry.receipt) paymentKeys.current.delete(entry.invoiceId);
+      setStep('complete');
+      if (result.allSucceeded) {
+        logEvent('pwa.payment.completed', { method, scheduled: schedulesPayment, autopay_opt_in: autoPay, paperless_opt_in: paperless });
+        trackEvent('pwa.payment_completed', { method, scheduled: schedulesPayment, autopay_opt_in: autoPay, paperless_opt_in: paperless });
+        const settled = merged.find(entry => entry.receipt);
+        if (settled?.receipt?.payerAccountId) await refreshHistory(pending[0].accountNumber);
+      } else {
+        const failed = merged.filter(entry => entry.error).length;
+        setError(`${failed} of ${merged.length} payment${merged.length === 1 ? '' : 's'} could not be completed. Paid invoices were charged once; you can retry the rest.`);
+        logError('pwa.payment.batch_partial', new Error('batch partial failure'), { method });
+        trackEvent('pwa.payment_failed', { method, scheduled: schedulesPayment, error_category: 'unknown' });
       }
     } catch (caught) {
       setError(`Submit payment: ${errorMessage(caught)}`);
@@ -124,10 +190,48 @@ export function App() {
   }
   async function savePreferences() { if (!provider || !payer) return; setBusy(true); setError(''); try { const updated = await provider.updatePreferences(payer.payer_id, { ...payer.preferences, autopay: autoPay, paperless, channels: payer.preferences.channels.length ? payer.preferences.channels : ['email'], payment_day: autoPay ? (payer.preferences.payment_day ?? 15) : payer.preferences.payment_day }); setPayer({ ...payer, preferences: updated }); logEvent('pwa.preferences.saved', { outcome: 'saved' }); trackEvent('pwa.preferences_saved', { outcome: 'saved' }); } catch (caught) { setError(`Save preferences: ${errorMessage(caught)}`); logError('pwa.preferences.save_failed', caught); trackEvent('pwa.preferences_saved', { outcome: 'failed', error_category: categorizeError(caught) }); } finally { setBusy(false); } }
   function navigate(next: Page) { setPage(next); }
-  function selectMethod(next: PaymentMethod) { if (next !== method) trackEvent('pwa.payment_method_selected', { method: next }); paymentIdempotencyKey.current = undefined; setMethod(next); }
+  // Changing method changes the charge parameters, so the per-invoice idempotency keys are
+  // reset — a fresh attempt under the new method must not reuse a prior method's key.
+  function selectMethod(next: PaymentMethod) { if (next !== method) trackEvent('pwa.payment_method_selected', { method: next }); paymentKeys.current.clear(); setMethod(next); }
   function openReview() { trackEvent('pwa.review_opened', { method, scheduled: schedulesPayment }); setStep('review'); }
   function changeAutoPay(enabled: boolean) { setAutoPay(enabled); trackEvent('pwa.autopay_changed', { enabled }); }
   function changePaperless(enabled: boolean) { setPaperless(enabled); trackEvent('pwa.paperless_changed', { enabled }); }
+
+  // Preformatted view models handed to the authorable (presentational) flow components.
+  // The core owns every money value and selection decision; the skin only renders + calls back.
+  const selectable: SelectableInvoice[] = openInvoices.map(item => ({
+    id: item.id, typeLabel: item.type, description: item.description,
+    dueDateLabel: new Date(item.dueDate).toLocaleDateString(), amountLabel: money(item.amountCents),
+    statusColor: item.statusColor, statusLabel: item.statusColor ? statusLabel(item.statusColor) : undefined,
+    note: item.note, noteEmphasis: item.noteEmphasis, selected: selectedIds.includes(item.id),
+  }));
+  const cartSummary: CartSummary = {
+    lines: selectedInvoices.map(item => ({ id: item.id, label: item.description, typeLabel: item.type, amountLabel: money(item.amountCents) })),
+    count: selectedInvoices.length,
+    subtotalLabel: money(cartAmountCents),
+    feeLabel: cartFeeCents === undefined ? undefined : cartFeeCents === 0 ? 'No payer fee' : money(cartFeeCents),
+    totalLabel: cartTotalCents === undefined ? money(cartAmountCents) : money(cartTotalCents),
+  };
+  const batchLines: BatchReviewLine[] = selectedInvoices.map(item => {
+    const entryQuote = quoteOf(item.id, method);
+    const outcome = outcomes.find(entry => entry.invoiceId === item.id);
+    const status = outcome?.receipt ? 'paid' : outcome?.error ? 'failed' : 'pending';
+    return {
+      id: item.id, label: item.description, typeLabel: item.type,
+      amountLabel: money(item.amountCents),
+      feeLabel: entryQuote ? (entryQuote.feeCents === 0 ? 'No fee' : money(entryQuote.feeCents)) : '…',
+      totalLabel: outcome?.receipt ? money(outcome.receipt.totalCents) : entryQuote ? money(entryQuote.totalCents) : '…',
+      status, statusMessage: outcome?.receipt ? outcome.receipt.confirmation : outcome?.error,
+    };
+  });
+  const methodFeeText = (forMethod: PaymentMethod) => {
+    const entries = selectedInvoices.map(item => quoteOf(item.id, forMethod));
+    if (entries.length === 0 || !entries.every(entry => entry !== undefined)) return '…';
+    const fee = entries.reduce((sum, entry) => sum + (entry?.feeCents ?? 0), 0);
+    return fee === 0 ? 'No payer fee' : `${money(fee)} fee`;
+  };
+  const allSelectedPaid = selectedInvoices.length > 0 && selectedInvoices.every(item => outcomes.find(entry => entry.invoiceId === item.id)?.receipt);
+  const paidTotalCents = outcomes.reduce((sum, entry) => sum + (entry.receipt?.totalCents ?? 0), 0);
 
   if (!config) return <main className="center"><div className="card config-state" aria-live="polite"><h1>{configState === 'error' ? 'Payment experience unavailable' : 'Loading payment experience'}</h1><p>{error || 'Loading your secure, branded payment page…'}</p>{configState === 'error' && <button onClick={() => setConfigAttempt(value => value + 1)}>Retry</button>}</div></main>;
   return <div className="app">
@@ -137,12 +241,19 @@ export function App() {
       {page === 'payment' && <>
         {config.billing?.categories.length ? <section className="card" aria-label="Billing options"><h2>Billing options</h2>{config.billing.categories.map(category => <div className="history-row" key={category.id}><span><strong>{category.display_name}</strong><small>{category.cadence_label} · {category.state_summary}</small></span><strong>{paymentTermsLabel(category.payment_mode, category.maximum_installments)}</strong></div>)}</section> : null}
         {step === 'lookup' && <form className="card" onSubmit={lookup}><h2>{preferences.guest_checkout_allowed ? 'Find your bill' : 'Access your account'}</h2><p className="card-copy">{preferences.guest_checkout_allowed ? 'No sign-in required. Enter the account number shown on your bill.' : 'Enter your account number to continue to the secure payment experience.'}</p><label>Account number<input name="account" data-testid="account-input" required defaultValue="4421" autoComplete="off" /></label><button data-testid="lookup-submit" disabled={busy}>{busy ? 'Finding Bill…' : 'Continue'}</button></form>}
-        {step === 'method' && invoice && <section className="card"><Bill invoice={invoice}/><h2>Choose how to pay</h2><div className="choices">{acceptedMethods.includes('card') && <button data-testid="method-card" className={method === 'card' ? 'selected' : 'option'} onClick={() => selectMethod('card')}>Card <small>{quoteFeeText(quotes.card, invoice.amountCents)}</small></button>}{acceptedMethods.includes('ach') && <button data-testid="method-ach" className={method === 'ach' ? 'selected' : 'option'} onClick={() => selectMethod('ach')}>Bank Account <small>{quoteFeeText(quotes.ach, invoice.amountCents)}</small></button>}</div>
+        {step === 'method' && invoice && <>
+          {multi && <InvoiceSelectList heading="Select the bills to pay" invoices={selectable} onToggle={toggleInvoice} onSelectAll={selectAllInvoices} onClearAll={clearSelectedInvoices} allSelected={openInvoices.length > 0 && selectedInvoices.length === openInvoices.length} />}
+          <section className="card">{!multi && <Bill invoice={invoice}/>}<h2>Choose how to pay</h2><div className="choices">{acceptedMethods.includes('card') && <button data-testid="method-card" className={method === 'card' ? 'selected' : 'option'} onClick={() => selectMethod('card')}>Card <small>{multi ? methodFeeText('card') : quoteFeeText(quoteOf(invoice.id, 'card'), invoice.amountCents)}</small></button>}{acceptedMethods.includes('ach') && <button data-testid="method-ach" className={method === 'ach' ? 'selected' : 'option'} onClick={() => selectMethod('ach')}>Bank Account <small>{multi ? methodFeeText('ach') : quoteFeeText(quoteOf(invoice.id, 'ach'), invoice.amountCents)}</small></button>}</div>
           {quoteErrors[method] && <div className="alert" role="alert" data-testid="quote-error">We couldn’t prepare this payment method. {quoteErrors[method]} <button type="button" onClick={() => setQuoteAttempt(value => value + 1)}>Retry quote</button></div>}
           {(preferences.offer_autopay || preferences.offer_paperless) && <fieldset><legend>Optional preferences</legend>{preferences.offer_autopay && preferences.enroll_during_payment && <label className="check"><input type="checkbox" checked={autoPay} onChange={event => changeAutoPay(event.target.checked)}/><span><strong>Enroll in AutoPay</strong><small>Use this method for future bills. Cancel anytime.</small></span></label>}{preferences.offer_paperless && <label className="check"><input type="checkbox" checked={paperless} onChange={event => changePaperless(event.target.checked)}/><span><strong>Switch to Paperless Billing</strong><small>Receive bills electronically instead of by mail.</small></span></label>}{(autoPay || paperless) && <><label>Name<input value={payerName} onChange={event => setPayerName(event.target.value)} required/></label><label>Email<input type="email" value={payerEmail} onChange={event => setPayerEmail(event.target.value)} required/></label></>}</fieldset>}
-          <button data-testid="review-submit" onClick={openReview} disabled={!quote || !!quoteErrors[method] || ((autoPay || paperless) && (!payerName || !payerEmail))}>Review Payment</button></section>}
-        {step === 'review' && invoice && <section className="card"><h2>Review and confirm</h2><dl><div><dt>Bill amount</dt><dd>{money(invoice.amountCents)}</dd></div><div><dt>Service fee</dt><dd>{quoteFeeText(quote, invoice.amountCents)}</dd></div><div className="total"><dt>Total</dt><dd>{quote ? money(quote.totalCents) : '…'}</dd></div></dl>{schedulesPayment && <div className="notice">This payment will be scheduled for {new Date(invoice.dueDate).toLocaleDateString()}.</div>}{(autoPay || paperless) && <div className="notice">You chose: {[autoPay && 'AutoPay', paperless && 'Paperless Billing'].filter(Boolean).join(' and ')}.</div>}<p className="consent">Selecting “{primaryAction?.label ?? 'Pay Now'}” authorizes this {schedulesPayment ? 'scheduled' : 'one-time'} payment. Optional preferences are recorded separately.</p><div className="actions"><button className="back" onClick={() => setStep('method')}>Back</button><button data-testid="pay-submit" disabled={busy || !quote} onClick={pay}>{busy ? 'Processing…' : (primaryAction?.label ?? (quote ? `Pay ${money(quote.totalCents)}` : 'Quote unavailable'))}</button></div></section>}
-        {step === 'complete' && receipt && <section className="card success" data-testid="payment-confirmation" aria-live="polite"><div className="success-icon">✓</div><h2>{schedulesPayment ? 'Payment scheduled' : 'Payment received'}</h2><p>Confirmation <strong data-testid="confirmation-code">{receipt.confirmation}</strong></p><p>{money(receipt.totalCents)} {schedulesPayment ? 'scheduled' : 'paid'} using the configured provider.</p>{autoPay && <span className="pill">AutoPay requested</span>}{paperless && <span className="pill">Paperless requested</span>}</section>}
+          <button data-testid="review-submit" onClick={openReview} disabled={selectedInvoices.length === 0 || !allQuoted || !!quoteErrors[method] || ((autoPay || paperless) && (!payerName || !payerEmail))}>Review Payment</button></section>
+          {multi && <Cart summary={cartSummary} onRemove={toggleInvoice} emptyText="Select at least one bill to continue." />}</>}
+        {step === 'review' && invoice && (multi
+          ? <section className="card"><BatchReview heading="Review and confirm" lines={batchLines} totalLabel={cartTotalCents !== undefined ? money(cartTotalCents) : '…'} consentText={`Selecting “${primaryAction?.label ?? 'Pay Now'}” authorizes ${selectedInvoices.length} ${schedulesPayment ? 'scheduled' : 'one-time'} payment${selectedInvoices.length === 1 ? '' : 's'}, one per invoice. Optional preferences are recorded separately.`} />{(autoPay || paperless) && <div className="notice">You chose: {[autoPay && 'AutoPay', paperless && 'Paperless Billing'].filter(Boolean).join(' and ')}.</div>}<div className="actions"><button className="back" onClick={() => setStep('method')}>Back</button><button data-testid="pay-submit" disabled={busy || !allQuoted} onClick={pay}>{busy ? 'Processing…' : (cartTotalCents !== undefined ? `Pay ${money(cartTotalCents)}` : 'Quote unavailable')}</button></div></section>
+          : <section className="card"><h2>Review and confirm</h2><dl><div><dt>Bill amount</dt><dd>{money(invoice.amountCents)}</dd></div><div><dt>Service fee</dt><dd>{quoteFeeText(quote, invoice.amountCents)}</dd></div><div className="total"><dt>Total</dt><dd>{quote ? money(quote.totalCents) : '…'}</dd></div></dl>{schedulesPayment && <div className="notice">This payment will be scheduled for {new Date(invoice.dueDate).toLocaleDateString()}.</div>}{(autoPay || paperless) && <div className="notice">You chose: {[autoPay && 'AutoPay', paperless && 'Paperless Billing'].filter(Boolean).join(' and ')}.</div>}<p className="consent">Selecting “{primaryAction?.label ?? 'Pay Now'}” authorizes this {schedulesPayment ? 'scheduled' : 'one-time'} payment. Optional preferences are recorded separately.</p><div className="actions"><button className="back" onClick={() => setStep('method')}>Back</button><button data-testid="pay-submit" disabled={busy || !quote} onClick={pay}>{busy ? 'Processing…' : (primaryAction?.label ?? (quote ? `Pay ${money(quote.totalCents)}` : 'Quote unavailable'))}</button></div></section>)}
+        {step === 'complete' && (multi
+          ? <section className="card success" data-testid="batch-result" aria-live="polite">{allSelectedPaid ? <><div className="success-icon">✓</div><h2 data-testid="payment-confirmation">{schedulesPayment ? 'Payments scheduled' : 'Payments received'}</h2></> : <h2>Some payments need your attention</h2>}<BatchReview heading="Payment results" lines={batchLines} totalLabel={money(paidTotalCents)} consentText={allSelectedPaid ? `${money(paidTotalCents)} ${schedulesPayment ? 'scheduled' : 'paid'} across ${selectedInvoices.length} invoice${selectedInvoices.length === 1 ? '' : 's'} using the configured provider.` : 'Paid invoices were charged exactly once. Use Retry unpaid to complete the rest — settled invoices will not be charged again.'} />{!allSelectedPaid && <div className="actions"><button className="back" onClick={() => setStep('method')}>Back</button><button data-testid="retry-batch" disabled={busy} onClick={pay}>{busy ? 'Processing…' : 'Retry unpaid'}</button></div>}</section>
+          : receipt && <section className="card success" data-testid="payment-confirmation" aria-live="polite"><div className="success-icon">✓</div><h2>{schedulesPayment ? 'Payment scheduled' : 'Payment received'}</h2><p>Confirmation <strong data-testid="confirmation-code">{receipt.confirmation}</strong></p><p>{money(receipt.totalCents)} {schedulesPayment ? 'scheduled' : 'paid'} using the configured provider.</p>{autoPay && <span className="pill">AutoPay requested</span>}{paperless && <span className="pill">Paperless requested</span>}</section>)}
       </>}
       {page === 'history' && <section className="card"><h2>Recent account activity</h2>{invoice ? <>{invoices.map(item => <Bill key={item.id} invoice={item}/>)}{payments.map(payment => <div className="history-row" key={payment.payment_id}><span>Payment {payment.confirmation}<small>{new Date(payment.created_at).toLocaleDateString()}</small></span><strong>{money(payment.total_cents)}</strong></div>)}</> : <><p className="card-copy">Find your bill first to load account-specific activity.</p><button onClick={() => navigate('payment')}>Find My Bill</button></>}</section>}
       {page === 'preferences' && <section className="card"><h2>Communication preferences</h2>{payer ? <><label className="check"><input type="checkbox" checked={autoPay} onChange={event => changeAutoPay(event.target.checked)}/><span><strong>AutoPay</strong><small>Automatically pay future bills.</small></span></label><label className="check"><input type="checkbox" checked={paperless} onChange={event => changePaperless(event.target.checked)}/><span><strong>Paperless Billing</strong><small>Receive bills electronically.</small></span></label><div className="preference-summary"><span>Payment reminders<strong>{payer.preferences.channels.map(humanize).join(', ') || reminderLabel(preferences.reminder_channel)}</strong></span></div><button disabled={busy} onClick={savePreferences}>{busy ? 'Saving…' : 'Save Preferences'}</button></> : <><p className="card-copy">Find your bill and register during checkout to manage account preferences.</p><button onClick={() => navigate('payment')}>Find My Bill</button></>}</section>}
@@ -177,6 +288,13 @@ function reminderLabel(value: number | string) { return typeof value === 'number
 function humanize(value: string) { return value.replaceAll('_', ' ').replace(/\b\w/g, match => match.toUpperCase()); }
 function paymentTermsLabel(mode: string | number | null | undefined, maximum?: number | null) { const installments = mode === 'installments_allowed' || mode === 1; if (!installments) return 'Pay in full'; return maximum ? `Up to ${maximum} installments` : 'Installments available'; }
 function money(cents: number) { return new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' }).format(cents / 100); }
+// Merge a fresh settlement pass over the accumulated outcomes: newer results (a retry that
+// now succeeded, or a first attempt) replace the prior entry for the same invoice.
+function mergeOutcomes(previous: BatchOutcome[], next: BatchOutcome[]): BatchOutcome[] {
+  const byId = new Map(previous.map(entry => [entry.invoiceId, entry]));
+  for (const entry of next) byId.set(entry.invoiceId, entry);
+  return Array.from(byId.values());
+}
 function validateConfig(value: unknown): ExperienceDefinition {
   if (!isRecord(value)) throw new Error('The payment experience configuration is invalid.');
   const brand = value.brand;

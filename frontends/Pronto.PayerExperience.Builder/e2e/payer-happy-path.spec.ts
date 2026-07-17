@@ -37,6 +37,18 @@ async function mockInvoice(page: Page) {
   );
 }
 
+const multiInvoices = [
+  { ...invoice, id: 'inv-1', description: 'Water service', amount_cents: 12500, type: 'Water' },
+  { ...invoice, id: 'inv-2', description: 'Sewer service', amount_cents: 8000, type: 'Sewer' },
+  { ...invoice, id: 'inv-3', description: 'Trash service', amount_cents: 4500, type: 'Trash' },
+];
+
+async function mockInvoices(page: Page, invoices = multiInvoices) {
+  await page.route(/\/invoices\//, route =>
+    route.fulfill({ contentType: 'application/json', body: JSON.stringify({ invoices }) }),
+  );
+}
+
 async function mockQuotes(page: Page) {
   await page.route(/\/payments\/quote/, route =>
     route.fulfill({ contentType: 'application/json', body: JSON.stringify({ fee_cents: 250, total_cents: 12750 }) }),
@@ -170,6 +182,70 @@ test('post-payment preference failure preserves confirmation', async ({ page }) 
   await expect(page.getByTestId('payment-confirmation')).toBeVisible();
   await expect(page.getByTestId('confirmation-code')).toHaveText('PRONTO-PAID');
   await expect(page.getByTestId('error')).toContainText('Payment completed, but optional preferences could not be saved');
+});
+
+test('multi-invoice cart settles each selected invoice with its own idempotency key', async ({ page }) => {
+  const posts: Array<{ invoiceId: string; key: string }> = [];
+  await mockConfig(page);
+  await mockInvoices(page);
+  await page.route(/\/payers(\?|\/|$)/, route => route.fulfill({ status: 404, contentType: 'application/json', body: '{}' }));
+  await mockQuotes(page);
+  await page.route(/\/payments(\?|$)/, route => {
+    const body = route.request().postDataJSON() as { invoice_id: string };
+    posts.push({ invoiceId: body.invoice_id, key: route.request().headers()['idempotency-key'] ?? '' });
+    return route.fulfill({ contentType: 'application/json', body: JSON.stringify({ confirmation: `PRONTO-${body.invoice_id}`, amount_cents: 12500, fee_cents: 250, total_cents: 12750, status: 'succeeded' }) });
+  });
+
+  await lookup(page);
+  await expect(page.getByTestId('invoice-select')).toBeVisible();
+  await expect(page.getByTestId('cart')).toContainText('Your cart (3)');
+  await openCardReview(page);
+  await expect(page.getByTestId('batch-review')).toBeVisible();
+  await page.getByTestId('pay-submit').click();
+
+  await expect(page.getByTestId('batch-result')).toBeVisible();
+  await expect(page.getByTestId('batch-status-inv-1')).toContainText('Paid');
+  await expect(page.getByTestId('batch-status-inv-2')).toContainText('Paid');
+  await expect(page.getByTestId('batch-status-inv-3')).toContainText('Paid');
+  expect(posts.map(entry => entry.invoiceId).sort()).toEqual(['inv-1', 'inv-2', 'inv-3']);
+  const keys = posts.map(entry => entry.key);
+  expect(new Set(keys).size).toBe(3);
+  keys.forEach(key => expect(key).toMatch(/^[0-9a-f-]{36}$/));
+});
+
+test('partial batch failure retries only the unpaid invoice with the same key', async ({ page }) => {
+  const posts: Array<{ invoiceId: string; key: string }> = [];
+  let failNext = true;
+  await mockConfig(page);
+  await mockInvoices(page);
+  await page.route(/\/payers(\?|\/|$)/, route => route.fulfill({ status: 404, contentType: 'application/json', body: '{}' }));
+  await mockQuotes(page);
+  await page.route(/\/payments(\?|$)/, route => {
+    const body = route.request().postDataJSON() as { invoice_id: string };
+    posts.push({ invoiceId: body.invoice_id, key: route.request().headers()['idempotency-key'] ?? '' });
+    if (body.invoice_id === 'inv-2' && failNext) {
+      failNext = false;
+      return route.fulfill({ status: 503, contentType: 'application/json', body: JSON.stringify({ message: 'processor unavailable' }) });
+    }
+    return route.fulfill({ contentType: 'application/json', body: JSON.stringify({ confirmation: `PRONTO-${body.invoice_id}`, amount_cents: 12500, fee_cents: 250, total_cents: 12750, status: 'succeeded' }) });
+  });
+
+  await lookup(page);
+  await openCardReview(page);
+  await page.getByTestId('pay-submit').click();
+
+  await expect(page.getByTestId('batch-status-inv-2')).toContainText('Not charged');
+  await expect(page.getByTestId('error')).toContainText('could not be completed');
+  expect(posts).toHaveLength(3);
+
+  await page.getByTestId('retry-batch').click();
+  await expect(page.getByTestId('batch-status-inv-2')).toContainText('Paid');
+
+  // Only inv-2 is retried; the other two are never re-posted (no double-charge).
+  expect(posts).toHaveLength(4);
+  const inv2Posts = posts.filter(entry => entry.invoiceId === 'inv-2');
+  expect(inv2Posts).toHaveLength(2);
+  expect(inv2Posts[0].key).toBe(inv2Posts[1].key);
 });
 
 function requiredEnvironment(name: string): string {
