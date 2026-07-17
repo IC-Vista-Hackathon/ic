@@ -5,10 +5,10 @@ name: Deploy nonprod
 # check (event `merge_group`) so it executes on the exact commit that is about to land — main
 # with the queued PR merged in — one entry at a time, and blocks the merge unless it is green.
 #
-# Why merge_group (not a labelled pull_request_target): the queue only ever contains PRs a
-# maintainer has already approved and enqueued, so the job runs in the trusted base-repo context
-# with secrets without exposing them to unreviewed / fork code. That removes the old
-# `safe-to-deploy` label footgun while making the functional gate mandatory rather than opt-in.
+# Why the merge queue: it only ever contains PRs a maintainer has already approved and enqueued,
+# so the job runs in the trusted base-repo context with secrets without exposing them to
+# unreviewed / fork code. That removes the old labelled deploy-on-PR footgun (secrets reachable
+# from unreviewed head code) while making the functional gate mandatory rather than opt-in.
 #
 # `workflow_dispatch` is kept for on-demand nonprod deploys (demos / manual verification) of any
 # ref chosen in the Actions UI.
