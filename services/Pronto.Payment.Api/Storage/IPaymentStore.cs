@@ -42,6 +42,14 @@ public interface IPaymentStore
 
     /// <summary>Delete all payments in a biller's partition (nonprod test-cleanup only).</summary>
     Task PurgeByBillerAsync(string billerId, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Enumerate every stored payment (all lifecycles, including <c>pending</c>/<c>failed</c>) for
+    /// ledger reconciliation. Scoped to <paramref name="billerId"/> when supplied, otherwise
+    /// cross-partition — an ops/assurance path, not a hot request path.
+    /// </summary>
+    IAsyncEnumerable<PaymentRecord> EnumerateAsync(
+        string? billerId, CancellationToken cancellationToken = default);
 }
 
 public sealed class InMemoryPaymentStore : IPaymentStore
@@ -143,5 +151,26 @@ public sealed class InMemoryPaymentStore : IPaymentStore
         }
 
         return Task.CompletedTask;
+    }
+
+    public async IAsyncEnumerable<PaymentRecord> EnumerateAsync(
+        string? billerId,
+        [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken cancellationToken = default)
+    {
+        PaymentRecord[] snapshot;
+        lock (gate)
+        {
+            snapshot = payments.Values
+                .Where(payment => billerId is null || payment.BillerId == billerId)
+                .ToArray();
+        }
+
+        foreach (var record in snapshot)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            yield return record;
+        }
+
+        await Task.CompletedTask.ConfigureAwait(false);
     }
 }

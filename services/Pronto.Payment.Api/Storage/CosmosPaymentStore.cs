@@ -211,6 +211,28 @@ public sealed class CosmosPaymentStore : IPaymentStore
         }
     }
 
+    public async IAsyncEnumerable<PaymentRecord> EnumerateAsync(
+        string? billerId,
+        [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken cancellationToken = default)
+    {
+        var requestOptions = string.IsNullOrWhiteSpace(billerId)
+            ? new QueryRequestOptions()
+            : new QueryRequestOptions { PartitionKey = new PartitionKey(billerId) };
+
+        using var iterator = container.GetItemQueryIterator<PaymentDocument>(
+            new QueryDefinition("SELECT * FROM c WHERE IS_DEFINED(c.payment)"),
+            requestOptions: requestOptions);
+
+        while (iterator.HasMoreResults)
+        {
+            var page = await iterator.ReadNextAsync(cancellationToken).ConfigureAwait(false);
+            foreach (var document in page)
+            {
+                yield return document.Payment with { ETag = document.ETag };
+            }
+        }
+    }
+
     private sealed record IdOnly([property: JsonPropertyName("id")] string Id);
 
     private static bool ShouldAdvance(PaymentLifecycle current, PaymentLifecycle target) =>
