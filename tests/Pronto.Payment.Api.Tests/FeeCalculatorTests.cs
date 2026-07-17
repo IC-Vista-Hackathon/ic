@@ -13,7 +13,8 @@ public sealed class FeeCalculatorTests
         CardPercent: cardPercent,
         AchFlatCents: achFlatCents,
         PayerPaysFee: payerPaysFee,
-        ReceiptMessage: "Thanks!");
+        ReceiptMessage: "Thanks!",
+        SettlementState: BillerSettlementState.Published);
 
     [Theory]
     [InlineData("card")]

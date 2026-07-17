@@ -68,11 +68,120 @@ public sealed class InvoiceApiIntegrationTests : IClassFixture<TestingAppFactory
         Assert.All(list.Invoices, invoice => Assert.Equal(account, invoice.AccountNumber));
     }
 
-    private sealed record SeedRequest(int? Count, string? AccountNumber);
+    [Fact]
+    public async Task MultipleCategoryInvoicesAreSeededAndReturnedForOneAccount()
+    {
+        var client = _factory.CreateClient();
+        const string biller = "multi-invoice-biller";
+        const string account = "4421";
+        var seedBase = $"/billers/{biller}/invoices";
+
+        var specs = new[]
+        {
+            new SeedSpec("Water & sewer", 4200, 14, "Alex Rivera", "Water & sewer", "yellow"),
+            new SeedSpec("Stormwater", 3100, 21, "Jordan Chen", "Stormwater", "green"),
+            new SeedSpec("Waste collection", 2600, 30, "Sam Okafor", "Waste collection", "green"),
+        };
+
+        var seedResponse = await client.PostAsJsonAsync(
+            $"{seedBase}/seed", new SeedRequest(Count: null, AccountNumber: account, Invoices: specs), Wire);
+        Assert.Equal(HttpStatusCode.Created, seedResponse.StatusCode);
+
+        var list = await client.GetFromJsonAsync<InvoiceList>($"{seedBase}?account_number={account}", Wire);
+        Assert.NotNull(list);
+        Assert.Equal(3, list!.Invoices.Count);
+    }
+
+    [Fact]
+    public async Task ReSeedingTheSameSetDoesNotDuplicateInvoices()
+    {
+        var client = _factory.CreateClient();
+        const string biller = "reseed-biller";
+        const string account = "4421";
+        var seedBase = $"/billers/{biller}/invoices";
+        var request = new SeedRequest(Count: 4, AccountNumber: account, Invoices: null);
+
+        await client.PostAsJsonAsync($"{seedBase}/seed", request, Wire);
+        await client.PostAsJsonAsync($"{seedBase}/seed", request, Wire);
+
+        // Deterministic ids + upsert: re-publishing the same seed set must not duplicate invoices.
+        var list = await client.GetFromJsonAsync<InvoiceList>($"{seedBase}?account_number={account}", Wire);
+        Assert.NotNull(list);
+        Assert.Equal(4, list!.Invoices.Count);
+    }
+
+    [Fact]
+    public async Task ReSeedingWithAChangedProfileReplacesRatherThanAccumulates()
+    {
+        var client = _factory.CreateClient();
+        const string biller = "changed-profile-biller";
+        const string account = "4421";
+        var seedBase = $"/billers/{biller}/invoices";
+
+        // Mirrors create (assumed profile) then publish (finalized, different categories): the same
+        // number of slots but different descriptions. The account must reflect only the latest set.
+        var assumed = new[]
+        {
+            new SeedSpec("Monthly statement", 4200, 14, "Alex Rivera", "General", "green"),
+            new SeedSpec("Service charge", 3100, 21, "Jordan Chen", "General", "green"),
+        };
+        var finalized = new[]
+        {
+            new SeedSpec("Water & sewer", 5200, 14, "Alex Rivera", "Water & sewer", "yellow"),
+            new SeedSpec("Stormwater", 2600, 21, "Jordan Chen", "Stormwater", "green"),
+        };
+
+        await client.PostAsJsonAsync($"{seedBase}/seed", new SeedRequest(null, account, assumed), Wire);
+        await client.PostAsJsonAsync($"{seedBase}/seed", new SeedRequest(null, account, finalized), Wire);
+
+        var list = await client.GetFromJsonAsync<InvoiceList>($"{seedBase}?account_number={account}", Wire);
+        Assert.NotNull(list);
+        Assert.Equal(2, list!.Invoices.Count);
+        Assert.All(list.Invoices, invoice => Assert.DoesNotContain("statement", invoice.Description));
+    }
+
+    [Fact]
+    public async Task ReSeedingWithFewerInvoicesDropsTheEarlierExtraSlots()
+    {
+        var client = _factory.CreateClient();
+        const string biller = "shrinking-profile-biller";
+        const string account = "4421";
+        var seedBase = $"/billers/{biller}/invoices";
+
+        // First publish: five categories → five slots. A later re-publish (e.g. requeuing a failed
+        // deployment after the biller reduced categories) yields only two. The account must not
+        // retain the three shrunk-away slots.
+        var larger = new[]
+        {
+            new SeedSpec("Water & sewer", 5200, 14, "Alex Rivera", "Water & sewer", "yellow"),
+            new SeedSpec("Stormwater", 2600, 21, "Jordan Chen", "Stormwater", "green"),
+            new SeedSpec("Waste collection", 3100, 30, "Sam Okafor", "Waste collection", "green"),
+            new SeedSpec("Recycling", 1500, 30, "Sam Okafor", "Recycling", "green"),
+            new SeedSpec("Street lighting", 900, 30, "Sam Okafor", "Street lighting", "green"),
+        };
+        var smaller = new[]
+        {
+            new SeedSpec("Water & sewer", 5200, 14, "Alex Rivera", "Water & sewer", "yellow"),
+            new SeedSpec("Stormwater", 2600, 21, "Jordan Chen", "Stormwater", "green"),
+        };
+
+        await client.PostAsJsonAsync($"{seedBase}/seed", new SeedRequest(null, account, larger), Wire);
+        await client.PostAsJsonAsync($"{seedBase}/seed", new SeedRequest(null, account, smaller), Wire);
+
+        var list = await client.GetFromJsonAsync<InvoiceList>($"{seedBase}?account_number={account}", Wire);
+        Assert.NotNull(list);
+        Assert.Equal(2, list!.Invoices.Count);
+        Assert.All(list.Invoices, invoice => Assert.DoesNotContain("Waste", invoice.Description));
+    }
+
+    private sealed record SeedRequest(int? Count, string? AccountNumber, IReadOnlyList<SeedSpec>? Invoices = null);
+
+    private sealed record SeedSpec(
+        string Description, int AmountCents, int DueInDays, string? PayerName, string? Type, string? StatusColor);
 
     private sealed record SeedResponse(int Seeded, string AccountNumber);
 
     private sealed record InvoiceList(IReadOnlyList<InvoiceItem> Invoices);
 
-    private sealed record InvoiceItem(string Id, string AccountNumber);
+    private sealed record InvoiceItem(string Id, string AccountNumber, string Description);
 }
