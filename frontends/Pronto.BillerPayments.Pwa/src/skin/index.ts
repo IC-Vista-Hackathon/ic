@@ -1,5 +1,5 @@
 export { Header, Intro, Footer } from './chrome';
-export { InvoiceSelectList, Cart, BatchReview } from './flow';
+export { InvoiceSelectList, Cart, BatchReview, PaymentPlanChooser } from './flow';
 export type {
   HeaderProps,
   IntroProps,
@@ -16,6 +16,9 @@ export type {
   BatchLineStatus,
   BatchReviewLine,
   BatchReviewProps,
+  PaymentPlanMode,
+  InstallmentOption,
+  PaymentPlanChooserProps,
 } from './contract';
 
 // Files an AI generator is permitted to rewrite for a bespoke per-biller experience.

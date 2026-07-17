@@ -95,6 +95,9 @@ fieldset{border:0;padding:0;display:grid;gap:.6rem}legend{font-weight:700;margin
 .batch-line{display:flex;justify-content:space-between;gap:1rem;border-top:1px solid #eef1f3;padding-top:.7rem;align-items:flex-start}.batch-line:first-child{border-top:0;padding-top:0}
 .batch-line-desc{display:grid;gap:.15rem}.batch-line-amounts{display:grid;justify-items:end;text-align:right}.batch-line-amounts small{color:#596268}
 .batch-line-status{font-weight:700}.batch-line-paid .batch-line-status{color:#23612d}.batch-line-failed .batch-line-status{color:#8b2421}
+.plan-chooser{border:1px solid #dfe5e8;border-radius:calc(var(--radius) - 4px);padding:1rem;display:grid;gap:.7rem;margin:0}.plan-chooser legend{font-weight:750;padding:0 .3rem}
+.plan-amount{padding:.2rem .2rem .2rem 1.9rem;display:grid;gap:.35rem}.plan-amount .bill-note-strong{color:#8b2421}
+.installment-options{list-style:none;margin:0;padding:.2rem 0 0 1.9rem;display:grid;gap:.5rem}
 .app>footer{background:${o.surface};border-top:1px solid #dfe5e8;padding:1rem max(1rem,calc((100% - 760px)/2));display:flex;justify-content:space-between;color:#596268;font-size:.8rem}
 .app>footer nav{display:flex;gap:1rem}.app>footer a{color:var(--brand)}
 @media(max-width:540px){.choices{grid-template-columns:1fr}.app>main{margin:1.5rem auto}.app>footer{display:grid;gap:.6rem}.intro h1{font-size:1.7rem}.app>header span{display:none}.preference-summary>span{display:grid}}
@@ -158,11 +161,12 @@ export function flowTsx(brief: DesignBrief): string {
   BatchReviewProps,
   CartProps,
   InvoiceSelectListProps,
+  PaymentPlanChooserProps,
   SelectableInvoice,
 } from './contract';
 
 // Generated skin flow for ${commentSafe(brief.display_name)} (${commentSafe(brief.biller_slug)}).
-// Presentational only — no fetch, no payment logic, no money math. Feature F3.
+// Presentational only — no fetch, no payment logic, no money math. Features F3 + F4.
 
 export function InvoiceSelectList({ heading, invoices, onToggle, onSelectAll, onClearAll, allSelected }: InvoiceSelectListProps) {
   return (
@@ -267,6 +271,78 @@ export function BatchReview({ heading, lines, totalLabel, consentText }: BatchRe
       </dl>
       <p className="consent">{consentText}</p>
     </section>
+  );
+}
+
+// Amount-entry + installment-plan chooser (feature F4). Rendered only when the biller's policy
+// allows partial payments and/or installments; all labels, the controlled amount string, and the
+// validation message are handed down preformatted by the core, which owns every money decision.
+export function PaymentPlanChooser({
+  allowPartial,
+  allowInstallments,
+  mode,
+  onModeChange,
+  fullLabel,
+  amountValue,
+  onAmountChange,
+  amountHint,
+  amountError,
+  installmentOptions,
+  selectedInstallmentCount,
+  onInstallmentCountChange,
+}: PaymentPlanChooserProps) {
+  if (!allowPartial && !allowInstallments) return null;
+  return (
+    <fieldset className="plan-chooser" data-testid="plan-chooser">
+      <legend>How much would you like to pay?</legend>
+      <label className="check">
+        <input type="radio" name="plan-mode" data-testid="plan-mode-full" checked={mode === 'full'} onChange={() => onModeChange('full')} />
+        <span><strong>{fullLabel}</strong></span>
+      </label>
+      {allowPartial && (
+        <label className="check">
+          <input type="radio" name="plan-mode" data-testid="plan-mode-partial" checked={mode === 'partial'} onChange={() => onModeChange('partial')} />
+          <span><strong>Pay a different amount</strong><small>{amountHint}</small></span>
+        </label>
+      )}
+      {allowPartial && mode === 'partial' && (
+        <div className="plan-amount">
+          <label>
+            Amount
+            <input
+              type="text"
+              inputMode="decimal"
+              data-testid="partial-amount-input"
+              value={amountValue}
+              onChange={event => onAmountChange(event.target.value)}
+              aria-invalid={amountError ? true : undefined}
+              aria-describedby={amountError ? 'plan-amount-error' : undefined}
+            />
+          </label>
+          {amountError && (
+            <small id="plan-amount-error" className="bill-note-strong" data-testid="plan-amount-error" role="alert">{amountError}</small>
+          )}
+        </div>
+      )}
+      {allowInstallments && (
+        <label className="check">
+          <input type="radio" name="plan-mode" data-testid="plan-mode-installment" checked={mode === 'installment'} onChange={() => onModeChange('installment')} />
+          <span><strong>Split into installments</strong><small>Spread the balance across scheduled payments.</small></span>
+        </label>
+      )}
+      {allowInstallments && mode === 'installment' && (
+        <ul className="installment-options" role="list">
+          {installmentOptions.map(option => (
+            <li key={option.count}>
+              <label className="check">
+                <input type="radio" name="installment-count" data-testid={\`installment-option-\${option.count}\`} checked={selectedInstallmentCount === option.count} onChange={() => onInstallmentCountChange(option.count)} />
+                <span>{option.label}</span>
+              </label>
+            </li>
+          ))}
+        </ul>
+      )}
+    </fieldset>
   );
 }
 

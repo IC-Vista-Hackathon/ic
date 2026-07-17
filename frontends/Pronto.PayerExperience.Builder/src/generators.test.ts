@@ -35,6 +35,16 @@ test('deterministic generator authors the F3 flow structure', async () => {
   }
 });
 
+test('deterministic generator authors the F4 amount-entry / installment chooser', async () => {
+  const skin = await new DeterministicSkinGenerator().generate(brief);
+  assert.match(skin.flowTsx, /export function PaymentPlanChooser\b/, 'exports PaymentPlanChooser');
+  for (const testId of ['plan-chooser', 'plan-mode-full', 'plan-mode-partial', 'plan-mode-installment', 'partial-amount-input', 'plan-amount-error']) {
+    assert.ok(skin.flowTsx.includes(testId), `renders ${testId}`);
+  }
+  // The chooser imports the sanctioned F4 contract type, not a fabricated one.
+  assert.match(skin.flowTsx, /PaymentPlanChooserProps/, 'imports PaymentPlanChooserProps');
+});
+
 test('authorable flow imports only the sanctioned contract and moves no money', async () => {
   const skin = await new DeterministicSkinGenerator().generate(brief);
   // Import only from './contract'.

@@ -52,6 +52,37 @@ describe('ServicePaymentExperienceProvider.pay', () => {
     expect(posts[0].body).not.toHaveProperty('total_cents');
   });
 
+  it('sends a requested partial amount as amount_cents', async () => {
+    stubFetch();
+    const provider = new ServicePaymentExperienceProvider('biller-1');
+    await provider.pay({ ...request('inv-1', 'key-1'), amountCents: 2000 });
+
+    expect(posts[0].body).toMatchObject({ invoice_id: 'inv-1', amount_cents: 2000 });
+    expect(posts[0].body).not.toHaveProperty('installment_count');
+  });
+
+  it('sends an installment selection as installment_count and summarizes the returned plan', async () => {
+    stubFetch(() => new Response(JSON.stringify({
+      installment_plan_id: 'plan-1',
+      installment_count: 3,
+      total_amount_cents: 9000,
+      installments: [
+        { confirmation: 'CONF-A', amount_cents: 3000, fee_cents: 75, total_cents: 3075, status: 'scheduled', scheduled_for: '2026-08-01', installment_plan_id: 'plan-1' },
+        { confirmation: 'CONF-B', amount_cents: 3000, fee_cents: 75, total_cents: 3075, status: 'scheduled', scheduled_for: '2026-09-01', installment_plan_id: 'plan-1' },
+        { confirmation: 'CONF-C', amount_cents: 3000, fee_cents: 75, total_cents: 3075, status: 'scheduled', scheduled_for: '2026-10-01', installment_plan_id: 'plan-1' },
+      ],
+    }), { status: 201 }));
+    const provider = new ServicePaymentExperienceProvider('biller-1');
+    const completed = await provider.pay({ ...request('inv-1', 'key-1'), installmentCount: 3 });
+
+    expect(posts[0].body).toMatchObject({ invoice_id: 'inv-1', installment_count: 3 });
+    // The plan collapses to a receipt reporting the plan total + first-installment confirmation.
+    expect(completed.confirmation).toBe('CONF-A');
+    expect(completed.amountCents).toBe(9000);
+    expect(completed.installmentPlanId).toBe('plan-1');
+    expect(completed.installmentCount).toBe(3);
+  });
+
   it('N selected invoices produce N idempotent POSTs with distinct keys', async () => {
     stubFetch();
     const provider = new ServicePaymentExperienceProvider('biller-1');
@@ -79,5 +110,36 @@ describe('ServicePaymentExperienceProvider.pay', () => {
     expect(posts.filter(post => post.body.invoice_id === 'inv-1')).toHaveLength(1);
     expect(posts.filter(post => post.body.invoice_id === 'inv-2')).toHaveLength(1);
     expect(posts.filter(post => post.body.invoice_id === 'inv-3')).toHaveLength(1);
+  });
+});
+
+describe('ServicePaymentExperienceProvider.quote', () => {
+  afterEach(() => { vi.unstubAllGlobals(); });
+
+  it('passes the requested partial amount and maps the outstanding balance', async () => {
+    const urls: string[] = [];
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
+      urls.push(String(input));
+      return new Response(JSON.stringify({ fee_cents: 50, total_cents: 2050, amount_cents: 2000, outstanding_cents: 5000 }), { status: 200 });
+    }));
+    const provider = new ServicePaymentExperienceProvider('biller-1');
+
+    const result = await provider.quote('inv-1', 'card', 2000);
+
+    expect(urls[0]).toContain('amount_cents=2000');
+    expect(result).toEqual({ feeCents: 50, totalCents: 2050, amountCents: 2000, outstandingCents: 5000 });
+  });
+
+  it('omits amount_cents when quoting the full balance', async () => {
+    const urls: string[] = [];
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
+      urls.push(String(input));
+      return new Response(JSON.stringify({ fee_cents: 0, total_cents: 5000, amount_cents: 5000, outstanding_cents: 5000 }), { status: 200 });
+    }));
+    const provider = new ServicePaymentExperienceProvider('biller-1');
+
+    await provider.quote('inv-1', 'card');
+
+    expect(urls[0]).not.toContain('amount_cents');
   });
 });

@@ -2,6 +2,7 @@ import type {
   BatchReviewProps,
   CartProps,
   InvoiceSelectListProps,
+  PaymentPlanChooserProps,
   SelectableInvoice,
 } from './contract';
 
@@ -119,6 +120,84 @@ export function BatchReview({ heading, lines, totalLabel, consentText }: BatchRe
       </dl>
       <p className="consent">{consentText}</p>
     </section>
+  );
+}
+
+// Amount-entry + installment-plan chooser (feature F4). Lets an eligible biller's payer
+// choose to pay a partial amount or enroll in an installment plan instead of the full
+// balance. Presentational only: the core owns eligibility, parsing, validation and every
+// money label; this renders the controls and calls the provided callbacks.
+export function PaymentPlanChooser({
+  allowPartial,
+  allowInstallments,
+  mode,
+  onModeChange,
+  fullLabel,
+  amountValue,
+  onAmountChange,
+  amountHint,
+  amountError,
+  installmentOptions,
+  selectedInstallmentCount,
+  onInstallmentCountChange,
+}: PaymentPlanChooserProps) {
+  if (!allowPartial && !allowInstallments) return null;
+  return (
+    <fieldset className="plan-chooser" data-testid="plan-chooser">
+      <legend>How much would you like to pay?</legend>
+      <label className="check">
+        <input type="radio" name="plan-mode" data-testid="plan-mode-full" checked={mode === 'full'} onChange={() => onModeChange('full')} />
+        <span><strong>{fullLabel}</strong></span>
+      </label>
+
+      {allowPartial && (
+        <label className="check">
+          <input type="radio" name="plan-mode" data-testid="plan-mode-partial" checked={mode === 'partial'} onChange={() => onModeChange('partial')} />
+          <span><strong>Pay a different amount</strong><small>{amountHint}</small></span>
+        </label>
+      )}
+      {allowPartial && mode === 'partial' && (
+        <div className="plan-amount">
+          <label>Amount
+            <input
+              type="text"
+              inputMode="decimal"
+              data-testid="partial-amount-input"
+              value={amountValue}
+              onChange={event => onAmountChange(event.target.value)}
+              aria-invalid={amountError ? true : undefined}
+              aria-describedby={amountError ? 'plan-amount-error' : undefined}
+            />
+          </label>
+          {amountError && <small id="plan-amount-error" className="bill-note-strong" data-testid="plan-amount-error" role="alert">{amountError}</small>}
+        </div>
+      )}
+
+      {allowInstallments && (
+        <label className="check">
+          <input type="radio" name="plan-mode" data-testid="plan-mode-installment" checked={mode === 'installment'} onChange={() => onModeChange('installment')} />
+          <span><strong>Split into installments</strong><small>Spread the balance across scheduled payments.</small></span>
+        </label>
+      )}
+      {allowInstallments && mode === 'installment' && (
+        <ul className="installment-options" role="list">
+          {installmentOptions.map(option => (
+            <li key={option.count}>
+              <label className="check">
+                <input
+                  type="radio"
+                  name="installment-count"
+                  data-testid={`installment-option-${option.count}`}
+                  checked={selectedInstallmentCount === option.count}
+                  onChange={() => onInstallmentCountChange(option.count)}
+                />
+                <span>{option.label}</span>
+              </label>
+            </li>
+          ))}
+        </ul>
+      )}
+    </fieldset>
   );
 }
 
