@@ -93,20 +93,30 @@ gate and stays there — this is the ratchet that grows our confidence over time
 
 ## CI / workflow placement
 
-- **Unit + integration:** `.github/workflows/ci.yml` (`dotnet test` on the solution) — every PR.
-- **Deployed functional + browser:** `.github/workflows/deploy-nonprod.yml`, after the PR head is
-  deployed to `ic-nonprod` and rollout/health checks pass. The blocking functional gate runs first;
-  the known-gap step runs `continue-on-error`. This is the pre-merge confidence gate: nonprod green ⇒
-  safe to merge ⇒ deploy to prod.
+- **Unit + integration:** `.github/workflows/ci.yml` (`dotnet test` on the solution) — every PR
+  **and** every merge-queue entry (`merge_group`).
+- **Deployed functional + browser:** `.github/workflows/deploy-nonprod.yml` runs as a **GitHub
+  merge-queue check** (`merge_group`): the queued commit (main + PR) is deployed to `ic-nonprod`,
+  rollout/health/smoke checks pass, then the blocking functional gate runs; the known-gap step runs
+  `continue-on-error`. Because it is a required merge-queue check, a PR **cannot merge** unless this
+  gate is green on the exact commit that will land. nonprod green ⇒ merge ⇒ deploy to prod.
 
 ## Promotion / merge gate
 
-1. PR opened → unit + integration tests (CI).
-2. Maintainer labels `safe-to-deploy` → deploy PR head to nonprod.
-3. Rollout + health + smoke checks pass.
-4. **Blocking functional gate** (`functional & !known-gap`) passes.
+Gated by a **GitHub merge queue on `main`** (no manual labels): required checks run against a
+temporary `main + PR` commit, one entry at a time, before the merge is finalized.
+
+1. PR opened → unit + integration + Builder-gate checks (CI).
+2. PR approved and **added to the merge queue**.
+3. The queue deploys the queued commit to `ic-nonprod`; rollout + health + smoke checks pass.
+4. **Blocking functional gate** (`functional & !known-gap`) passes on the queued commit.
 5. Known-gap suite runs and reports (non-blocking) — a shrinking list of documented defects.
-6. Merge → deploy to prod.
+6. Queue finalizes the merge → deploy to prod.
+
+> Repo setup (one-time): enable a merge queue ruleset on `main` with max entries to build = 1 (the
+> shared `ic-nonprod` namespace must not be deployed twice at once) and mark "Deploy & functional
+> gate (ic-nonprod)" plus the CI checks as required. `workflow_dispatch` on `deploy-nonprod.yml`
+> remains for on-demand/manual nonprod deploys.
 
 ## Evolving the suite
 
