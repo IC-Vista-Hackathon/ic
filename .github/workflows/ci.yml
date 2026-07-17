@@ -77,6 +77,34 @@ jobs:
       - name: Test
         run: npm test
 
+  payer-experience-builder:
+    name: Payer Experience Builder (gate)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: frontends/Pronto.PayerExperience.Builder
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: frontends/Pronto.PayerExperience.Builder/package-lock.json
+
+      - name: Install
+        run: npm ci
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      # Unit tests (containment gate, CSP, manifest). They read the sibling PWA source
+      # directly and don't need its node_modules or the Playwright browser; the full
+      # generate->build->validate e2e path runs in the deployment build Job.
+      - name: Test
+        run: npm test
+
   compliance-definition:
     name: Compliance agent definition
     runs-on: ubuntu-latest

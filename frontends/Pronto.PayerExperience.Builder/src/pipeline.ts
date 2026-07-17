@@ -2,6 +2,7 @@ import { mkdir, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { assembleBrief } from './brief';
 import { buildBundle } from './build';
+import { injectCspIntoBundle, runContainmentGate, summarizeReport, type GateReport } from './gate';
 import { createGenerator, type GeneratorMode } from './generators';
 import { publishBundle } from './publish';
 import { resolveUnderRoot, validateRevision, validateSlug } from './paths';
@@ -20,6 +21,14 @@ export interface PipelineOptions {
   briefOverrides?: Partial<DesignBrief>;
   validate?: boolean;
   publish?: { storageEndpoint: string; containerName?: string; writeActive?: boolean };
+  // Cross-origin surfaces the built bundle is allowed to reach. Same-origin API calls
+  // (/invoices, /payments, /payers, /api) are always permitted; declare font CDNs and any
+  // telemetry ingestion host here so the containment gate + CSP allow exactly those.
+  containment?: {
+    fontOrigins?: string[];
+    cspConnectOrigins?: string[];
+    cspStyleOrigins?: string[];
+  };
   log?: (message: string) => void;
 }
 
@@ -30,10 +39,15 @@ export interface PipelineResult {
   distDir: string;
   artifactsDir: string;
   validated: boolean;
+  gate: GateReport;
+  csp: string;
   published?: { uploaded: number; activeBlob: string | null; sitePrefix: string };
 }
 
-// generate -> persist -> build (typecheck gate) -> validate (Playwright gate) -> publish.
+// generate -> persist -> containment gate (AST + core hash manifest) -> build (typecheck
+// gate) -> inject CSP -> validate (Playwright gate) -> publish. The containment gate is the
+// safety precondition: it hard-fails before any build/publish work if the generated skin
+// escapes the allowlist or the fixed core was tampered with.
 export async function runPipeline(options: PipelineOptions): Promise<PipelineResult> {
   const log = options.log ?? (() => {});
   const slug = validateSlug(options.slug);
@@ -52,12 +66,30 @@ export async function runPipeline(options: PipelineOptions): Promise<PipelineRes
   await writeFile(join(artifactsDir, 'chrome.tsx'), skin.chromeTsx);
   if (skin.notes) await writeFile(join(artifactsDir, 'notes.txt'), skin.notes);
 
+  // Containment / provenance gate — runs before any build/publish work.
+  log('[gate] static containment + core integrity');
+  const fontOrigins = options.containment?.fontOrigins ?? [];
+  const gate = await runContainmentGate({ skin, pwaDir: options.pwaDir, allowedFontOrigins: fontOrigins });
+  await writeFile(join(artifactsDir, 'gate-report.json'), `${JSON.stringify(gate, null, 2)}\n`);
+  log(`[gate] ${summarizeReport(gate)}`);
+  if (!gate.passed) {
+    throw new Error(`Containment gate rejected the bundle for ${slug}:\n${summarizeReport(gate)}`);
+  }
+
   log('[build] typecheck + vite build');
   const { distDir } = await buildBundle({
     pwaDir: options.pwaDir,
     workRoot: options.workRoot,
     slug,
     skin,
+  });
+
+  // Runtime containment: lock the built bundle to the sanctioned surface via CSP.
+  log('[gate] inject Content-Security-Policy');
+  const csp = await injectCspIntoBundle(distDir, {
+    connect: options.containment?.cspConnectOrigins,
+    font: fontOrigins,
+    style: options.containment?.cspStyleOrigins,
   });
 
   let validated = false;
@@ -91,6 +123,8 @@ export async function runPipeline(options: PipelineOptions): Promise<PipelineRes
     distDir,
     artifactsDir,
     validated,
+    gate,
+    csp,
     published,
   };
 }
