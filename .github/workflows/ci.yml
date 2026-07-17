@@ -5,6 +5,9 @@ on:
     branches: [main]
   push:
     branches: [main]
+  # Required checks must also run on the merge queue's temporary ref, or the queue can never
+  # satisfy them and merges hang. These are hermetic (no deploy), so they run per queue entry.
+  merge_group:
 
 permissions:
   contents: read
