@@ -108,6 +108,41 @@ resource publishFailures 'Microsoft.Insights/scheduledQueryRules@2023-12-01' = {
   }
 }
 
+// Server-side payment failure > 0 in 15m: the Payment API recorded a finalized payment with
+// lifecycle "failed". This is the authoritative money-movement signal (the PWA payment_failed
+// event above is browser-side and can miss failures the client never observes).
+resource paymentFinalizedFailures 'Microsoft.Insights/scheduledQueryRules@2023-12-01' = {
+  name: 'ic-hack-payment-finalized-failures'
+  location: location
+  properties: {
+    displayName: 'Payment finalized failures (server-side)'
+    description: 'Fires when the Payment API records any ic.payment.finalized with lifecycle "failed" in 15 minutes.'
+    severity: 1
+    enabled: true
+    scopes: [appInsightsId]
+    evaluationFrequency: 'PT5M'
+    windowSize: 'PT15M'
+    autoMitigate: true
+    criteria: {
+      allOf: [
+        {
+          query: 'customMetrics\n| where name == "ic.payment.finalized"\n| where tostring(customDimensions.lifecycle) == "failed"'
+          timeAggregation: 'Count'
+          operator: 'GreaterThan'
+          threshold: 0
+          failingPeriods: {
+            numberOfEvaluationPeriods: 1
+            minFailingPeriodsToAlert: 1
+          }
+        }
+      ]
+    }
+    actions: {
+      actionGroups: [actionGroup.id]
+    }
+  }
+}
+
 // Telemetry silence: server requests are flowing but no PWA customEvents have arrived for an hour,
 // which usually means the browser telemetry pipeline (config fetch, SDK bootstrap, or ingestion)
 // is broken rather than genuine idleness.
@@ -146,4 +181,5 @@ resource telemetrySilence 'Microsoft.Insights/scheduledQueryRules@2023-12-01' = 
 output actionGroupId string = actionGroup.id
 output paymentFailedSpikeRuleId string = paymentFailedSpike.id
 output publishFailuresRuleId string = publishFailures.id
+output paymentFinalizedFailuresRuleId string = paymentFinalizedFailures.id
 output telemetrySilenceRuleId string = telemetrySilence.id

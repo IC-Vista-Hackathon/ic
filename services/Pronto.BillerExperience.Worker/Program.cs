@@ -9,6 +9,7 @@ using Pronto.BillerExperience.Worker;
 using Pronto.BillerExperience.Worker.Artifacts;
 using Pronto.BillerExperience.Worker.Building;
 using Pronto.BillerExperience.Worker.Persistence;
+using Pronto.ServiceDefaults;
 using Microsoft.Azure.Cosmos;
 using OpenTelemetry.Instrumentation.AspNetCore;
 using OpenTelemetry.Metrics;
@@ -87,10 +88,7 @@ var openTelemetry = builder.Services.AddOpenTelemetry()
     .WithMetrics(metrics => metrics
         .AddMeter(OrchestrationTelemetry.MeterName)
         .AddMeter(PublicationTelemetry.MeterName));
-if (!string.IsNullOrWhiteSpace(builder.Configuration["APPLICATIONINSIGHTS_CONNECTION_STRING"]))
-{
-    openTelemetry.UseAzureMonitor();
-}
+openTelemetry.AddAzureMonitorExporter(builder.Configuration);
 
 var app = builder.Build();
 
