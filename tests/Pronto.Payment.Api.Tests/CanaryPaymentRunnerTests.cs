@@ -134,6 +134,29 @@ public sealed class CanaryPaymentRunnerTests
     }
 
     [Fact]
+    public async Task NonPublishedBillerFailsWithoutSettling()
+    {
+        var mutable = new MutableBillerConfigClient
+        {
+            SettlementState = BillerSettlementState.ComplianceNotPassed,
+        };
+        var workflow = new PaymentWorkflow(store, invoices, clock, NullLogger<PaymentWorkflow>.Instance);
+        var mutableRunner = new CanaryPaymentRunner(
+            store, invoices, mutable, workflow, clock, NullLogger<CanaryPaymentRunner>.Instance);
+
+        var biller = Guid.NewGuid().ToString();
+        var invoice = invoices.AddDueInvoice(biller, 5000);
+        var target = new CanaryTarget(biller, invoice.Id, "card", $"canary:{biller}");
+
+        var outcome = await mutableRunner.RunAsync(target, default);
+
+        Assert.False(outcome.Settled);
+        Assert.Equal("biller_not_publishable", outcome.FailureCode);
+        Assert.Null(outcome.PaymentId);
+        Assert.Equal(InvoiceStatus.Due, invoices.StatusOf(target.BillerId, target.InvoiceId));
+    }
+
+    [Fact]
     public async Task RunAllReportsAggregateOk()
     {
         var good = SeedTarget();
@@ -150,12 +173,15 @@ public sealed class CanaryPaymentRunnerTests
     {
         public decimal CardPercent { get; set; } = 2.5m;
 
+        public BillerSettlementState SettlementState { get; set; } = BillerSettlementState.Published;
+
         public Task<BillerPaymentConfig> GetAsync(string billerId, CancellationToken cancellationToken)
             => Task.FromResult(new BillerPaymentConfig(
                 PaymentMethods: ["card", "ach"],
                 CardPercent: CardPercent,
                 AchFlatCents: 150,
                 PayerPaysFee: true,
-                ReceiptMessage: "Thanks!"));
+                ReceiptMessage: "Thanks!",
+                SettlementState: SettlementState));
     }
 }

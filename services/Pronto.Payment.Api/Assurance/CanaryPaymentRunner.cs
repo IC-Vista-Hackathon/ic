@@ -94,6 +94,16 @@ public sealed partial class CanaryPaymentRunner
             return Assert(target, replayed, config, idempotentReplay: true);
         }
 
+        // Mirror the controller's settle-eligibility gate: a fresh payment only settles for a biller
+        // whose configuration cleared the publish + compliance gate. A canary target is expected to
+        // be published, so a non-eligible state is itself an alert-worthy failure.
+        if (config.SettlementState != BillerSettlementState.Published)
+        {
+            return Failure(
+                target, "biller_not_publishable",
+                $"biller is {config.SettlementState}, not settle-eligible");
+        }
+
         var invoice = await invoices.GetAsync(target.BillerId, target.InvoiceId, cancellationToken)
                 .ConfigureAwait(false)
             ?? throw ServiceException.NotFound("invoice_not_found", $"canary invoice {target.InvoiceId} not found");
