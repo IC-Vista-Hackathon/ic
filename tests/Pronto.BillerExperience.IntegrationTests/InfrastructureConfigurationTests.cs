@@ -28,16 +28,19 @@ public sealed class InfrastructureConfigurationTests
     }
 
     [Fact]
-    public void NonprodDeploymentRequiresExplicitApprovalOfThePrHead()
+    public void NonprodDeploymentRunsOnlyViaTrustedMergeQueue()
     {
         var root = FindRepositoryRoot();
         var workflow = File.ReadAllText(
             Path.Join(root, ".github", "workflows", "deploy-nonprod.yml"));
 
-        Assert.Contains("pull_request_target:", workflow, StringComparison.Ordinal);
-        Assert.Contains("types: [labeled]", workflow, StringComparison.Ordinal);
-        Assert.Contains("github.event.label.name == 'safe-to-deploy'", workflow, StringComparison.Ordinal);
-        Assert.Contains("source_ref: ${{ github.event.pull_request.head.sha }}", workflow, StringComparison.Ordinal);
+        // The nonprod deploy runs with the repo's Azure secrets, so it must never be reachable
+        // from the untrusted pull_request_target entry point. It is gated by the GitHub merge
+        // queue (merge_group) — only maintainer-approved, enqueued commits deploy — and it
+        // deploys exactly that queued commit (main + PR), not an arbitrary PR head.
+        Assert.DoesNotContain("pull_request_target", workflow, StringComparison.Ordinal);
+        Assert.Contains("merge_group:", workflow, StringComparison.Ordinal);
+        Assert.Contains("github.event.merge_group.head_sha", workflow, StringComparison.Ordinal);
     }
 
     [Fact]
