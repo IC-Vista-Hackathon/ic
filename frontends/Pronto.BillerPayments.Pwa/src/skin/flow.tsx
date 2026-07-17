@@ -108,7 +108,7 @@ export function BatchReview({ heading, lines, totalLabel, consentText }: BatchRe
               )}
             </span>
             <span className="batch-line-amounts">
-              <small>{line.amountLabel} + {line.feeLabel} fee</small>
+              <small>{line.amountLabel} · {line.feeLabel}</small>
               <strong>{line.totalLabel}</strong>
             </span>
           </li>

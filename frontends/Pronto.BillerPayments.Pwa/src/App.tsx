@@ -96,7 +96,10 @@ export function App() {
   const selectedQuotes = selectedInvoices.map(item => quoteOf(item.id, method));
   const allQuoted = selectedInvoices.length > 0 && selectedQuotes.every(entry => entry !== undefined);
   const cartAmountCents = selectedInvoices.reduce((sum, item) => sum + item.amountCents, 0);
-  const cartFeeCents = allQuoted ? selectedQuotes.reduce((sum, entry) => sum + (entry?.feeCents ?? 0), 0) : undefined;
+  // The payer-facing fee is total − amount: when the biller absorbs the fee the quote reports a
+  // non-zero feeCents but total === amount, so the payer is charged nothing extra. Mirror the
+  // single-invoice quoteFeeText so the cart/review never show a fee the payer will not pay.
+  const cartFeeCents = allQuoted ? selectedInvoices.reduce((sum, item) => sum + payerFeeCents(quoteOf(item.id, method)!, item.amountCents), 0) : undefined;
   const cartTotalCents = allQuoted ? selectedQuotes.reduce((sum, entry) => sum + (entry?.totalCents ?? 0), 0) : undefined;
 
   const primaryAction = config?.ui?.actions.find(action => action.id === 'primary-payment-action');
@@ -173,6 +176,9 @@ export function App() {
         trackEvent('pwa.payment_completed', { method, scheduled: schedulesPayment, autopay_opt_in: autoPay, paperless_opt_in: paperless });
         const settled = merged.find(entry => entry.receipt);
         if (settled?.receipt?.payerAccountId) await refreshHistory(pending[0].accountNumber);
+        if (merged.some(entry => entry.receipt?.preferenceUpdateFailed)) {
+          setError('Payment completed, but optional preferences could not be saved. You can retry them from Preferences.');
+        }
       } else {
         const failed = merged.filter(entry => entry.error).length;
         setError(`${failed} of ${merged.length} payment${merged.length === 1 ? '' : 's'} could not be completed. Paid invoices were charged once; you can retry the rest.`);
@@ -214,20 +220,21 @@ export function App() {
   };
   const batchLines: BatchReviewLine[] = selectedInvoices.map(item => {
     const entryQuote = quoteOf(item.id, method);
+    const entryFeeCents = entryQuote ? payerFeeCents(entryQuote, item.amountCents) : undefined;
     const outcome = outcomes.find(entry => entry.invoiceId === item.id);
     const status = outcome?.receipt ? 'paid' : outcome?.error ? 'failed' : 'pending';
     return {
       id: item.id, label: item.description, typeLabel: item.type,
       amountLabel: money(item.amountCents),
-      feeLabel: entryQuote ? (entryQuote.feeCents === 0 ? 'No fee' : money(entryQuote.feeCents)) : '…',
+      feeLabel: entryFeeCents === undefined ? '…' : entryFeeCents === 0 ? 'No payer fee' : `${money(entryFeeCents)} fee`,
       totalLabel: outcome?.receipt ? money(outcome.receipt.totalCents) : entryQuote ? money(entryQuote.totalCents) : '…',
       status, statusMessage: outcome?.receipt ? outcome.receipt.confirmation : outcome?.error,
     };
   });
   const methodFeeText = (forMethod: PaymentMethod) => {
-    const entries = selectedInvoices.map(item => quoteOf(item.id, forMethod));
-    if (entries.length === 0 || !entries.every(entry => entry !== undefined)) return '…';
-    const fee = entries.reduce((sum, entry) => sum + (entry?.feeCents ?? 0), 0);
+    const entries = selectedInvoices.map(item => ({ item, quote: quoteOf(item.id, forMethod) }));
+    if (entries.length === 0 || !entries.every(entry => entry.quote !== undefined)) return '…';
+    const fee = entries.reduce((sum, entry) => sum + payerFeeCents(entry.quote!, entry.item.amountCents), 0);
     return fee === 0 ? 'No payer fee' : `${money(fee)} fee`;
   };
   const allSelectedPaid = selectedInvoices.length > 0 && selectedInvoices.every(item => outcomes.find(entry => entry.invoiceId === item.id)?.receipt);
@@ -280,9 +287,13 @@ function Bill({ invoice }: { invoice: Invoice }) {
 }
 function statusLabel(color: string) { return color === 'yellow' ? 'Overdue — in grace period' : color === 'green' ? 'Not yet due' : color === 'red' ? 'Past due' : color; }
 function experiencePreferences(config?: ExperienceDefinition): ExperiencePreferences { return config?.preferences ?? { guest_checkout_allowed: true, offer_autopay: true, enroll_during_payment: true, offer_paperless: true, reminder_channel: 'both', accepted_methods: config?.enabled_payment_capabilities ?? ['card', 'ach'], self_service_history: true, self_service_updates: true, fee_handling: 'mixed', preview: { default_device: 'desktop', enabled_scenarios: ['payment', 'history', 'communication', 'complex'] } }; }
+// The fee the payer actually pays is total − amount (zero when the biller absorbs it), not the
+// quote's raw feeCents which is reported for display even when the biller absorbs the fee.
+function payerFeeCents(quote: PaymentQuote, amountCents: number) { return quote.totalCents - amountCents; }
 function quoteFeeText(quote: PaymentQuote | undefined, amountCents: number) {
   if (!quote) return '…';
-  return quote.totalCents === amountCents ? 'No payer fee' : `${money(quote.totalCents - amountCents)} fee`;
+  const fee = payerFeeCents(quote, amountCents);
+  return fee === 0 ? 'No payer fee' : `${money(fee)} fee`;
 }
 function reminderLabel(value: number | string) { return typeof value === 'number' ? ['Email', 'Text (SMS)', 'Both', 'None'][value] : humanize(value); }
 function humanize(value: string) { return value.replaceAll('_', ' ').replace(/\b\w/g, match => match.toUpperCase()); }
