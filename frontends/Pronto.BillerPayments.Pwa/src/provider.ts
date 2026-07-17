@@ -2,14 +2,14 @@ import type { Invoice, PayerProfile, PaymentHistory, PaymentReceipt, PaymentRequ
 import { logError, observed, sharedFlow, traceHeaders } from './telemetry';
 import { fetchWithTimeout, requestError } from './http';
 
-export interface PaymentQuote { feeCents: number; totalCents: number; }
+export interface PaymentQuote { feeCents: number; totalCents: number; amountCents: number; outstandingCents: number; }
 
 export interface PaymentExperienceProvider {
   getInvoices(accountNumber: string): Promise<Invoice[]>;
   findPayer(accountNumber: string): Promise<PayerProfile | undefined>;
   updatePreferences(payerId: string, preferences: PayerProfile['preferences']): Promise<PayerProfile['preferences']>;
   getPayments(payerId: string): Promise<PaymentHistory[]>;
-  quote(invoiceId: string, method: string): Promise<PaymentQuote>;
+  quote(invoiceId: string, method: string, amountCents?: number): Promise<PaymentQuote>;
   pay(request: PaymentRequest): Promise<PaymentReceipt>;
 }
 
@@ -26,9 +26,11 @@ export class ServicePaymentExperienceProvider implements PaymentExperienceProvid
   }); }
 
   // Server-side quote: the same fee policy the payment itself will apply — never computed client-side.
-  quote(invoiceId: string, method: string) { return observed('pwa.payment.quote', async () => {
-    const payload = await read<{ fee_cents: number; total_cents: number }>(await fetchWithTimeout(`/payments/quote?biller_id=${encodeURIComponent(this.billerId)}&invoice_id=${encodeURIComponent(invoiceId)}&method=${encodeURIComponent(method)}`, { headers: this.headers() }));
-    return { feeCents: payload.fee_cents, totalCents: payload.total_cents };
+  // An optional requested amount prices a partial payment; the server validates it against the balance.
+  quote(invoiceId: string, method: string, amountCents?: number) { return observed('pwa.payment.quote', async () => {
+    const amountParam = amountCents !== undefined ? `&amount_cents=${encodeURIComponent(amountCents)}` : '';
+    const payload = await read<{ fee_cents: number; total_cents: number; amount_cents: number; outstanding_cents: number }>(await fetchWithTimeout(`/payments/quote?biller_id=${encodeURIComponent(this.billerId)}&invoice_id=${encodeURIComponent(invoiceId)}&method=${encodeURIComponent(method)}${amountParam}`, { headers: this.headers() }));
+    return { feeCents: payload.fee_cents, totalCents: payload.total_cents, amountCents: payload.amount_cents, outstandingCents: payload.outstanding_cents };
   }); }
 
   async findPayer(accountNumber: string) {
@@ -47,11 +49,15 @@ export class ServicePaymentExperienceProvider implements PaymentExperienceProvid
 
   pay(request: PaymentRequest) { return observed('pwa.payment.submit', async () => {
     let payer = await this.findPayer(request.accountNumber);
-    const payment = await read<{ confirmation: string; amount_cents: number; fee_cents: number; total_cents: number; status: string; scheduled_for?: string }>(await fetchWithTimeout('/payments', {
+    // An installment plan responds with a schedule (its first installment stands in for the receipt);
+    // a one-time payment (full or partial) responds with a single payment. Amount/plan are optional so
+    // the default full-payment body is byte-for-byte unchanged.
+    const raw = await read<PaymentOrPlanResponse>(await fetchWithTimeout('/payments', {
       method: 'POST',
       headers: { ...this.headers(true), 'idempotency-key': request.idempotencyKey },
-      body: JSON.stringify({ biller_id: this.billerId, invoice_id: request.invoiceId, method: request.method, payer_account_id: payer?.payer_id, scheduled_for: request.scheduledFor }),
+      body: JSON.stringify({ biller_id: this.billerId, invoice_id: request.invoiceId, method: request.method, payer_account_id: payer?.payer_id, scheduled_for: request.scheduledFor, amount_cents: request.amountCents, installment_count: request.installmentCount }),
     }));
+    const payment = summarizePayment(raw);
     let preferenceUpdateFailed = false;
     if (request.autoPay || request.paperless) {
       const preferences = { autopay: request.autoPay, paperless: request.paperless, channels: ['email'] as Array<'email'|'sms'>, payment_day: request.autoPay ? 15 : null };
@@ -66,8 +72,32 @@ export class ServicePaymentExperienceProvider implements PaymentExperienceProvid
         logError('pwa.preferences.save_failed', caught);
       }
     }
-    return { confirmation: payment.confirmation, amountCents: payment.amount_cents, feeCents: payment.fee_cents, totalCents: payment.total_cents, status: payment.status, scheduledFor: payment.scheduled_for, payerAccountId: payer?.payer_id, preferenceUpdateFailed };
+    return { confirmation: payment.confirmation, amountCents: payment.amount_cents, feeCents: payment.fee_cents, totalCents: payment.total_cents, status: payment.status, scheduledFor: payment.scheduled_for, payerAccountId: payer?.payer_id, preferenceUpdateFailed, installmentPlanId: payment.installment_plan_id, installmentCount: payment.installment_count };
   }); }
+}
+
+interface PaymentPayload { confirmation: string; amount_cents: number; fee_cents: number; total_cents: number; status: string; scheduled_for?: string; installment_plan_id?: string; installment_count?: number }
+interface InstallmentPlanPayload { installment_plan_id: string; installment_count: number; total_amount_cents: number; installments: PaymentPayload[] }
+type PaymentOrPlanResponse = PaymentPayload | InstallmentPlanPayload;
+
+// Collapse either response shape to a single payment summary. For an installment plan the receipt
+// reports the whole plan: the plan principal, and the fees/totals rolled up from the server-computed
+// per-installment values (no fee/total is computed here — these are sums of amounts the server
+// already priced). The plan's status stays 'scheduled' since no installment has been charged yet,
+// and the first installment supplies the confirmation and earliest scheduled date for the receipt.
+function summarizePayment(raw: PaymentOrPlanResponse): PaymentPayload {
+  if ('installments' in raw) {
+    const first = raw.installments[0];
+    return {
+      ...first,
+      amount_cents: raw.total_amount_cents,
+      fee_cents: raw.installments.reduce((sum, installment) => sum + installment.fee_cents, 0),
+      total_cents: raw.installments.reduce((sum, installment) => sum + installment.total_cents, 0),
+      installment_plan_id: raw.installment_plan_id,
+      installment_count: raw.installment_count,
+    };
+  }
+  return raw;
 }
 
 async function read<T>(response: Response): Promise<T> { if (!response.ok) throw await requestError(response, `Request failed with ${response.status}.`); return await response.json() as T; }

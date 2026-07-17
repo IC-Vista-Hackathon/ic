@@ -125,3 +125,48 @@ export interface BatchReviewProps {
   totalLabel: string;
   consentText: string;
 }
+
+// ---------------------------------------------------------------------------
+// Amount-entry + installment-plan chooser — authorable STRUCTURE (F4).
+//
+// A biller whose policy allows it gets a structurally different journey: pay a
+// partial amount or enroll in an installment plan instead of only the full
+// balance. PRESENTATIONAL ONLY. The stable core derives eligibility from the
+// biller configuration, parses/validates the typed amount, computes every money
+// label, and drives the request; this component only renders controls and calls
+// back. The Payment Service remains the sole authority on amounts — it
+// re-validates the requested amount and plan against the invoice balance and the
+// biller's policy, so nothing here can move money or invent a total.
+// ---------------------------------------------------------------------------
+
+export type PaymentPlanMode = 'full' | 'partial' | 'installment';
+
+// One installment-count choice with a core-preformatted estimate label.
+export interface InstallmentOption {
+  count: number;
+  // e.g. "3 monthly payments of about $34.67". Render as-is; never recompute.
+  label: string;
+}
+
+export interface PaymentPlanChooserProps {
+  // Policy-gated visibility; when both are false the core renders nothing and the
+  // default full-payment journey stands.
+  allowPartial: boolean;
+  allowInstallments: boolean;
+  // Currently-selected journey (controlled by the core).
+  mode: PaymentPlanMode;
+  onModeChange: (mode: PaymentPlanMode) => void;
+  // Full-balance option label, e.g. "Pay the full balance — $104.00".
+  fullLabel: string;
+  // Partial-amount entry. `amountValue` is the raw controlled string; the core
+  // parses and validates it — the skin never converts it to a number.
+  amountValue: string;
+  onAmountChange: (value: string) => void;
+  // e.g. "Enter an amount up to $104.00". `amountError` is a core-produced message.
+  amountHint: string;
+  amountError?: string;
+  // Installment choices the core derived from the biller's max-installments policy.
+  installmentOptions: InstallmentOption[];
+  selectedInstallmentCount?: number;
+  onInstallmentCountChange: (count: number) => void;
+}

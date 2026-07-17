@@ -5,8 +5,8 @@ import { NoOpenBillError } from './errors';
 import { randomId } from './id';
 import { trackEvent } from './insights';
 import { ServicePaymentExperienceProvider, type PaymentQuote } from './provider';
-import { BatchReview, Cart, Footer, Header, InvoiceSelectList, Intro } from './skin';
-import type { BatchReviewLine, CartSummary, SelectableInvoice } from './skin';
+import { BatchReview, Cart, Footer, Header, InvoiceSelectList, Intro, PaymentPlanChooser } from './skin';
+import type { BatchReviewLine, CartSummary, InstallmentOption, PaymentPlanMode, SelectableInvoice } from './skin';
 import { logError, logEvent, observed } from './telemetry';
 import { categorizeError } from './telemetryPolicy';
 import { errorMessage, fetchWithTimeout, requestError } from './http';
@@ -27,6 +27,13 @@ export function App() {
   const [step, setStep] = useState<Step>('lookup');
   const [page, setPage] = useState<Page>('payment');
   const [method, setMethod] = useState<PaymentMethod>('card');
+  // F4 amount-entry / installment-plan journey (single-invoice only; the default is 'full').
+  const [planMode, setPlanMode] = useState<PaymentPlanMode>('full');
+  const [amountInput, setAmountInput] = useState('');
+  const [installmentCount, setInstallmentCount] = useState<number>();
+  // Server-priced quote for the requested partial amount, tagged with the amount AND method it
+  // priced so a stale quote is never shown while the payer is still typing or after switching method.
+  const [planQuote, setPlanQuote] = useState<{ amountCents: number; method: PaymentMethod; quote: PaymentQuote }>();
   const [autoPay, setAutoPay] = useState(false);
   const [paperless, setPaperless] = useState(false);
   const [receipt, setReceipt] = useState<PaymentReceipt>();
@@ -117,9 +124,60 @@ export function App() {
   const primaryAction = config?.ui?.actions.find(action => action.id === 'primary-payment-action');
   const schedulesPayment = primaryAction?.action === 1 || primaryAction?.action === 'schedule_payment';
 
+  // F4 policy: a biller whose configuration allows installments unlocks the partial-amount /
+  // installment-plan journey. Eligibility comes straight from the presented billing policy — the
+  // server independently re-validates every amount and plan, so this only gates what we *show*.
+  // The alternate journey is offered only on the single-invoice path (F3's cart owns multi-bill).
+  const installmentMax = useMemo(() => {
+    const modes = config?.billing?.categories ?? [];
+    const eligible = modes.filter(category => category.payment_mode === 'installments_allowed' || category.payment_mode === 1);
+    return eligible.reduce((max, category) => Math.max(max, category.maximum_installments ?? 0), 0);
+  }, [config?.billing?.categories]);
+  const planEligible = !multi && installmentMax > 0;
+  const allowPartial = planEligible;
+  const allowInstallments = planEligible && installmentMax >= 2;
+  const outstandingCents = invoice?.amountCents ?? 0;
+
+  const partialAmountCents = useMemo(() => parseAmountCents(amountInput), [amountInput]);
+  const amountError = useMemo(() => {
+    if (planMode !== 'partial' || amountInput.trim() === '') return undefined;
+    if (partialAmountCents === undefined) return 'Enter a valid dollar amount, e.g. 25.00.';
+    if (partialAmountCents <= 0) return 'Enter an amount greater than zero.';
+    if (partialAmountCents > outstandingCents) return `Amount can’t exceed the ${money(outstandingCents)} balance.`;
+    return undefined;
+  }, [planMode, amountInput, partialAmountCents, outstandingCents]);
+  const partialReady = partialAmountCents !== undefined && partialAmountCents > 0 && partialAmountCents <= outstandingCents;
+
+  const installmentOptions = useMemo<InstallmentOption[]>(() => {
+    if (!allowInstallments) return [];
+    return [2, 3, 4, 6, 12]
+      .filter(count => count <= installmentMax)
+      .map(count => ({ count, label: `${count} monthly payments of about ${money(Math.ceil(outstandingCents / count))}` }));
+  }, [allowInstallments, installmentMax, outstandingCents]);
+
+  // The quote that prices the current single-invoice journey: the partial quote when a valid
+  // partial amount is entered, otherwise the full-balance quote (installments settle the full
+  // balance too, so the full quote represents the plan total).
+  const partialQuote = planQuote && planQuote.amountCents === partialAmountCents && planQuote.method === method ? planQuote.quote : undefined;
+  const activeQuote = !multi && planMode === 'partial' ? partialQuote : quote;
+  const planReady = planMode === 'full' ? true : planMode === 'partial' ? partialReady : installmentCount !== undefined;
+  const planQuoteReady = planMode === 'partial' ? partialQuote !== undefined : planMode === 'installment' ? quote !== undefined : quote !== undefined;
+
+  // Price a valid partial amount server-side (never client-side) so the review total matches the
+  // charge. Skipped for full/installment, which the full-balance quote already covers.
+  useEffect(() => {
+    if (multi || !provider || !invoice || planMode !== 'partial' || !partialReady || partialAmountCents === undefined) return;
+    if (planQuote && planQuote.amountCents === partialAmountCents && planQuote.method === method) return;
+    let active = true;
+    provider.quote(invoice.id, method, partialAmountCents)
+      .then(result => { if (active) setPlanQuote({ amountCents: partialAmountCents, method, quote: result }); })
+      .catch(caught => logError('pwa.payment.quote_failed', caught, { method }));
+    return () => { active = false; };
+  }, [multi, provider, invoice, planMode, partialReady, partialAmountCents, method, planQuote]);
+
   useEffect(() => { if (!acceptedMethods.includes(method)) setMethod(acceptedMethods.includes('ach') ? 'ach' : 'card'); }, [acceptedMethods, method]);
 
-  async function lookup(event: FormEvent<HTMLFormElement>) { event.preventDefault(); if (!provider) return; setBusy(true); setError(''); paymentKeys.current = new Map(); requestedQuotes.current = new Set(); setQuotes({}); setQuoteErrors({}); setOutcomes([]); setReceipt(undefined); try { const data = new FormData(event.currentTarget); const account = String(data.get('account')); const loaded = await provider.getInvoices(account); const open = loaded.filter(item => item.status !== 'paid'); if (open.length === 0) throw new NoOpenBillError(); setInvoices(loaded); setSelectedIds(open.map(item => item.id)); const profile = await provider.findPayer(account); setPayer(profile); if (profile) { setAutoPay(profile.preferences.autopay); setPaperless(profile.preferences.paperless); setPayerName(profile.name); setPayerEmail(profile.email); setPayments(await provider.getPayments(profile.payer_id)); } setStep('method'); trackEvent('pwa.bill_lookup', { outcome: 'found' }); } catch (caught) { setError(`Find bill: ${errorMessage(caught)}`); logError('pwa.invoice.lookup_failed', caught); if (caught instanceof NoOpenBillError) trackEvent('pwa.bill_lookup', { outcome: 'no_open_bill' }); else trackEvent('pwa.bill_lookup', { outcome: 'failed', error_category: categorizeError(caught) }); } finally { setBusy(false); } }
+  async function lookup(event: FormEvent<HTMLFormElement>) { event.preventDefault(); if (!provider) return; setBusy(true); setError(''); paymentKeys.current = new Map(); requestedQuotes.current = new Set(); setQuotes({}); setQuoteErrors({}); setOutcomes([]); setReceipt(undefined); setPlanMode('full'); setAmountInput(''); setInstallmentCount(undefined); setPlanQuote(undefined); try { const data = new FormData(event.currentTarget); const account = String(data.get('account')); const loaded = await provider.getInvoices(account); const open = loaded.filter(item => item.status !== 'paid'); if (open.length === 0) throw new NoOpenBillError(); setInvoices(loaded); setSelectedIds(open.map(item => item.id)); const profile = await provider.findPayer(account); setPayer(profile); if (profile) { setAutoPay(profile.preferences.autopay); setPaperless(profile.preferences.paperless); setPayerName(profile.name); setPayerEmail(profile.email); setPayments(await provider.getPayments(profile.payer_id)); } setStep('method'); trackEvent('pwa.bill_lookup', { outcome: 'found' }); } catch (caught) { setError(`Find bill: ${errorMessage(caught)}`); logError('pwa.invoice.lookup_failed', caught); if (caught instanceof NoOpenBillError) trackEvent('pwa.bill_lookup', { outcome: 'no_open_bill' }); else trackEvent('pwa.bill_lookup', { outcome: 'failed', error_category: categorizeError(caught) }); } finally { setBusy(false); } }
 
   // Re-request only the pairs that are still missing (failed pairs were dropped from the set);
   // cached quotes are kept, so a retry never blanks quotes already fetched for other invoices.
@@ -132,6 +190,21 @@ export function App() {
   function paymentRequestFor(item: Invoice): PaymentRequest {
     return { invoiceId: item.id, method, autoPay, paperless, scheduledFor: schedulesPayment ? item.dueDate : undefined, payerName, payerEmail, accountNumber: item.accountNumber, idempotencyKey: keyFor(item.id) };
   }
+  // Build the single-invoice request for the chosen journey. Partial/installment requests carry the
+  // requested amount / plan and are never pre-scheduled (the server dates the installment schedule);
+  // the full path is byte-for-byte the existing request. Amounts are only *echoed* — the server
+  // re-validates them against the balance it looks up.
+  function planRequestFor(item: Invoice): PaymentRequest {
+    const base = paymentRequestFor(item);
+    if (planMode === 'partial') return { ...base, scheduledFor: undefined, amountCents: partialAmountCents };
+    if (planMode === 'installment') return { ...base, scheduledFor: undefined, installmentCount };
+    return base;
+  }
+  // Changing the amount or plan changes the charge parameters, so the idempotency key is reset —
+  // the server also rejects reusing a key with different amount/plan parameters.
+  function selectPlanMode(next: PaymentPlanMode) { if (next === planMode) return; paymentKeys.current.clear(); setPlanMode(next); trackEvent('pwa.plan_mode_selected', { mode: next }); }
+  function changeAmount(value: string) { paymentKeys.current.clear(); setAmountInput(value); }
+  function selectInstallmentCount(count: number) { paymentKeys.current.clear(); setInstallmentCount(count); trackEvent('pwa.installment_count_selected', { count }); }
 
   async function refreshHistory(accountNumber: string) {
     try { const profile = await provider!.findPayer(accountNumber); setPayer(profile); if (profile) setPayments(await provider!.getPayments(profile.payer_id)); }
@@ -147,7 +220,7 @@ export function App() {
     setError('');
     trackEvent('pwa.payment_submitted', { method, scheduled: schedulesPayment, autopay_opt_in: autoPay, paperless_opt_in: paperless });
     try {
-      const completed = await provider.pay(paymentRequestFor(invoice));
+      const completed = await provider.pay(planRequestFor(invoice));
       paymentKeys.current.delete(invoice.id);
       setReceipt(completed);
       setStep('complete');
@@ -258,6 +331,16 @@ export function App() {
   const allSelectedPaid = selectedInvoices.length > 0 && selectedInvoices.every(item => outcomes.find(entry => entry.invoiceId === item.id)?.receipt);
   const paidTotalCents = outcomes.reduce((sum, entry) => sum + (entry.receipt?.totalCents ?? 0), 0);
 
+  // Single-invoice review labels for the chosen journey. Every amount is server-priced (activeQuote)
+  // or the authoritative balance; installments are priced per-installment by the server on enrollment.
+  const chargeAmountCents = planMode === 'partial' ? (partialAmountCents ?? 0) : outstandingCents;
+  const reviewFeeText = planMode === 'installment' ? 'Calculated per installment' : quoteFeeText(activeQuote, chargeAmountCents);
+  const reviewTotalLabel = planMode === 'installment' ? money(outstandingCents) : activeQuote ? money(activeQuote.totalCents) : '…';
+  const payReady = planMode === 'installment' ? planReady : activeQuote !== undefined;
+  const payButtonLabel = planMode === 'installment' && installmentCount ? `Start ${installmentCount}-payment plan`
+    : planMode === 'partial' && activeQuote ? `Pay ${money(activeQuote.totalCents)}`
+    : (primaryAction?.label ?? (activeQuote ? `Pay ${money(activeQuote.totalCents)}` : 'Quote unavailable'));
+
   if (!config) return <main className="center"><div className="card config-state" aria-live="polite"><h1>{configState === 'error' ? 'Payment experience unavailable' : 'Loading payment experience'}</h1><p>{error || 'Loading your secure, branded payment page…'}</p>{configState === 'error' && <button onClick={() => setConfigAttempt(value => value + 1)}>Retry</button>}</div></main>;
   return <div className="app">
     <Header brand={config.brand} />
@@ -270,15 +353,18 @@ export function App() {
           {multi && <InvoiceSelectList heading="Select the bills to pay" invoices={selectable} onToggle={toggleInvoice} onSelectAll={selectAllInvoices} onClearAll={clearSelectedInvoices} allSelected={openInvoices.length > 0 && selectedInvoices.length === openInvoices.length} />}
           <section className="card">{!multi && <Bill invoice={invoice}/>}<h2>Choose how to pay</h2><div className="choices">{acceptedMethods.includes('card') && <button data-testid="method-card" className={method === 'card' ? 'selected' : 'option'} onClick={() => selectMethod('card')}>Card <small>{multi ? methodFeeText('card') : quoteFeeText(quoteOf(invoice.id, 'card'), invoice.amountCents)}</small></button>}{acceptedMethods.includes('ach') && <button data-testid="method-ach" className={method === 'ach' ? 'selected' : 'option'} onClick={() => selectMethod('ach')}>Bank Account <small>{multi ? methodFeeText('ach') : quoteFeeText(quoteOf(invoice.id, 'ach'), invoice.amountCents)}</small></button>}</div>
           {methodQuoteError && <div className="alert" role="alert" data-testid="quote-error">We couldn’t prepare this payment method. {methodQuoteError} <button type="button" onClick={retryQuotes}>Retry quote</button></div>}
+          {!multi && (allowPartial || allowInstallments) && <PaymentPlanChooser allowPartial={allowPartial} allowInstallments={allowInstallments} mode={planMode} onModeChange={selectPlanMode} fullLabel={`Pay the full balance — ${money(outstandingCents)}`} amountValue={amountInput} onAmountChange={changeAmount} amountHint={`Enter any amount up to ${money(outstandingCents)}.`} amountError={amountError} installmentOptions={installmentOptions} selectedInstallmentCount={installmentCount} onInstallmentCountChange={selectInstallmentCount} />}
           {(preferences.offer_autopay || preferences.offer_paperless) && <fieldset><legend>Optional preferences</legend>{preferences.offer_autopay && preferences.enroll_during_payment && <label className="check"><input type="checkbox" checked={autoPay} onChange={event => changeAutoPay(event.target.checked)}/><span><strong>Enroll in AutoPay</strong><small>Use this method for future bills. Cancel anytime.</small></span></label>}{preferences.offer_paperless && <label className="check"><input type="checkbox" checked={paperless} onChange={event => changePaperless(event.target.checked)}/><span><strong>Switch to Paperless Billing</strong><small>Receive bills electronically instead of by mail.</small></span></label>}{(autoPay || paperless) && <><label>Name<input value={payerName} onChange={event => setPayerName(event.target.value)} required/></label><label>Email<input type="email" value={payerEmail} onChange={event => setPayerEmail(event.target.value)} required/></label></>}</fieldset>}
-          <button data-testid="review-submit" onClick={openReview} disabled={selectedInvoices.length === 0 || !allQuoted || !!methodQuoteError || ((autoPay || paperless) && (!payerName || !payerEmail))}>Review Payment</button></section>
+          <button data-testid="review-submit" onClick={openReview} disabled={selectedInvoices.length === 0 || !allQuoted || !!methodQuoteError || (!multi && (!planReady || !planQuoteReady)) || ((autoPay || paperless) && (!payerName || !payerEmail))}>Review Payment</button></section>
           {multi && <Cart summary={cartSummary} onRemove={toggleInvoice} emptyText="Select at least one bill to continue." />}</>}
         {step === 'review' && invoice && (multi
           ? <section className="card"><BatchReview heading="Review and confirm" lines={batchLines} totalLabel={cartTotalCents !== undefined ? money(cartTotalCents) : '…'} consentText={`Selecting “${primaryAction?.label ?? 'Pay Now'}” authorizes ${selectedInvoices.length} ${schedulesPayment ? 'scheduled' : 'one-time'} payment${selectedInvoices.length === 1 ? '' : 's'}, one per invoice. Optional preferences are recorded separately.`} />{(autoPay || paperless) && <div className="notice">You chose: {[autoPay && 'AutoPay', paperless && 'Paperless Billing'].filter(Boolean).join(' and ')}.</div>}<div className="actions"><button className="back" onClick={() => setStep('method')}>Back</button><button data-testid="pay-submit" disabled={busy || !allQuoted} onClick={pay}>{busy ? 'Processing…' : (cartTotalCents !== undefined ? `Pay ${money(cartTotalCents)}` : 'Quote unavailable')}</button></div></section>
-          : <section className="card"><h2>Review and confirm</h2><dl><div><dt>Bill amount</dt><dd>{money(invoice.amountCents)}</dd></div><div><dt>Service fee</dt><dd>{quoteFeeText(quote, invoice.amountCents)}</dd></div><div className="total"><dt>Total</dt><dd>{quote ? money(quote.totalCents) : '…'}</dd></div></dl>{schedulesPayment && <div className="notice">This payment will be scheduled for {new Date(invoice.dueDate).toLocaleDateString()}.</div>}{(autoPay || paperless) && <div className="notice">You chose: {[autoPay && 'AutoPay', paperless && 'Paperless Billing'].filter(Boolean).join(' and ')}.</div>}<p className="consent">Selecting “{primaryAction?.label ?? 'Pay Now'}” authorizes this {schedulesPayment ? 'scheduled' : 'one-time'} payment. Optional preferences are recorded separately.</p><div className="actions"><button className="back" onClick={() => setStep('method')}>Back</button><button data-testid="pay-submit" disabled={busy || !quote} onClick={pay}>{busy ? 'Processing…' : (primaryAction?.label ?? (quote ? `Pay ${money(quote.totalCents)}` : 'Quote unavailable'))}</button></div></section>)}
+          : <section className="card"><h2>Review and confirm</h2><dl><div><dt>{planMode === 'full' ? 'Bill amount' : planMode === 'partial' ? 'Amount to pay' : 'Balance to finance'}</dt><dd data-testid="review-amount">{money(chargeAmountCents)}</dd></div>{planMode === 'installment' && installmentCount && <div><dt>Installments</dt><dd data-testid="review-installments">{installmentCount} monthly payments</dd></div>}<div><dt>Service fee</dt><dd>{reviewFeeText}</dd></div><div className="total"><dt>{planMode === 'installment' ? 'Plan total' : 'Total'}</dt><dd data-testid="review-total">{reviewTotalLabel}</dd></div></dl>{schedulesPayment && planMode === 'full' && <div className="notice">This payment will be scheduled for {new Date(invoice.dueDate).toLocaleDateString()}.</div>}{planMode === 'partial' && <div className="notice">This is a partial payment; the remaining balance stays due.</div>}{planMode === 'installment' && <div className="notice">You’ll enroll in a {installmentCount}-payment plan; each installment is scheduled and charged automatically.</div>}{(autoPay || paperless) && <div className="notice">You chose: {[autoPay && 'AutoPay', paperless && 'Paperless Billing'].filter(Boolean).join(' and ')}.</div>}<p className="consent">Selecting “{planMode === 'installment' ? 'Start plan' : (primaryAction?.label ?? 'Pay Now')}” authorizes this {planMode === 'installment' ? 'installment plan' : schedulesPayment && planMode === 'full' ? 'scheduled payment' : 'one-time payment'}. Optional preferences are recorded separately.</p><div className="actions"><button className="back" onClick={() => setStep('method')}>Back</button><button data-testid="pay-submit" disabled={busy || !payReady} onClick={pay}>{busy ? 'Processing…' : payButtonLabel}</button></div></section>)}
         {step === 'complete' && (multi
           ? <section className="card success" data-testid="batch-result" aria-live="polite">{allSelectedPaid ? <><div className="success-icon">✓</div><h2 data-testid="payment-confirmation">{schedulesPayment ? 'Payments scheduled' : 'Payments received'}</h2></> : <h2>Some payments need your attention</h2>}<BatchReview heading="Payment results" lines={batchLines} totalLabel={money(paidTotalCents)} consentText={allSelectedPaid ? `${money(paidTotalCents)} ${schedulesPayment ? 'scheduled' : 'paid'} across ${selectedInvoices.length} invoice${selectedInvoices.length === 1 ? '' : 's'} using the configured provider.` : 'Paid invoices were charged exactly once. Use Retry unpaid to complete the rest — settled invoices will not be charged again.'} />{!allSelectedPaid && <div className="actions"><button className="back" onClick={() => setStep('method')}>Back</button><button data-testid="retry-batch" disabled={busy} onClick={pay}>{busy ? 'Processing…' : 'Retry unpaid'}</button></div>}</section>
-          : receipt && <section className="card success" data-testid="payment-confirmation" aria-live="polite"><div className="success-icon">✓</div><h2>{schedulesPayment ? 'Payment scheduled' : 'Payment received'}</h2><p>Confirmation <strong data-testid="confirmation-code">{receipt.confirmation}</strong></p><p>{money(receipt.totalCents)} {schedulesPayment ? 'scheduled' : 'paid'} using the configured provider.</p>{autoPay && <span className="pill">AutoPay requested</span>}{paperless && <span className="pill">Paperless requested</span>}</section>)}
+          : receipt && (receipt.installmentPlanId
+            ? <section className="card success" data-testid="payment-confirmation" aria-live="polite"><div className="success-icon">✓</div><h2>Installment plan started</h2><p>Confirmation <strong data-testid="confirmation-code">{receipt.confirmation}</strong></p><p>{receipt.installmentCount} scheduled payments totaling {money(receipt.totalCents)} using the configured provider. Nothing is charged until each installment’s date.</p>{autoPay && <span className="pill">AutoPay requested</span>}{paperless && <span className="pill">Paperless requested</span>}</section>
+            : <section className="card success" data-testid="payment-confirmation" aria-live="polite"><div className="success-icon">✓</div><h2>{schedulesPayment ? 'Payment scheduled' : 'Payment received'}</h2><p>Confirmation <strong data-testid="confirmation-code">{receipt.confirmation}</strong></p><p>{money(receipt.totalCents)} {schedulesPayment ? 'scheduled' : 'paid'} using the configured provider.</p>{autoPay && <span className="pill">AutoPay requested</span>}{paperless && <span className="pill">Paperless requested</span>}</section>))}
       </>}
       {page === 'history' && <section className="card"><h2>Recent account activity</h2>{invoice ? <>{invoices.map(item => <Bill key={item.id} invoice={item}/>)}{payments.map(payment => <div className="history-row" key={payment.payment_id}><span>Payment {payment.confirmation}<small>{new Date(payment.created_at).toLocaleDateString()}</small></span><strong>{money(payment.total_cents)}</strong></div>)}</> : <><p className="card-copy">Find your bill first to load account-specific activity.</p><button onClick={() => navigate('payment')}>Find My Bill</button></>}</section>}
       {page === 'preferences' && <section className="card"><h2>Communication preferences</h2>{payer ? <><label className="check"><input type="checkbox" checked={autoPay} onChange={event => changeAutoPay(event.target.checked)}/><span><strong>AutoPay</strong><small>Automatically pay future bills.</small></span></label><label className="check"><input type="checkbox" checked={paperless} onChange={event => changePaperless(event.target.checked)}/><span><strong>Paperless Billing</strong><small>Receive bills electronically.</small></span></label><div className="preference-summary"><span>Payment reminders<strong>{payer.preferences.channels.map(humanize).join(', ') || reminderLabel(preferences.reminder_channel)}</strong></span></div><button disabled={busy} onClick={savePreferences}>{busy ? 'Saving…' : 'Save Preferences'}</button></> : <><p className="card-copy">Find your bill and register during checkout to manage account preferences.</p><button onClick={() => navigate('payment')}>Find My Bill</button></>}</section>}
@@ -317,6 +403,14 @@ function reminderLabel(value: number | string) { return typeof value === 'number
 function humanize(value: string) { return value.replaceAll('_', ' ').replace(/\b\w/g, match => match.toUpperCase()); }
 function paymentTermsLabel(mode: string | number | null | undefined, maximum?: number | null) { const installments = mode === 'installments_allowed' || mode === 1; if (!installments) return 'Pay in full'; return maximum ? `Up to ${maximum} installments` : 'Installments available'; }
 function money(cents: number) { return new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' }).format(cents / 100); }
+// Parse a payer-typed dollar amount to integer cents, or undefined when it isn't a clean money value.
+// This lives in the stable core (never the authorable skin); the server re-validates the parsed cents.
+function parseAmountCents(input: string): number | undefined {
+  const trimmed = input.trim().replace(/^\$/, '').replace(/,/g, '');
+  if (!/^\d+(\.\d{0,2})?$/.test(trimmed)) return undefined;
+  const [dollars, fraction = ''] = trimmed.split('.');
+  return Number(dollars) * 100 + Number(fraction.padEnd(2, '0'));
+}
 // Merge a fresh settlement pass over the accumulated outcomes: newer results (a retry that
 // now succeeded, or a first attempt) replace the prior entry for the same invoice.
 function mergeOutcomes(previous: BatchOutcome[], next: BatchOutcome[]): BatchOutcome[] {

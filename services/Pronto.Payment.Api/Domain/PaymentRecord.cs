@@ -56,6 +56,19 @@ public sealed record PaymentRecord
 
     public DateOnly? ScheduledFor { get; init; }
 
+    /// <summary>Groups the payments of one enrolled installment plan; null for a one-time payment.</summary>
+    public string? InstallmentPlanId { get; init; }
+
+    /// <summary>Zero-based position of this installment within its plan; null when not an installment.</summary>
+    public int? InstallmentSequence { get; init; }
+
+    /// <summary>Total number of installments in this payment's plan; null when not an installment.</summary>
+    public int? InstallmentCount { get; init; }
+
+    /// <summary>True when this payment belongs to an installment plan (a scheduled partial payment).</summary>
+    [JsonIgnore]
+    public bool IsInstallment => InstallmentPlanId is not null;
+
     public required string ReceiptMessage { get; init; }
 
     public required PaymentLifecycle Lifecycle { get; init; }
@@ -123,7 +136,10 @@ public sealed record PaymentRecord
         Status: WireStatus,
         ScheduledFor: ScheduledFor,
         ReceiptMessage: ReceiptMessage,
-        CreatedAt: CreatedAt);
+        CreatedAt: CreatedAt,
+        InstallmentPlanId: InstallmentPlanId,
+        InstallmentSequence: InstallmentSequence,
+        InstallmentCount: InstallmentCount);
 
     /// <summary>
     /// The payment id to use for a request. When a client supplies an idempotency key the id is
@@ -146,13 +162,21 @@ public sealed record PaymentRecord
     /// Stable fingerprint of the request fields an idempotency key represents. A retry must carry
     /// the same values; a different one is rejected as a key-reuse conflict.
     /// </summary>
-    public static string Fingerprint(string invoiceId, string method, string? payerAccountId, DateOnly? scheduledFor)
+    public static string Fingerprint(
+        string invoiceId,
+        string method,
+        string? payerAccountId,
+        DateOnly? scheduledFor,
+        int amountCents = 0,
+        int? installmentSequence = null)
         => string.Join(
             '\u001f',
             invoiceId,
             method,
             payerAccountId ?? string.Empty,
-            scheduledFor?.DayNumber.ToString(CultureInfo.InvariantCulture) ?? string.Empty);
+            scheduledFor?.DayNumber.ToString(CultureInfo.InvariantCulture) ?? string.Empty,
+            amountCents.ToString(CultureInfo.InvariantCulture),
+            installmentSequence?.ToString(CultureInfo.InvariantCulture) ?? string.Empty);
 }
 
 /// <summary>Result of <see cref="Storage.IPaymentStore.BeginAsync"/>.</summary>
