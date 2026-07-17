@@ -39,10 +39,16 @@ permissions:
   contents: read
 
 concurrency:
-  # One shared ic-nonprod namespace: never deploy two commits into it at once. cancel-in-progress
-  # is false so an in-flight merge-queue check is allowed to finish (cancelling it would fail the
-  # queue entry); the merge queue's own max-concurrency=1 keeps entries from piling up.
-  group: deploy-nonprod
+  # Real deploys (merge_group / workflow_dispatch) share ONE global group so the single shared
+  # ic-nonprod namespace is never deployed twice at once. cancel-in-progress is false so an
+  # in-flight merge-queue check is allowed to finish (cancelling it would fail the queue entry);
+  # the merge queue's own max-concurrency=1 keeps entries from piling up.
+  #
+  # pull_request runs are no-ops (only the `gate` job) but must NOT join that global group: if they
+  # did, a pending PR gate run would be cancelled whenever it collided with an in-progress deploy
+  # plus another PR update, cancelling the required check and blocking the PR from the queue. Give
+  # them a per-ref group instead so they neither touch the deploy path nor cancel other PRs.
+  group: ${{ github.event_name == 'pull_request' && format('deploy-nonprod-pr-{0}', github.ref) || 'deploy-nonprod' }}
   cancel-in-progress: false
 
 jobs:
