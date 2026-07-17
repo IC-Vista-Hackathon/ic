@@ -79,7 +79,16 @@ public static class ServiceDefaultsExtensions
         if (!string.IsNullOrWhiteSpace(configuration["APPLICATIONINSIGHTS_CONNECTION_STRING"]))
         {
             var samplingRatio = ResolveSamplingRatio(configuration["APPLICATIONINSIGHTS_SAMPLING_RATIO"]);
-            telemetry.UseAzureMonitor(options => options.SamplingRatio = samplingRatio);
+            telemetry.UseAzureMonitor(options =>
+            {
+                options.SamplingRatio = samplingRatio;
+                // Azure.Monitor.OpenTelemetry.AspNetCore 1.5.0 defaults to a rate-limited sampler
+                // (5 traces/sec) via TracesPerSecond, which *takes precedence* over SamplingRatio.
+                // Null it out so the configured fixed-percentage ratio actually applies; when the
+                // env var is unset the ratio is 1.0, i.e. keep 100% (no rate limiting) — the
+                // documented "keep everything" default.
+                options.TracesPerSecond = null;
+            });
         }
         return telemetry;
     }

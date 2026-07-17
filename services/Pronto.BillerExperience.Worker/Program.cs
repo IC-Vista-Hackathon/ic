@@ -11,7 +11,6 @@ using Pronto.BillerExperience.Worker.Building;
 using Pronto.BillerExperience.Worker.Persistence;
 using Pronto.ServiceDefaults;
 using Microsoft.Azure.Cosmos;
-using OpenTelemetry.Instrumentation.AspNetCore;
 using OpenTelemetry.Metrics;
 using OpenTelemetry.Resources;
 using OpenTelemetry.Trace;
@@ -73,13 +72,7 @@ builder.Services.AddSingleton<IExperienceBundleBuilder>(services =>
 builder.Services.AddSingleton<PublicationProcessor>();
 builder.Services.AddHostedService<PublicationWorker>();
 builder.Services.AddHealthChecks().AddCheck<PublicationHealthCheck>("publication_dependencies");
-// Health probes (/health/live, /health/ready) are polled continuously; exclude them from
-// ASP.NET Core trace collection so they don't flood Application Insights, while normal requests
-// are still exported. No-op unless the AspNetCore instrumentation is active (via Azure Monitor).
-builder.Services.Configure<AspNetCoreTraceInstrumentationOptions>(instrumentation =>
-    instrumentation.Filter = context =>
-        !(context.Request.Path.Equals("/health/live", StringComparison.OrdinalIgnoreCase)
-            || context.Request.Path.Equals("/health/ready", StringComparison.OrdinalIgnoreCase)));
+builder.Services.FilterHealthProbeTraces();
 var openTelemetry = builder.Services.AddOpenTelemetry()
     .ConfigureResource(resource => resource.AddService("Pronto.BillerExperience.Worker"))
     .WithTracing(tracing => tracing

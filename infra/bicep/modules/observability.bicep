@@ -126,7 +126,7 @@ resource paymentFinalizedFailures 'Microsoft.Insights/scheduledQueryRules@2023-1
     criteria: {
       allOf: [
         {
-          query: 'customMetrics\n| where name == "ic.payment.finalized"\n| where tostring(customDimensions.lifecycle) == "failed"'
+          query: 'customMetrics\n| where name == "ic.payment.finalized"\n| where tostring(customDimensions.lifecycle) =~ "failed"'
           timeAggregation: 'Count'
           operator: 'GreaterThan'
           threshold: 0

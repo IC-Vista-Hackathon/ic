@@ -4,6 +4,7 @@ using Azure.Storage.Blobs;
 using Microsoft.AspNetCore.Diagnostics.HealthChecks;
 using OpenTelemetry.Resources;
 using Pronto.PayerExperience.Router;
+using Pronto.ServiceDefaults;
 
 var builder = WebApplication.CreateBuilder(args);
 builder.Logging.ClearProviders();
@@ -33,12 +34,9 @@ builder.Services.AddSingleton<PayerSiteRouter>();
 builder.Services.AddHealthChecks()
     .AddCheck<RouterStorageHealthCheck>("payer_experience_storage", tags: ["ready"]);
 
-var openTelemetry = builder.Services.AddOpenTelemetry()
-    .ConfigureResource(resource => resource.AddService("Pronto.PayerExperience.Router"));
-if (!string.IsNullOrWhiteSpace(builder.Configuration["APPLICATIONINSIGHTS_CONNECTION_STRING"]))
-{
-    openTelemetry.UseAzureMonitor();
-}
+builder.Services.AddOpenTelemetry()
+    .ConfigureResource(resource => resource.AddService("Pronto.PayerExperience.Router"))
+    .AddAzureMonitorExporter(builder.Configuration);
 
 var app = builder.Build();
 
