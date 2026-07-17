@@ -82,6 +82,40 @@ public sealed class CosmosInvoiceRepository : IInvoiceRepository
         }
     }
 
+    public async Task ReplaceAccountAsync(
+        string billerId,
+        string accountNumber,
+        IReadOnlyList<InvoiceDocument> invoices,
+        CancellationToken cancellationToken = default)
+    {
+        var partition = new PartitionKey(billerId);
+        var keep = invoices.Select(invoice => invoice.Id).ToHashSet(StringComparer.Ordinal);
+
+        // Delete any prior invoice for this account that the new set no longer covers, so a smaller
+        // re-seed does not leave orphaned slots behind; unchanged slots are then upserted in place.
+        var query = new QueryDefinition("SELECT c.id FROM c WHERE c.account_number = @accountNumber")
+            .WithParameter("@accountNumber", accountNumber);
+        using var iterator = container.GetItemQueryIterator<IdOnly>(
+            query, requestOptions: new QueryRequestOptions { PartitionKey = partition });
+        while (iterator.HasMoreResults)
+        {
+            var page = await iterator.ReadNextAsync(cancellationToken);
+            foreach (var item in page)
+            {
+                if (!keep.Contains(item.Id))
+                {
+                    await container.DeleteItemAsync<InvoiceDocument>(
+                        item.Id, partition, cancellationToken: cancellationToken);
+                }
+            }
+        }
+
+        foreach (var invoice in invoices)
+        {
+            await container.UpsertItemAsync(invoice, partition, cancellationToken: cancellationToken);
+        }
+    }
+
     public async Task PurgeByBillerAsync(string billerId, CancellationToken cancellationToken = default)
     {
         var partition = new PartitionKey(billerId);

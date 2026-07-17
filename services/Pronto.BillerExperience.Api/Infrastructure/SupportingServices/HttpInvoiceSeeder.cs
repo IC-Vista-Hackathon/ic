@@ -12,7 +12,7 @@ public sealed partial class HttpInvoiceSeeder(
     ILogger<HttpInvoiceSeeder> logger) : IInvoiceSeeder
 {
     // Demo preview account every seeded biller's invoices attach to (matches the payer preview).
-    private const string PreviewAccountNumber = "4421";
+    private const string PreviewAccountNumber = SeedDefaults.PreviewAccountNumber;
     private const int SeedCount = 4;
 
     private static readonly JsonSerializerOptions WireOptions = new(JsonSerializerDefaults.Web)

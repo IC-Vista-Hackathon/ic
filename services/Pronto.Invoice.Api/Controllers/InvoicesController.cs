@@ -60,7 +60,9 @@ public sealed partial class InvoicesController : ControllerBase
         var invoices = FakeInvoiceFactory.Create(
             billerId, accountNumber, request.Count, request.BillType, today, request.Invoices);
 
-        await _repository.AddRangeAsync(invoices, cancellationToken);
+        // Replace (not merely upsert) the account's seed set so a re-publish whose profile now
+        // yields fewer invoices does not leave the earlier, larger set's extra slots orphaned.
+        await _repository.ReplaceAccountAsync(billerId, accountNumber, invoices, cancellationToken);
         LogInvoicesSeeded(_logger, billerId, accountNumber, invoices.Count, Activity.Current?.TraceId.ToString());
 
         var response = new SeedInvoicesResponse(

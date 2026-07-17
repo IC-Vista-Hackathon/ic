@@ -99,4 +99,69 @@ public sealed class DeterministicSeedInvoiceGeneratorTests
             Assert.False(string.IsNullOrWhiteSpace(s.Description));
         });
     }
+
+    // ---- category-aware seeding (multi-invoice, F3 cart) ------------------------------------
+
+    private static SeedBillerContext WithCategories(params SeedBillingCategory[] categories) =>
+        new("b-utility", "Riverside Water", "utility", new Uri("https://riverside.example"))
+        {
+            Categories = categories,
+        };
+
+    [Fact]
+    public void MultiCategoryBillerGetsAtLeastOneInvoicePerCategory()
+    {
+        var biller = WithCategories(
+            new SeedBillingCategory("water", "Water & sewer", "Monthly"),
+            new SeedBillingCategory("storm", "Stormwater", "Quarterly"),
+            new SeedBillingCategory("waste", "Waste collection", "Annual"));
+
+        var specs = _generator.Generate(biller, count: 3);
+
+        Assert.Equal(3, specs.Count);
+        Assert.Contains(specs, s => s.Type == "Water & sewer");
+        Assert.Contains(specs, s => s.Type == "Stormwater");
+        Assert.Contains(specs, s => s.Type == "Waste collection");
+    }
+
+    [Fact]
+    public void CategoryCountBelowRequestedStillHonorsRequestedCountByRepeatingCategories()
+    {
+        var biller = WithCategories(
+            new SeedBillingCategory("water", "Water & sewer", "Monthly"),
+            new SeedBillingCategory("storm", "Stormwater", "Quarterly"));
+
+        var specs = _generator.Generate(biller, count: 4);
+
+        Assert.Equal(4, specs.Count);
+        // Every category is covered, and a later occurrence is labelled distinctly (#2) for the cart.
+        Assert.Contains(specs, s => s.Description.Contains("Water & sewer #2", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void CategoryCadenceDrivesDueDateOrdering()
+    {
+        var monthly = _generator.Generate(
+            WithCategories(new SeedBillingCategory("m", "Monthly line", "Monthly")), count: 1)[0];
+        var annual = _generator.Generate(
+            WithCategories(new SeedBillingCategory("a", "Annual line", "Annual")), count: 1)[0];
+
+        // A monthly bill reads as due sooner than an annual one.
+        Assert.True(monthly.DueInDays < annual.DueInDays);
+    }
+
+    [Fact]
+    public void CategoryGenerationIsDeterministicForTheSameBillerAndProfile()
+    {
+        var biller = WithCategories(
+            new SeedBillingCategory("water", "Water & sewer", "Monthly"),
+            new SeedBillingCategory("storm", "Stormwater", "Quarterly"));
+
+        var first = _generator.Generate(biller, count: 4);
+        var second = _generator.Generate(biller, count: 4);
+
+        Assert.Equal(
+            first.Select(s => (s.Description, s.AmountCents, s.DueInDays, s.PayerName, s.Type)),
+            second.Select(s => (s.Description, s.AmountCents, s.DueInDays, s.PayerName, s.Type)));
+    }
 }
