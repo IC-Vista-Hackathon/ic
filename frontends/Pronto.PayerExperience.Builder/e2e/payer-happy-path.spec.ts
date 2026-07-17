@@ -1,19 +1,11 @@
 import { readFileSync } from 'node:fs';
 import { expect, test, type Page } from '@playwright/test';
+import { installHarness, mockConfig, mockInvoice, mockQuotes, DEFAULT_INVOICE } from '../src/contract-gate/harness';
 
 const url = requiredEnvironment('PAYER_URL');
 const configPath = requiredEnvironment('PAYER_CONFIG');
 
 const definition = JSON.parse(readFileSync(configPath, 'utf8'));
-const invoice = {
-  id: 'inv-1',
-  account_number: '4421',
-  payer_name: 'Test Payer',
-  amount_cents: 12500,
-  due_date: '2026-08-01',
-  description: 'Monthly bill',
-  status: 'due',
-};
 const payer = {
   payer_id: 'payer-1',
   biller_id: definition.biller_id,
@@ -23,37 +15,11 @@ const payer = {
   preferences: { autopay: false, paperless: false, channels: ['email'], payment_day: null },
 };
 
-async function mockConfig(page: Page, config = definition) {
-  await page.route(/\/api\/public\/experiences\//, route =>
-    route.request().url().includes('manifest')
-      ? route.fulfill({ contentType: 'application/manifest+json', body: '{}' })
-      : route.fulfill({ contentType: 'application/json', body: JSON.stringify(config) }),
-  );
-}
-
-async function mockInvoice(page: Page) {
-  await page.route(/\/invoices\//, route =>
-    route.fulfill({ contentType: 'application/json', body: JSON.stringify({ invoices: [invoice] }) }),
-  );
-}
-
 const multiInvoices = [
-  { ...invoice, id: 'inv-1', description: 'Water service', amount_cents: 12500, type: 'Water' },
-  { ...invoice, id: 'inv-2', description: 'Sewer service', amount_cents: 8000, type: 'Sewer' },
-  { ...invoice, id: 'inv-3', description: 'Trash service', amount_cents: 4500, type: 'Trash' },
+  { ...DEFAULT_INVOICE, id: 'inv-1', description: 'Water service', amount_cents: 12500, type: 'Water' },
+  { ...DEFAULT_INVOICE, id: 'inv-2', description: 'Sewer service', amount_cents: 8000, type: 'Sewer' },
+  { ...DEFAULT_INVOICE, id: 'inv-3', description: 'Trash service', amount_cents: 4500, type: 'Trash' },
 ];
-
-async function mockInvoices(page: Page, invoices = multiInvoices) {
-  await page.route(/\/invoices\//, route =>
-    route.fulfill({ contentType: 'application/json', body: JSON.stringify({ invoices }) }),
-  );
-}
-
-async function mockQuotes(page: Page) {
-  await page.route(/\/payments\/quote/, route =>
-    route.fulfill({ contentType: 'application/json', body: JSON.stringify({ fee_cents: 250, total_cents: 12750 }) }),
-  );
-}
 
 async function lookup(page: Page) {
   await page.goto(url);
@@ -69,36 +35,29 @@ async function openCardReview(page: Page) {
   await expect(page.getByTestId('pay-submit')).toBeEnabled();
 }
 
-test('payer completes lookup and one confirmation creates one payment', async ({ page }) => {
-  let paymentPosts = 0;
-  let idempotencyKey = '';
-  await mockConfig(page);
-  await mockInvoice(page);
-  await page.route(/\/payers(\?|\/|$)/, route => route.fulfill({ status: 404, contentType: 'application/json', body: '{}' }));
-  await mockQuotes(page);
-  await page.route(/\/payments(\?|$)/, async route => {
-    paymentPosts += 1;
-    idempotencyKey = route.request().headers()['idempotency-key'] ?? '';
-    await new Promise(resolve => setTimeout(resolve, 100));
-    await route.fulfill({
-      contentType: 'application/json',
-      body: JSON.stringify({ confirmation: 'PRONTO-ABC123', amount_cents: 12500, fee_cents: 250, total_cents: 12750, status: 'succeeded' }),
-    });
-  });
+// UX / accessibility smoke: prove the generated experience's payment flow is reachable and
+// operable driven PURELY by accessibility roles/labels (no data-testids), so it survives a
+// widened, generated authorable structure. The payment-CONTRACT correctness assertions
+// (idempotency key, exactly-once, real invoice id, no client amount/fee, confirmation
+// matches the server) now live in the F6 runtime contract gate (src/contract-gate/).
+test('payer completes the flow driven only by accessible roles (UX/a11y smoke)', async ({ page }) => {
+  await installHarness(page, { definition });
 
-  await lookup(page);
-  await openCardReview(page);
-  await page.evaluate("const button = document.querySelector('[data-testid=\"pay-submit\"]'); button.click(); button.click();");
+  await page.goto(url);
+  const main = page.getByRole('main');
+  await main.getByRole('textbox', { name: /account number/i }).fill('4421');
+  await main.getByRole('button', { name: 'Continue' }).click();
+  await main.getByRole('button', { name: /^Card/ }).click();
+  await main.getByRole('button', { name: 'Review Payment' }).click();
+  await main.getByRole('button', { name: /^Pay/ }).click();
 
-  await expect(page.getByTestId('payment-confirmation')).toBeVisible();
-  await expect(page.getByTestId('confirmation-code')).toHaveText('PRONTO-ABC123');
-  expect(paymentPosts).toBe(1);
-  expect(idempotencyKey).toMatch(/^[0-9a-f-]{36}$/);
+  await expect(page.getByRole('heading', { name: /Payment (received|scheduled)/ })).toBeVisible();
+  await expect(page.getByText('PRONTO-ABC123')).toBeVisible();
 });
 
 test('quote failures stay on method selection and can be retried', async ({ page }) => {
   let quoteRequests = 0;
-  await mockConfig(page);
+  await mockConfig(page, definition);
   await mockInvoice(page);
   await page.route(/\/payers(\?|\/|$)/, route => route.fulfill({ status: 404, contentType: 'application/json', body: '{}' }));
   await page.route(/\/payments\/quote/, route => {
@@ -133,7 +92,7 @@ test('malformed nested UI configuration fails recoverably', async ({ page }) => 
 
 test('failed payment does not mutate payer preferences', async ({ page }) => {
   let preferencePatches = 0;
-  await mockConfig(page);
+  await mockConfig(page, definition);
   await mockInvoice(page);
   await mockQuotes(page);
   await page.route(/\/payers(\?|\/|$)/, route => {
@@ -158,7 +117,7 @@ test('failed payment does not mutate payer preferences', async ({ page }) => {
 });
 
 test('post-payment preference failure preserves confirmation', async ({ page }) => {
-  await mockConfig(page);
+  await mockConfig(page, definition);
   await mockInvoice(page);
   await mockQuotes(page);
   await page.route(/\/payers(\?|\/|$)/, route =>
@@ -186,8 +145,8 @@ test('post-payment preference failure preserves confirmation', async ({ page }) 
 
 test('multi-invoice cart settles each selected invoice with its own idempotency key', async ({ page }) => {
   const posts: Array<{ invoiceId: string; key: string }> = [];
-  await mockConfig(page);
-  await mockInvoices(page);
+  await mockConfig(page, definition);
+  await mockInvoice(page, multiInvoices);
   await page.route(/\/payers(\?|\/|$)/, route => route.fulfill({ status: 404, contentType: 'application/json', body: '{}' }));
   await mockQuotes(page);
   await page.route(/\/payments(\?|$)/, route => {
@@ -216,8 +175,8 @@ test('multi-invoice cart settles each selected invoice with its own idempotency 
 test('partial batch failure retries only the unpaid invoice with the same key', async ({ page }) => {
   const posts: Array<{ invoiceId: string; key: string }> = [];
   let failNext = true;
-  await mockConfig(page);
-  await mockInvoices(page);
+  await mockConfig(page, definition);
+  await mockInvoice(page, multiInvoices);
   await page.route(/\/payers(\?|\/|$)/, route => route.fulfill({ status: 404, contentType: 'application/json', body: '{}' }));
   await mockQuotes(page);
   await page.route(/\/payments(\?|$)/, route => {
