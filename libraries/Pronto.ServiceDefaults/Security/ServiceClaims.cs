@@ -43,6 +43,13 @@ public static class ServiceClaims
     /// <summary>Internal onboarding seam that seeds fake invoices.</summary>
     public const string InvoiceSeedRole = "service.invoice-seed";
 
+    /// <summary>
+    /// Internal onboarding seam that seeds the demo payer (parallel to <see cref="InvoiceSeedRole"/>).
+    /// A dedicated role so the demo-payer creation authority is minted narrowly for the onboarding
+    /// service instead of riding on the broad <see cref="CrossBillerRole"/>.
+    /// </summary>
+    public const string PayerSeedRole = "service.payer-seed";
+
     /// <summary>Test-data maintenance role (nonprod cleanup endpoints).</summary>
     public const string MaintenanceRole = "maintenance";
 
@@ -66,6 +73,7 @@ public static class ServiceClaims
         PaymentServiceRole,
         BillerExperienceServiceRole,
         InvoiceSeedRole,
+        PayerSeedRole,
         MaintenanceRole,
         CrossBillerRole,
     ];

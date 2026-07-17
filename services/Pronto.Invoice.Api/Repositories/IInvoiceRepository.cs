@@ -13,6 +13,20 @@ public interface IInvoiceRepository
     Task AddRangeAsync(IEnumerable<InvoiceDocument> invoices, CancellationToken cancellationToken = default);
 
     /// <summary>
+    /// Replace the full set of invoices for a single <paramref name="billerId"/> +
+    /// <paramref name="accountNumber"/> with <paramref name="invoices"/>: the new set is upserted
+    /// and any prior invoice for that account that is not in the new set is removed. Used by the
+    /// onboarding seed so re-publishing reflects only the latest profile — including when the new
+    /// profile produces <em>fewer</em> invoices than before (slot-based upsert alone would leave
+    /// the shrunk-away slots orphaned). Other accounts in the partition are untouched.
+    /// </summary>
+    Task ReplaceAccountAsync(
+        string billerId,
+        string accountNumber,
+        IReadOnlyList<InvoiceDocument> invoices,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>
     /// Open (non-paid) invoices for a biller + account number, within one partition.
     /// </summary>
     Task<IReadOnlyList<InvoiceDocument>> GetOpenAsync(

@@ -47,13 +47,11 @@ public sealed class PreviewProvisioningServiceTests
         await service.ProvisionAsync(created.Biller.BillerId, CancellationToken.None);
         await service.ResetAsync(created.Biller.BillerId, CancellationToken.None);
 
-        // Both provision and reset run the (deterministic) seed against the same preview tenant.
+        // Both provision and reset run the (deterministic) seed against the same preview tenant;
+        // the Invoice service replaces the preview account's set on each run, so it doesn't accumulate.
         Assert.Equal(2, seeder.Contexts.Count);
         Assert.All(seeder.Contexts, context =>
             Assert.Equal(PreviewTenant.ForBiller(created.Biller.BillerId), context.BillerId));
-        // Both run in replace mode so the preview partition is wiped + re-seeded, not accumulated.
-        Assert.All(seeder.Replaced, replace => Assert.True(replace));
-        Assert.Equal(2, seeder.Replaced.Count);
     }
 
     [Fact]
@@ -93,7 +91,7 @@ public sealed class PreviewProvisioningServiceTests
             NullLogger<BillerOnboardingService>.Instance,
             invoiceSeeder: seeder);
         var preview = new PreviewProvisioningService(
-            onboarding, seeder, NullLogger<PreviewProvisioningService>.Instance);
+            onboarding, NullLogger<PreviewProvisioningService>.Instance);
         return (onboarding, preview);
     }
 
@@ -103,14 +101,12 @@ public sealed class PreviewProvisioningServiceTests
     private sealed class CapturingInvoiceSeeder : IInvoiceSeeder
     {
         public List<SeedBillerContext> Contexts { get; } = [];
-        public List<bool> Replaced { get; } = [];
 
-        public void Reset() { Contexts.Clear(); Replaced.Clear(); }
+        public void Reset() => Contexts.Clear();
 
-        public ValueTask SeedAsync(SeedBillerContext biller, CancellationToken cancellationToken, bool replace = false)
+        public ValueTask SeedAsync(SeedBillerContext biller, CancellationToken cancellationToken)
         {
             Contexts.Add(biller);
-            Replaced.Add(replace);
             return ValueTask.CompletedTask;
         }
     }

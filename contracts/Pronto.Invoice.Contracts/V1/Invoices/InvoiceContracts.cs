@@ -46,11 +46,7 @@ public sealed record SeedInvoicesRequest(
     int? Count = null,
     string? AccountNumber = null,
     string? BillType = null,
-    IReadOnlyList<SeedInvoiceSpec>? Invoices = null,
-    // When true, replace the biller's existing invoices instead of appending — so a re-seed is
-    // deterministic and doesn't accumulate. Honored only for isolated preview tenants (the Invoice
-    // service ignores it for live billers), which makes a Studio "Restart preview" idempotent.
-    bool Replace = false);
+    IReadOnlyList<SeedInvoiceSpec>? Invoices = null);
 
 /// <summary>
 /// A caller-supplied demo invoice line item. The caller chooses biller-relevant content; the

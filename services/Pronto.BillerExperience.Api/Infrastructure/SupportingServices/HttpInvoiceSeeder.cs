@@ -12,7 +12,7 @@ public sealed partial class HttpInvoiceSeeder(
     ILogger<HttpInvoiceSeeder> logger) : IInvoiceSeeder
 {
     // Demo preview account every seeded biller's invoices attach to (matches the payer preview).
-    private const string PreviewAccountNumber = "4421";
+    private const string PreviewAccountNumber = SeedDefaults.PreviewAccountNumber;
     private const int SeedCount = 4;
 
     private static readonly JsonSerializerOptions WireOptions = new(JsonSerializerDefaults.Web)
@@ -22,7 +22,7 @@ public sealed partial class HttpInvoiceSeeder(
         Converters = { new JsonStringEnumConverter(JsonNamingPolicy.SnakeCaseLower, allowIntegerValues: false) },
     };
 
-    public async ValueTask SeedAsync(SeedBillerContext biller, CancellationToken cancellationToken, bool replace = false)
+    public async ValueTask SeedAsync(SeedBillerContext biller, CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(biller);
         var billerId = biller.BillerId;
@@ -45,7 +45,7 @@ public sealed partial class HttpInvoiceSeeder(
                         $"billers/{Uri.EscapeDataString(billerId)}/invoices/seed")
                     {
                         Content = JsonContent.Create(
-                            new SeedInvoicesRequest(invoiceSpecs.Count, PreviewAccountNumber, biller.BillType, invoiceSpecs, replace),
+                            new SeedInvoicesRequest(invoiceSpecs.Count, PreviewAccountNumber, biller.BillType, invoiceSpecs),
                             options: WireOptions)
                     };
                     using var response = await http.SendAsync(request, cancellationToken);

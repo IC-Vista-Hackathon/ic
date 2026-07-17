@@ -76,7 +76,7 @@ public sealed class PreviewControllerTests
             NullLogger<BillerOnboardingService>.Instance,
             invoiceSeeder: seeder);
         var preview = new PreviewProvisioningService(
-            onboarding, seeder, NullLogger<PreviewProvisioningService>.Instance);
+            onboarding, NullLogger<PreviewProvisioningService>.Instance);
         var controller = new PreviewController(preview, NullLogger<PreviewController>.Instance)
         {
             ControllerContext = new ControllerContext { HttpContext = new DefaultHttpContext() },
@@ -88,7 +88,7 @@ public sealed class PreviewControllerTests
     {
         public List<SeedBillerContext> Contexts { get; } = [];
 
-        public ValueTask SeedAsync(SeedBillerContext biller, CancellationToken cancellationToken, bool replace = false)
+        public ValueTask SeedAsync(SeedBillerContext biller, CancellationToken cancellationToken)
         {
             Contexts.Add(biller);
             return ValueTask.CompletedTask;

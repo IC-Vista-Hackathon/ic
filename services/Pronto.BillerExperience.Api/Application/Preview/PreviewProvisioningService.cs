@@ -1,6 +1,5 @@
 using System.Diagnostics;
 using Pronto.BillerExperience.Api.Infrastructure;
-using Pronto.BillerExperience.Api.Infrastructure.SupportingServices;
 using Pronto.BillerExperience.Contracts.V1.Experiences;
 using Pronto.BillerExperience.Contracts.V1.Preview;
 using Pronto.ServiceDefaults;
@@ -16,13 +15,13 @@ namespace Pronto.BillerExperience.Api.Application.Preview;
 /// That keeps the preview separate from any live/published tenant, and lets the Payment Service flag
 /// preview settlements (real state on the fake rail) so they're excluded from genuine reporting.
 ///
-/// Seeding reuses the existing <see cref="IInvoiceSeeder"/> (the FR-6 onboarding seeder) rather than
-/// duplicating it, so provisioning and reset produce the same category-relevant demo invoices the
-/// rest of the platform seeds — just addressed to the preview tenant.
+/// Seeding reuses <see cref="BillerOnboardingService.SeedPreviewExperienceDataAsync"/> (the FR-6
+/// onboarding invoice + demo-payer seed path) rather than duplicating it, so provisioning and reset
+/// produce the same category-relevant demo invoices and payer the rest of the platform seeds — just
+/// addressed to the preview tenant.
 /// </summary>
 public sealed partial class PreviewProvisioningService(
     BillerOnboardingService onboarding,
-    IInvoiceSeeder invoiceSeeder,
     ILogger<PreviewProvisioningService> logger)
 {
     /// <summary>Shared demo account the preview's bill lookup resolves (matches the invoice seeder).</summary>
@@ -37,8 +36,8 @@ public sealed partial class PreviewProvisioningService(
 
     /// <summary>
     /// Wipe + re-seed the preview tenant deterministically, so a "Restart preview" produces a fresh,
-    /// repeatable demo. Seeding runs in replace mode, so the Invoice service clears the isolated
-    /// preview partition before re-seeding — a re-seed overwrites rather than accumulating.
+    /// repeatable demo. Seeding replaces the preview account's seed set (F1's replace-on-reseed), so a
+    /// re-seed overwrites the prior set rather than accumulating.
     /// </summary>
     public ValueTask<PreviewTenantResponse> ResetAsync(string billerId, CancellationToken cancellationToken) =>
         SeedPreviewAsync(billerId, "preview.reset", cancellationToken);
@@ -54,13 +53,11 @@ public sealed partial class PreviewProvisioningService(
         activity?.SetTag("ic.biller_id", biller.BillerId);
         activity?.SetTag("ic.preview_biller_id", previewBillerId);
 
-        // Seed the isolated preview partition with the same demo invoices the platform seeds, keyed
-        // to the preview tenant rather than the live biller. Replace mode makes provision/reset
-        // deterministic — the preview partition is cleared first, so repeats don't accumulate.
-        await invoiceSeeder.SeedAsync(
-            new SeedBillerContext(previewBillerId, biller.DisplayName, biller.BillType, biller.Website),
-            cancellationToken,
-            replace: true);
+        // Seed the isolated preview partition with the same synthetic invoices + demo payer the
+        // platform seeds for the live biller, addressed to the preview tenant. The seeders replace
+        // the preview account's set on each run, so provision/reset are deterministic and repeats
+        // don't accumulate.
+        await onboarding.SeedPreviewExperienceDataAsync(biller.BillerId, cancellationToken);
 
         LogPreviewSeeded(logger, biller.BillerId, previewBillerId, activityName, Activity.Current?.TraceId.ToString());
         return new PreviewTenantResponse(

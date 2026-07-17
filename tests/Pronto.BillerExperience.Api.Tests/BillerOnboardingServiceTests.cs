@@ -535,6 +535,18 @@ public sealed class BillerOnboardingServiceTests
     }
 
     [Fact]
+    public async Task CreatingBillerSeedsItsDemoPayerForThePreviewAccount()
+    {
+        var payerSeeder = new RecordingPayerSeeder();
+        var service = CreateService(payerSeeder: payerSeeder);
+
+        var created = await service.CreateAsync(CreateRequest(), CancellationToken.None);
+
+        Assert.Equal(created.Biller.BillerId, payerSeeder.BillerId);
+        Assert.Contains(SeedDefaults.PreviewAccountNumber, payerSeeder.AccountNumbers);
+    }
+
+    [Fact]
     public async Task HttpInvoiceSeederUsesSnakeCaseContractAndFixedPreviewAccount()
     {
         var handler = new RecordingHttpHandler();
@@ -556,13 +568,14 @@ public sealed class BillerOnboardingServiceTests
         IExperienceDraftGenerator? generator = null,
         ILogger<BillerOnboardingService>? logger = null,
         IBillerResearchCoordinator? researchCoordinator = null,
-        IComplianceReviewService? complianceReviewService = null)
+        IComplianceReviewService? complianceReviewService = null,
+        IPayerSeeder? payerSeeder = null)
     {
         var repository = new InMemoryBillerExperienceRepository();
         generator ??= new DeterministicExperienceDraftGenerator(NullLogger<DeterministicExperienceDraftGenerator>.Instance);
         return new(repository, generator, runner ?? new OrchestrationRunner(),
             logger ?? NullLogger<BillerOnboardingService>.Instance, researchCoordinator, seeder,
-            complianceReviewService: complianceReviewService);
+            complianceReviewService: complianceReviewService, payerSeeder: payerSeeder);
     }
 
     private static CreateBillerRequest CreateRequest() =>
@@ -573,11 +586,27 @@ public sealed class BillerOnboardingServiceTests
         public string? BillerId { get; private set; }
         public string? BillType { get; private set; }
 
-        public ValueTask SeedAsync(SeedBillerContext biller, CancellationToken cancellationToken, bool replace = false)
+        public ValueTask SeedAsync(SeedBillerContext biller, CancellationToken cancellationToken)
         {
             if (failure is not null) throw failure;
             BillerId = biller.BillerId;
             BillType = biller.BillType;
+            return ValueTask.CompletedTask;
+        }
+    }
+
+    private sealed class RecordingPayerSeeder : IPayerSeeder
+    {
+        public string? BillerId { get; private set; }
+        public IReadOnlyList<string> AccountNumbers { get; private set; } = [];
+
+        public ValueTask SeedAsync(
+            SeedBillerContext biller,
+            IReadOnlyList<string> accountNumbers,
+            CancellationToken cancellationToken)
+        {
+            BillerId = biller.BillerId;
+            AccountNumbers = accountNumbers;
             return ValueTask.CompletedTask;
         }
     }
