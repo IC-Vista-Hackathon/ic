@@ -17,8 +17,21 @@ name: Deploy nonprod
 # (ruleset: "Require merge queue", max entries to build = 1 so the shared namespace is never
 # deployed twice at once) and marking "Deploy & functional gate (ic-nonprod)" — plus the CI
 # build/test/gate checks, which also run on merge_group — as required status checks.
+#
+# The `pull_request` trigger below does NOT deploy anything: the real deploy/build jobs are
+# guarded with `if: github.event_name != 'pull_request'`, so on a PR they are skipped and only
+# the lightweight `gate` job runs and passes. This is required so the "Deploy & functional gate
+# (ic-nonprod)" status context is reported (green, as a no-op) on the PR — otherwise the required
+# check would never appear on the PR and the branch ruleset would keep it permanently BLOCKED,
+# unable to enter the queue. The actual nonprod deploy + functional gate still runs only in the
+# merge queue (`merge_group`) on the exact commit that will land, with secrets, in the trusted
+# base-repo context. The `pull_request` event (deliberately NOT the labelled base-context variant
+# that exposes secrets to head code) never grants head code access to secrets, and here the PR path
+# executes no head code at all.
 
 on:
+  pull_request:
+    branches: [main]
   merge_group:
   workflow_dispatch:
 
@@ -35,6 +48,7 @@ concurrency:
 jobs:
   resolve:
     name: Resolve target commit
+    if: github.event_name != 'pull_request'
     runs-on: ubuntu-latest
     outputs:
       sha: ${{ steps.pick.outputs.sha }}
@@ -54,6 +68,7 @@ jobs:
 
   build-images:
     needs: resolve
+    if: github.event_name != 'pull_request'
     uses: ./.github/workflows/build-images.yml
     with:
       image_tag: ${{ needs.resolve.outputs.sha }}
@@ -63,7 +78,8 @@ jobs:
       AZURE_CREDENTIALS: ${{ secrets.AZURE_CREDENTIALS }}
 
   deploy:
-    name: Deploy & functional gate (ic-nonprod)
+    name: Deploy to ic-nonprod
+    if: github.event_name != 'pull_request'
     needs: [resolve, build-images]
     runs-on: ubuntu-latest
     environment: nonprod
@@ -243,3 +259,29 @@ jobs:
             --filter 'Category=known-gap' \
             || echo "::warning::Known-gap functional tests failed as expected; see docs/pronto-functional-requirements.md"
           echo "::endgroup::"
+
+  # The required status check the branch ruleset gates on. It always reports on both `pull_request`
+  # (no-op pass, so the PR can enter the merge queue) and `merge_group` (fails unless the real
+  # `deploy` job above succeeded on the queued commit). `if: always()` runs it even though `deploy`
+  # is skipped on PRs. Keeping the gate name stable here means the actual deploy steps can move
+  # without touching the required-check configuration.
+  gate:
+    name: Deploy & functional gate (ic-nonprod)
+    needs: [deploy]
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - name: Confirm nonprod gate
+        run: |
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            echo "PR event: the real ic-nonprod deploy + functional gate runs in the merge queue"
+            echo "(merge_group) on the exact commit that will land. Passing the PR-level check."
+            exit 0
+          fi
+          result="${{ needs.deploy.result }}"
+          echo "nonprod deploy job result: ${result}"
+          if [ "${result}" != "success" ]; then
+            echo "::error::nonprod deploy + functional gate did not succeed (${result})"
+            exit 1
+          fi
+          echo "nonprod deploy + functional gate passed on the queued commit."
