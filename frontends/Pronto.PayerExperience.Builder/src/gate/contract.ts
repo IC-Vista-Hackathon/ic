@@ -13,7 +13,7 @@
 // lockstep with the PWA's own `SKIN_EDITABLE_FILES` (frontends/Pronto.BillerPayments.Pwa/
 // src/skin/index.ts); `contract.test.ts` asserts the two lists are identical so the gate and
 // the core never drift. When the surface widens, add the new file(s) here (and there).
-export const AUTHORABLE_FILES = ['src/skin/theme.css', 'src/skin/chrome.tsx'] as const;
+export const AUTHORABLE_FILES = ['src/skin/theme.css', 'src/skin/chrome.tsx', 'src/skin/flow.tsx'] as const;
 export type AuthorableFile = (typeof AUTHORABLE_FILES)[number];
 
 // The only module specifiers a generated TypeScript/TSX file may import from. These are the

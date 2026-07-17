@@ -69,6 +69,7 @@ export async function runPipeline(options: PipelineOptions): Promise<PipelineRes
   await writeFile(join(artifactsDir, 'design-brief.json'), JSON.stringify(brief, null, 2));
   await writeFile(join(artifactsDir, 'theme.css'), skin.themeCss);
   await writeFile(join(artifactsDir, 'chrome.tsx'), skin.chromeTsx);
+  await writeFile(join(artifactsDir, 'flow.tsx'), skin.flowTsx);
   if (skin.notes) await writeFile(join(artifactsDir, 'notes.txt'), skin.notes);
 
   // Containment / provenance gate — runs before any build/publish work.
