@@ -114,8 +114,12 @@ export interface CartProps { summary: CartSummary; onRemove?: (invoiceId: string
 export type BatchLineStatus = 'pending' | 'paid' | 'failed';
 export interface BatchReviewLine { id: string; label: string; typeLabel?: string; amountLabel: string; feeLabel: string; totalLabel: string; status: BatchLineStatus; statusMessage?: string }
 export interface BatchReviewProps { heading: string; lines: BatchReviewLine[]; totalLabel: string; consentText: string }
-// flow.tsx must export: InvoiceSelectList(InvoiceSelectListProps), Cart(CartProps), BatchReview(BatchReviewProps).
-// All money strings (amountLabel/feeLabel/totalLabel/subtotalLabel) are preformatted by the core.`;
+// --- flow.tsx (feature F4): the authorable amount-entry / installment-plan chooser ---
+export type PaymentPlanMode = 'full' | 'partial' | 'installment';
+export interface InstallmentOption { count: number; label: string }
+export interface PaymentPlanChooserProps { allowPartial: boolean; allowInstallments: boolean; mode: PaymentPlanMode; onModeChange: (mode: PaymentPlanMode) => void; fullLabel: string; amountValue: string; onAmountChange: (value: string) => void; amountHint: string; amountError?: string; installmentOptions: InstallmentOption[]; selectedInstallmentCount?: number; onInstallmentCountChange: (count: number) => void }
+// flow.tsx must export: InvoiceSelectList(InvoiceSelectListProps), Cart(CartProps), BatchReview(BatchReviewProps), PaymentPlanChooser(PaymentPlanChooserProps).
+// All money strings (amountLabel/feeLabel/totalLabel/subtotalLabel/fullLabel/amountHint/amountError and each InstallmentOption.label) are preformatted by the core; amountValue is a controlled string the core validates.`;
 
 const SYSTEM_PROMPT = `You are a senior React/CSS designer producing a bespoke skin for one biller's payment PWA.
 Return ONLY a JSON object: {"themeCss": string, "chromeTsx": string, "flowTsx": string, "notes": string}.
@@ -123,7 +127,7 @@ Return ONLY a JSON object: {"themeCss": string, "chromeTsx": string, "flowTsx": 
 Hard rules — the build and a scripted Playwright gate will reject violations:
 - Edit ONLY the editable files. Never touch payment flow, service calls, or money logic.
 - chrome.tsx is PRESENTATIONAL ONLY: no fetch, no network, no state with side effects, no payment logic, no new npm imports. Import types only from './contract'. Export exactly Header, Intro, Footer with the given signatures.
-- flow.tsx is PRESENTATIONAL ONLY and authors the multi-invoice selection list, cart, and batch review STRUCTURE: no fetch, no network, no payment logic, no fee/total/amount math. Import types only from './contract'. Export exactly InvoiceSelectList, Cart, BatchReview with the given signatures. Render the preformatted money strings the core supplies; call the provided callbacks to toggle/select/remove — never compute money or settle invoices. Keep the data-testid hooks (invoice-select, select-all/clear-all, invoice-option-<id>, cart, cart-line-<id>, cart-subtotal, cart-fee, cart-total, batch-review, batch-line-<id>, batch-status-<id>, batch-total).
+- flow.tsx is PRESENTATIONAL ONLY and authors the multi-invoice selection list, cart, batch review, and the amount-entry / installment-plan chooser STRUCTURE: no fetch, no network, no payment logic, no fee/total/amount math, no parsing of monetary input. Import types only from './contract'. Export exactly InvoiceSelectList, Cart, BatchReview, PaymentPlanChooser with the given signatures. Render the preformatted money strings the core supplies; call the provided callbacks to toggle/select/remove and to change the plan mode / amount / installment count — never compute money, validate amounts, or settle invoices. Keep the data-testid hooks (invoice-select, select-all/clear-all, invoice-option-<id>, cart, cart-line-<id>, cart-subtotal, cart-fee, cart-total, batch-review, batch-line-<id>, batch-status-<id>, batch-total, plan-chooser, plan-mode-full, plan-mode-partial, plan-mode-installment, partial-amount-input, plan-amount-error, installment-option-<count>). PaymentPlanChooser returns null when both allowPartial and allowInstallments are false, and only renders the partial input when mode==='partial' and the installment options when mode==='installment'.
 - Preserve every CSS class name the core renders (app, mark, account-nav, intro, card, card-copy, bill, choices, method-chips, check, notice, consent, actions, success, success-icon, pill, history-row, preference-summary, alert, center). Restyle them freely; do not delete them or the data-testid controls will lose styling.
 - No <script>, no external URLs in CSS except fonts you declare, no @import of untrusted origins, no inline event handlers.
 - Keep strong color contrast (WCAG AA) and respect prefers-reduced-motion.
