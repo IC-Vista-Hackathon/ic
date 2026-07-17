@@ -170,7 +170,7 @@ export function InvoiceSelectList({ heading, invoices, onToggle, onSelectAll, on
       <div className="select-head">
         <h2>{heading}</h2>
         <button type="button" className="link" data-testid={allSelected ? 'clear-all' : 'select-all'} onClick={allSelected ? onClearAll : onSelectAll}>
-          {allSelected ? 'Clear all' : 'Select all ${commentSafe(noun)}'}
+          {allSelected ? 'Clear all' : ${JSON.stringify(`Select all ${noun}`)}}
         </button>
       </div>
       <ul className="invoice-list" role="list">
@@ -256,7 +256,7 @@ export function BatchReview({ heading, lines, totalLabel, consentText }: BatchRe
               )}
             </span>
             <span className="batch-line-amounts">
-              <small>{line.amountLabel} + {line.feeLabel} fee</small>
+              <small>{line.amountLabel} · {line.feeLabel}</small>
               <strong>{line.totalLabel}</strong>
             </span>
           </li>

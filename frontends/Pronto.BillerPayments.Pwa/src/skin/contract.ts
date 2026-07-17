@@ -111,6 +111,8 @@ export interface BatchReviewLine {
   label: string;
   typeLabel?: string;
   amountLabel: string;
+  // Self-contained payer-facing fee label (e.g. "$2.50 fee", "No payer fee", or
+  // "…" while quoting). Render it as-is — never append the word "fee" yourself.
   feeLabel: string;
   totalLabel: string;
   status: BatchLineStatus;

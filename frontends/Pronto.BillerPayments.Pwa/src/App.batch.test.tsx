@@ -11,7 +11,11 @@ const findPayer = vi.fn<() => Promise<PayerProfile | undefined>>();
 
 vi.mock('./provider', () => ({
   ServicePaymentExperienceProvider: class {
-    quote = vi.fn(async (invoiceId: string, method: string) => ({ feeCents: method === 'card' ? 250 : 0, totalCents: 250 }));
+    quote = vi.fn(async (invoiceId: string, method: string) => {
+      const amount = invoices.find(item => item.id === invoiceId)?.amountCents ?? 0;
+      const fee = method === 'card' ? 250 : 0; // card: payer pays fee; ach: biller absorbs it
+      return { feeCents: fee, totalCents: amount + fee };
+    });
     getInvoices = vi.fn().mockResolvedValue(invoices);
     findPayer = findPayer;
     getPayments = getPayments;
@@ -69,6 +73,22 @@ describe('multi-invoice cart + batch checkout', () => {
     // Cart subtotal aggregates every selected invoice's amount (125 + 80 + 45 = $250.00).
     expect(screen.getByTestId('cart').textContent).toContain('Your cart (3)');
     expect(screen.getByTestId('cart-subtotal').textContent).toBe('$250.00');
+    // Card: payer pays the fee (3 × $2.50), so subtotal + fee == total.
+    await waitFor(() => expect(screen.getByTestId('cart-fee').textContent).toBe('$7.50'));
+    expect(screen.getByTestId('cart-total').textContent).toBe('$257.50');
+  });
+
+  it('shows no payer fee when the biller absorbs it (total === amount)', async () => {
+    const { App } = await import('./App');
+    const user = userEvent.setup();
+    render(<App />);
+    await user.click(await screen.findByTestId('lookup-submit'));
+    await screen.findByTestId('invoice-select');
+    await user.click(screen.getByTestId('method-ach'));
+
+    // ACH quote returns total === amount, so the payer-facing fee is zero — never "No fee fee".
+    await waitFor(() => expect(screen.getByTestId('cart-fee').textContent).toBe('No payer fee'));
+    expect(screen.getByTestId('cart-total').textContent).toBe('$250.00');
   });
 
   it('deselecting an invoice updates the cart total', async () => {
