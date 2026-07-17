@@ -4,6 +4,7 @@ using Pronto.Invoice.Api.Domain;
 using Pronto.Invoice.Api.Repositories;
 using Pronto.Invoice.Api.Seeding;
 using Pronto.Invoice.Contracts.V1.Invoices;
+using Pronto.ServiceDefaults;
 using Pronto.ServiceDefaults.Security;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
@@ -55,6 +56,14 @@ public sealed partial class InvoicesController : ControllerBase
         var accountNumber = string.IsNullOrWhiteSpace(request.AccountNumber)
             ? GenerateAccountNumber()
             : request.AccountNumber.Trim();
+
+        // Replace is a preview-only affordance: honored solely for isolated preview partitions
+        // (server-derived from the biller id, never trusted for live billers) so a Studio "Restart
+        // preview" re-seeds deterministically instead of accumulating stale invoices.
+        if (request.Replace && PreviewTenant.IsPreview(billerId))
+        {
+            await _repository.PurgeByBillerAsync(billerId, cancellationToken);
+        }
 
         var today = DateOnly.FromDateTime(_timeProvider.GetUtcNow().UtcDateTime);
         var invoices = FakeInvoiceFactory.Create(

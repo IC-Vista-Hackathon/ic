@@ -7,6 +7,7 @@ using Pronto.Payment.Api.Fees;
 using Pronto.Payment.Api.Storage;
 using Pronto.Payment.Api.Workflow;
 using Pronto.Payment.Contracts.V1.Payments;
+using Pronto.ServiceDefaults;
 using Pronto.ServiceDefaults.Errors;
 using Pronto.ServiceDefaults.Security;
 using Microsoft.AspNetCore.Authorization;
@@ -145,6 +146,9 @@ public sealed partial class PaymentsController : ControllerBase
             Lifecycle = PaymentLifecycle.Pending,
             IdempotencyKey = idempotencyKey,
             RequestFingerprint = fingerprint,
+            // Preview-ness is derived from the (isolated) tenant, never trusted from the client;
+            // amount/fee/total above are still computed server-side, so money semantics are intact.
+            IsPreview = PreviewTenant.IsPreview(request.BillerId),
             CreatedAt = now,
             UpdatedAt = now,
         };

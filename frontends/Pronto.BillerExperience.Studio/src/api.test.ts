@@ -29,3 +29,38 @@ describe('Studio API request budgets', () => {
     expect(delays).toEqual([CHAT_REQUEST_TIMEOUT_MS]);
   });
 });
+
+describe('Studio preview tenant lifecycle', () => {
+  function stubFetch() {
+    const calls: Array<{ url: string; method: string }> = [];
+    vi.stubGlobal('window', {
+      setTimeout: () => 1,
+      clearTimeout: () => undefined,
+    });
+    vi.stubGlobal('fetch', vi.fn(async (url: string, init?: RequestInit) => {
+      calls.push({ url, method: init?.method ?? 'GET' });
+      return new Response(JSON.stringify({
+        biller_id: 'b1', preview_biller_id: 'preview-b1',
+        account_number: '4421', config_path: '/public/experiences/preview/preview-b1',
+      }), { status: 200, headers: { 'content-type': 'application/json' } });
+    }));
+    vi.spyOn(console, 'info').mockImplementation(() => undefined);
+    return calls;
+  }
+
+  it('provisions the preview tenant via POST /billers/{id}/preview', async () => {
+    const calls = stubFetch();
+    const tenant = await api.provisionPreview('b1');
+    expect(tenant.preview_biller_id).toBe('preview-b1');
+    expect(calls[0].method).toBe('POST');
+    expect(calls[0].url).toContain('/billers/b1/preview');
+    expect(calls[0].url).not.toContain('/preview/reset');
+  });
+
+  it('resets the preview tenant via POST /billers/{id}/preview/reset', async () => {
+    const calls = stubFetch();
+    await api.resetPreview('b1');
+    expect(calls[0].method).toBe('POST');
+    expect(calls[0].url).toContain('/billers/b1/preview/reset');
+  });
+});

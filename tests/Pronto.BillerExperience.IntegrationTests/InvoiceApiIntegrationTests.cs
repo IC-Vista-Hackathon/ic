@@ -68,7 +68,49 @@ public sealed class InvoiceApiIntegrationTests : IClassFixture<TestingAppFactory
         Assert.All(list.Invoices, invoice => Assert.Equal(account, invoice.AccountNumber));
     }
 
-    private sealed record SeedRequest(int? Count, string? AccountNumber);
+    [Fact]
+    public async Task PreviewReseedWithReplaceIsDeterministicAndDoesNotAccumulate()
+    {
+        var client = _factory.CreateClient();
+        // preview- marks an isolated preview tenant; only these honor replace.
+        const string biller = "preview-integration-biller";
+        const string account = "4421";
+        var seedBase = $"/billers/{biller}/invoices";
+
+        for (var run = 0; run < 3; run++)
+        {
+            var response = await client.PostAsJsonAsync(
+                $"{seedBase}/seed", new SeedRequest(Count: 4, AccountNumber: account, Replace: true), Wire);
+            Assert.Equal(HttpStatusCode.Created, response.StatusCode);
+        }
+
+        var list = await (await client.GetAsync($"{seedBase}?account_number={account}"))
+            .Content.ReadFromJsonAsync<InvoiceList>(Wire);
+        // Three replace-mode re-seeds leave exactly one seed set — a reset wipes, not accumulates.
+        Assert.NotNull(list);
+        Assert.Equal(4, list!.Invoices.Count);
+    }
+
+    [Fact]
+    public async Task ReplaceIsIgnoredForLiveBillersSoRealDataIsNeverWiped()
+    {
+        var client = _factory.CreateClient();
+        // A live (non-preview) biller: replace must be a no-op so real invoices are never purged.
+        const string biller = "live-integration-biller";
+        const string account = "LIVE-77";
+        var seedBase = $"/billers/{biller}/invoices";
+
+        await client.PostAsJsonAsync($"{seedBase}/seed", new SeedRequest(2, account, Replace: true), Wire);
+        await client.PostAsJsonAsync($"{seedBase}/seed", new SeedRequest(2, account, Replace: true), Wire);
+
+        var list = await (await client.GetAsync($"{seedBase}?account_number={account}"))
+            .Content.ReadFromJsonAsync<InvoiceList>(Wire);
+        // Both seeds appended (replace ignored) — live billers keep their existing invoices.
+        Assert.NotNull(list);
+        Assert.Equal(4, list!.Invoices.Count);
+    }
+
+    private sealed record SeedRequest(int? Count, string? AccountNumber, bool Replace = false);
 
     private sealed record SeedResponse(int Seeded, string AccountNumber);
 

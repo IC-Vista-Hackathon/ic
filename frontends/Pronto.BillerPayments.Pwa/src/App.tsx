@@ -1,5 +1,5 @@
 import { FormEvent, useEffect, useMemo, useRef, useState } from 'react';
-import { billerSlug } from './billerSlug';
+import { billerSlug, configEndpoint, previewBillerId } from './billerSlug';
 import { NoOpenBillError } from './errors';
 import { randomId } from './id';
 import { trackEvent } from './insights';
@@ -40,8 +40,9 @@ export function App() {
 
   useEffect(() => {
     setConfigState('loading'); setError('');
-    const slug = billerSlug(); const configUrl = import.meta.env.VITE_CONFIG_URL ?? `/api/public/experiences/${encodeURIComponent(slug)}`;
-    const manifest = document.querySelector<HTMLLinkElement>('#experience-manifest'); if (manifest) manifest.href = `/api/public/experiences/${encodeURIComponent(slug)}/manifest.webmanifest`;
+    const slug = billerSlug(); const preview = previewBillerId(); const configUrl = import.meta.env.VITE_CONFIG_URL ?? configEndpoint(slug, preview);
+    // Preview config is served from the draft (no published manifest); only wire the manifest for live slugs.
+    const manifest = document.querySelector<HTMLLinkElement>('#experience-manifest'); if (manifest && !preview) manifest.href = `/api/public/experiences/${encodeURIComponent(slug)}/manifest.webmanifest`;
     observed('pwa.config.load', async () => { const response = await fetchWithTimeout(configUrl, { cache: 'no-store' }); if (!response.ok) throw await requestError(response, 'Experience configuration is unavailable.'); return validateConfig(await response.json()); })
       .then(value => { setConfig(value); setConfigState('ready'); document.title = value.pwa.name; document.documentElement.style.setProperty('--brand', value.brand.primary_color); document.documentElement.style.setProperty('--brand-secondary', value.brand.secondary_color); if (value.brand.font_family) document.documentElement.style.setProperty('--brand-font', value.brand.font_family); })
       .catch(caught => { setConfigState('error'); setError(`Load payment experience: ${errorMessage(caught)}`); logError('pwa.config.failed', caught, { biller_slug: slug }); });

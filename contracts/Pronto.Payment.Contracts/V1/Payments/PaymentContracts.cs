@@ -33,7 +33,10 @@ public sealed record PaymentResponse(
     PaymentStatus Status,
     DateOnly? ScheduledFor,
     string ReceiptMessage,
-    DateTimeOffset CreatedAt);
+    DateTimeOffset CreatedAt,
+    // Synthetic settlement made against an isolated Studio preview tenant on the fake rail. Flagged
+    // so it can be excluded from real reporting/reconciliation; defaults false for genuine traffic.
+    bool IsPreview = false);
 
 /// <summary>
 /// Server-side fee quote for <c>GET /payments/quote</c>. The PWA shows these numbers before

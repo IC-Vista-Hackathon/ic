@@ -77,6 +77,14 @@ public sealed record PaymentRecord
     public string? FailureReason { get; init; }
 
     /// <summary>
+    /// True when this settlement belongs to an isolated Studio preview tenant (a <c>preview-</c>
+    /// biller partition). Derived server-side from the biller id — the client never declares it, so
+    /// money semantics are unchanged. Preview settlements are real service state on the fake rail
+    /// but are excluded from genuine-traffic reporting/reconciliation.
+    /// </summary>
+    public bool IsPreview { get; init; }
+
+    /// <summary>
     /// Exclusive lease held by a processor while it drives a pending/scheduled record forward.
     /// A record may be re-claimed once this passes, so a crashed processor never wedges it.
     /// </summary>
@@ -115,7 +123,8 @@ public sealed record PaymentRecord
         Status: WireStatus,
         ScheduledFor: ScheduledFor,
         ReceiptMessage: ReceiptMessage,
-        CreatedAt: CreatedAt);
+        CreatedAt: CreatedAt,
+        IsPreview: IsPreview);
 
     /// <summary>
     /// The payment id to use for a request. When a client supplies an idempotency key the id is

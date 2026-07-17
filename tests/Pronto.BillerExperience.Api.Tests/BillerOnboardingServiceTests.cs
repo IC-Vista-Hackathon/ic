@@ -573,7 +573,7 @@ public sealed class BillerOnboardingServiceTests
         public string? BillerId { get; private set; }
         public string? BillType { get; private set; }
 
-        public ValueTask SeedAsync(SeedBillerContext biller, CancellationToken cancellationToken)
+        public ValueTask SeedAsync(SeedBillerContext biller, CancellationToken cancellationToken, bool replace = false)
         {
             if (failure is not null) throw failure;
             BillerId = biller.BillerId;

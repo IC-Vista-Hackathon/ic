@@ -13,10 +13,15 @@ public sealed record SeedBillerContext(
 
 public interface IInvoiceSeeder
 {
-    ValueTask SeedAsync(SeedBillerContext biller, CancellationToken cancellationToken);
+    /// <summary>
+    /// Seed demo invoices for <paramref name="biller"/>. When <paramref name="replace"/> is true the
+    /// existing invoices are replaced rather than appended (used by the resettable preview tenant so
+    /// a re-seed is deterministic); the Invoice service only honors replace for preview partitions.
+    /// </summary>
+    ValueTask SeedAsync(SeedBillerContext biller, CancellationToken cancellationToken, bool replace = false);
 }
 
 public sealed class NullInvoiceSeeder : IInvoiceSeeder
 {
-    public ValueTask SeedAsync(SeedBillerContext biller, CancellationToken cancellationToken) => ValueTask.CompletedTask;
+    public ValueTask SeedAsync(SeedBillerContext biller, CancellationToken cancellationToken, bool replace = false) => ValueTask.CompletedTask;
 }

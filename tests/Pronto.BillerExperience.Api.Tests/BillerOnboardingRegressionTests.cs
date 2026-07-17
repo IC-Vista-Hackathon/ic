@@ -186,7 +186,7 @@ public sealed class BillerOnboardingRegressionTests
     {
         public string? BillerId { get; private set; }
 
-        public ValueTask SeedAsync(SeedBillerContext biller, CancellationToken cancellationToken)
+        public ValueTask SeedAsync(SeedBillerContext biller, CancellationToken cancellationToken, bool replace = false)
         {
             BillerId = biller.BillerId;
             return ValueTask.FromException(new InvalidOperationException("seed failed"));

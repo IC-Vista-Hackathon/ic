@@ -22,7 +22,7 @@ public sealed partial class HttpInvoiceSeeder(
         Converters = { new JsonStringEnumConverter(JsonNamingPolicy.SnakeCaseLower, allowIntegerValues: false) },
     };
 
-    public async ValueTask SeedAsync(SeedBillerContext biller, CancellationToken cancellationToken)
+    public async ValueTask SeedAsync(SeedBillerContext biller, CancellationToken cancellationToken, bool replace = false)
     {
         ArgumentNullException.ThrowIfNull(biller);
         var billerId = biller.BillerId;
@@ -45,7 +45,7 @@ public sealed partial class HttpInvoiceSeeder(
                         $"billers/{Uri.EscapeDataString(billerId)}/invoices/seed")
                     {
                         Content = JsonContent.Create(
-                            new SeedInvoicesRequest(invoiceSpecs.Count, PreviewAccountNumber, biller.BillType, invoiceSpecs),
+                            new SeedInvoicesRequest(invoiceSpecs.Count, PreviewAccountNumber, biller.BillType, invoiceSpecs, replace),
                             options: WireOptions)
                     };
                     using var response = await http.SendAsync(request, cancellationToken);
