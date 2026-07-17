@@ -8,11 +8,13 @@ const payCalls: PaymentRequest[] = [];
 const pay = vi.fn<(request: PaymentRequest) => Promise<PaymentReceipt>>();
 const getPayments = vi.fn<() => Promise<PaymentHistory[]>>();
 const findPayer = vi.fn<() => Promise<PayerProfile | undefined>>();
-const quote = vi.fn(async (invoiceId: string, method: string) => {
+// card: payer pays the fee; ach: biller absorbs it (total === amount).
+async function defaultQuote(invoiceId: string, method: string) {
   const amount = invoices.find(item => item.id === invoiceId)?.amountCents ?? 0;
-  const fee = method === 'card' ? 250 : 0; // card: payer pays fee; ach: biller absorbs it
+  const fee = method === 'card' ? 250 : 0;
   return { feeCents: fee, totalCents: amount + fee };
-});
+}
+const quote = vi.fn(defaultQuote);
 
 vi.mock('./provider', () => ({
   ServicePaymentExperienceProvider: class {
@@ -57,6 +59,7 @@ describe('multi-invoice cart + batch checkout', () => {
     payCalls.length = 0;
     findPayer.mockResolvedValue(undefined);
     getPayments.mockResolvedValue([]);
+    quote.mockImplementation(defaultQuote);
     pay.mockImplementation(async (request: PaymentRequest) => { payCalls.push(request); return receiptFor(request.invoiceId); });
     vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify(config), { status: 200 })));
   });
@@ -112,6 +115,29 @@ describe('multi-invoice cart + batch checkout', () => {
     await user.click(option);
     expect(screen.getByTestId('cart').textContent).toContain('Your cart (3)');
     expect(quote).toHaveBeenCalledTimes(6);
+  });
+
+  it('clears the quote error when the failing bill is deselected', async () => {
+    quote.mockImplementation(async (invoiceId: string, method: string) => {
+      if (invoiceId === 'inv-2' && method === 'card') throw new Error('quote unavailable');
+      const amount = invoices.find(item => item.id === invoiceId)?.amountCents ?? 0;
+      const fee = method === 'card' ? 250 : 0;
+      return { feeCents: fee, totalCents: amount + fee };
+    });
+    const { App } = await import('./App');
+    const user = userEvent.setup();
+    render(<App />);
+    await user.click(await screen.findByTestId('lookup-submit'));
+    await screen.findByTestId('invoice-select');
+
+    // inv-2's card quote failed → banner shown and review blocked.
+    await screen.findByTestId('quote-error');
+    expect((screen.getByTestId('review-submit') as HTMLButtonElement).disabled).toBe(true);
+
+    // Removing the offending bill clears the error and unblocks checkout — no manual retry.
+    await user.click(within(screen.getByTestId('invoice-option-inv-2')).getByRole('checkbox'));
+    await waitFor(() => expect(screen.queryByTestId('quote-error')).toBeNull());
+    await waitFor(() => expect((screen.getByTestId('review-submit') as HTMLButtonElement).disabled).toBe(false));
   });
 
   it('settles each selected invoice with one POST and a distinct idempotency key', async () => {
