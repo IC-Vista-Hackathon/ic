@@ -77,9 +77,12 @@ export interface DesignBrief {
 }
 
 // A generated skin is exactly the set of files the core marks editable
-// (frontends/Pronto.BillerPayments.Pwa/src/skin/index.ts -> SKIN_EDITABLE_FILES).
+// (frontends/Pronto.BillerPayments.Pwa/src/skin/index.ts -> SKIN_EDITABLE_FILES):
+// theme.css + chrome.tsx (look and feel) and flow.tsx (the authorable STRUCTURE of the
+// multi-invoice selection list, cart, and batch review — presentational only, feature F3).
 export interface GeneratedSkin {
   themeCss: string;
   chromeTsx: string;
+  flowTsx: string;
   notes?: string;
 }
