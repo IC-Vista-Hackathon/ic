@@ -1,4 +1,5 @@
 using Pronto.Payment.Api;
+using Pronto.Payment.Api.Assurance;
 using Pronto.Payment.Api.Clients;
 using Pronto.Payment.Api.Workflow;
 using Pronto.Persistence.Cosmos;
@@ -11,7 +12,9 @@ using Microsoft.Extensions.DependencyInjection.Extensions;
 
 var builder = WebApplication.CreateBuilder(args);
 
-builder.AddServiceDefaults("Pronto.Payment.Api", meters: [PaymentTelemetry.MeterName]);
+builder.AddServiceDefaults(
+    "Pronto.Payment.Api",
+    meters: [PaymentTelemetry.MeterName, AssuranceTelemetry.MeterName]);
 builder.Services.Configure<MaintenanceOptions>(
     builder.Configuration.GetSection(MaintenanceOptions.SectionName));
 

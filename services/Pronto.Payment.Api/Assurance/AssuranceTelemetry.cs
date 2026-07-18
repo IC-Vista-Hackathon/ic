@@ -6,8 +6,9 @@ namespace Pronto.Payment.Api.Assurance;
 /// <summary>
 /// Telemetry for the post-publish assurance layer (synthetic canary payments + ledger
 /// reconciliation). Kept separate from <see cref="Workflow.PaymentTelemetry"/> so assurance
-/// signals — which are alert-worthy on divergence — are easy to isolate in metrics/logs. Azure
-/// Monitor collects this meter/source automatically via <c>UseAzureMonitor</c>.
+/// signals — which are alert-worthy on divergence — are easy to isolate in metrics/logs. This
+/// meter is exported by registering it via <c>AddServiceDefaults(..., meters: [...])</c> in
+/// <c>Program.cs</c>; Azure Monitor only exports meters that are explicitly added.
 /// </summary>
 public static class AssuranceTelemetry
 {
