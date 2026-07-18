@@ -22,8 +22,18 @@ public static class ServiceAuthorization
     /// <summary>Internal onboarding seam — <c>POST /billers/{id}/invoices/seed</c>.</summary>
     public const string InvoiceSeed = "invoices:seed";
 
-    /// <summary>Policy Agent — payer registration and preference operations.</summary>
+    /// <summary>
+    /// Payer registration and preference operations. Held by the Policy Agent (payer-facing
+    /// registration), tenant-scoped to the caller's biller.
+    /// </summary>
     public const string PayersWrite = "payers:write";
+
+    /// <summary>
+    /// Internal onboarding seam — <c>POST /payers/seed</c>. Seeds the demo payer during onboarding,
+    /// the payer-side parallel to <see cref="InvoiceSeed"/>; kept distinct from <see cref="PayersWrite"/>
+    /// so seeding does not widen the payer-facing registration policy.
+    /// </summary>
+    public const string PayersSeed = "payers:seed";
 
     /// <summary>Test-data maintenance endpoints (nonprod).</summary>
     public const string Maintenance = "maintenance";
@@ -38,6 +48,7 @@ public static class ServiceAuthorization
         options.AddPolicy(InvoiceStatusWrite, RolePolicy(ServiceClaims.PaymentServiceRole));
         options.AddPolicy(InvoiceSeed, RolePolicy(ServiceClaims.InvoiceSeedRole, ServiceClaims.CrossBillerRole));
         options.AddPolicy(PayersWrite, RolePolicy(ServiceClaims.PolicyAgentRole));
+        options.AddPolicy(PayersSeed, RolePolicy(ServiceClaims.PayerSeedRole, ServiceClaims.CrossBillerRole));
         options.AddPolicy(Maintenance, RolePolicy(ServiceClaims.MaintenanceRole));
     }
 

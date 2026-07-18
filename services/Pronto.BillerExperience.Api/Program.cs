@@ -167,6 +167,25 @@ else
     builder.Services.AddSingleton<IInvoiceSeeder, NullInvoiceSeeder>();
 }
 
+// Demo payer seeding — the payer half of the onboarding seed path. Mirrors the invoice seeder: a
+// dedicated bearer-authenticated client posts the deterministic demo payer to the PayerAccount
+// service so the live payer site's account lookup resolves real payer data alongside the invoices.
+builder.Services.AddSingleton<ISeedPayerGenerator, DeterministicSeedPayerGenerator>();
+if (Uri.TryCreate(options.SupportingServices.PayerAccountBaseUrl, UriKind.Absolute, out var payerSeederUri))
+{
+    builder.Services.AddHttpClient("payer-seeder", client => client.BaseAddress = payerSeederUri)
+        .AddHttpMessageHandler<CorrelationPropagationHandler>()
+        .AddServiceBearerToken(builder.Configuration, builder.Environment);
+    builder.Services.AddSingleton<IPayerSeeder>(services => new HttpPayerSeeder(
+        services.GetRequiredService<IHttpClientFactory>().CreateClient("payer-seeder"),
+        services.GetRequiredService<ISeedPayerGenerator>(),
+        services.GetRequiredService<ILogger<HttpPayerSeeder>>()));
+}
+else
+{
+    builder.Services.AddSingleton<IPayerSeeder, NullPayerSeeder>();
+}
+
 // Typed service clients behind the MCP service tools. Each is registered only when its
 // downstream base URL is configured; otherwise a fail-fast UnavailableServiceClient stands in so
 // the host still boots (and the corresponding tools return a clear "not configured" error).

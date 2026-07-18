@@ -5,6 +5,9 @@ on:
     branches: [main]
   push:
     branches: [main]
+  # Required checks must also run on the merge queue's temporary ref, or the queue can never
+  # satisfy them and merges hang. These are hermetic (no deploy), so they run per queue entry.
+  merge_group:
 
 permissions:
   contents: read
@@ -78,7 +81,7 @@ jobs:
         run: npm test
 
   payer-experience-builder:
-    name: Payer Experience Builder (gate)
+    name: Payer Experience Builder (gates)
     runs-on: ubuntu-latest
     defaults:
       run:
@@ -99,9 +102,10 @@ jobs:
       - name: Typecheck
         run: npm run typecheck
 
-      # Unit tests (containment gate, CSP, manifest). They read the sibling PWA source
-      # directly and don't need its node_modules or the Playwright browser; the full
-      # generate->build->validate e2e path runs in the deployment build Job.
+      # Unit tests (F5 containment gate/CSP/manifest + F6 contract-gate rule evaluation). They
+      # read the sibling PWA source directly and need no browser; the browser-driven fixture
+      # e2e and the full generate->build->validate->contract-gate path run in the deployment
+      # build Job.
       - name: Test
         run: npm test
 

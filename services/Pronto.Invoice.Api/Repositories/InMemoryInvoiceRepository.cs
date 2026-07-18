@@ -18,8 +18,38 @@ public sealed class InMemoryInvoiceRepository : IInvoiceRepository
             var partition = _byBiller.GetOrAdd(invoice.BillerId, static _ => new List<InvoiceDocument>());
             lock (partition)
             {
-                partition.Add(invoice);
+                // Upsert by id to mirror the Cosmos repository's UpsertItemAsync semantics: re-seeding
+                // a biller's deterministic set replaces the same documents instead of duplicating.
+                var index = partition.FindIndex(
+                    existing => string.Equals(existing.Id, invoice.Id, StringComparison.Ordinal));
+                if (index >= 0)
+                {
+                    partition[index] = invoice;
+                }
+                else
+                {
+                    partition.Add(invoice);
+                }
             }
+        }
+
+        return Task.CompletedTask;
+    }
+
+    public Task ReplaceAccountAsync(
+        string billerId,
+        string accountNumber,
+        IReadOnlyList<InvoiceDocument> invoices,
+        CancellationToken cancellationToken = default)
+    {
+        var partition = _byBiller.GetOrAdd(billerId, static _ => new List<InvoiceDocument>());
+        lock (partition)
+        {
+            // Drop every prior invoice for this account (including slots that a smaller new set no
+            // longer covers), then add the new set. Mirrors the Cosmos delete-then-upsert below.
+            partition.RemoveAll(
+                existing => string.Equals(existing.AccountNumber, accountNumber, StringComparison.Ordinal));
+            partition.AddRange(invoices);
         }
 
         return Task.CompletedTask;

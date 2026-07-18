@@ -4,7 +4,8 @@ import type { SkinGenerator } from './index';
 // Offline, no-network generator. Derives a genuinely different-looking skin from
 // the brand tokens + a deterministic style seed, so the whole pipeline (generate ->
 // build -> validate -> publish) is runnable and testable without a model call.
-// It restyles the stable class names the core renders; it never changes flow markup.
+// It restyles the stable class names the core renders and authors the presentational
+// structure of the multi-invoice selection/cart/batch review flow (flow.tsx, feature F3).
 export class DeterministicSkinGenerator implements SkinGenerator {
   readonly name = 'deterministic';
 
@@ -21,6 +22,7 @@ export class DeterministicSkinGenerator implements SkinGenerator {
     return {
       themeCss: themeCss({ radius, surface, canvas, headerStyle, fontStack, brief }),
       chromeTsx: chromeTsx(brief),
+      flowTsx: flowTsx(brief),
       notes: `deterministic seed=${seed} radius=${radius}`,
     };
   }
@@ -79,6 +81,23 @@ fieldset{border:0;padding:0;display:grid;gap:.6rem}legend{font-weight:700;margin
 .preference-summary>span{display:flex;justify-content:space-between;border:1px solid #dfe5e8;border-radius:calc(var(--radius) - 6px);padding:.8rem}
 .alert{background:#f8e4e3;color:#8b2421;padding:.8rem;border-radius:8px;margin-top:1rem}
 .center{min-height:100vh;display:grid;place-items:center}
+.select-head{display:flex;justify-content:space-between;align-items:center}
+.link{background:none;border:0;color:var(--brand);font-weight:700;cursor:pointer;padding:.2rem}
+.invoice-list,.cart-lines,.batch-lines{list-style:none;margin:0;padding:0;display:grid;gap:.6rem}
+.invoice-option{display:flex;gap:.7rem;align-items:flex-start;padding:.85rem;border:1px solid #dfe5e8;border-radius:calc(var(--radius) - 6px)}
+.invoice-body{display:grid;gap:.15rem;flex:1}.invoice-title{display:flex;gap:.5rem;align-items:center}.invoice-body small{color:#596268}
+.invoice-right{display:flex;align-items:center;gap:.5rem;margin-left:auto}
+.bill-type{align-self:start;font-size:.7rem;font-weight:800;letter-spacing:.04em;text-transform:uppercase;background:color-mix(in srgb,var(--brand) 14%,#fff);color:var(--brand);padding:.15rem .5rem;border-radius:999px}
+.status-dot{width:.7rem;height:.7rem;border-radius:50%;flex:none}.status-green{background:#3ecf8e}.status-yellow{background:#f5c542}.status-red{background:#ef5f5f}
+.bill-note{font-size:.85rem;color:#596268}.bill-note-strong{font-size:.85rem;font-weight:800;color:var(--brand)}
+.cart-line{display:flex;justify-content:space-between;align-items:center;border-top:1px solid #eef1f3;padding-top:.6rem}.cart-line:first-child{border-top:0;padding-top:0}
+.cart-line-right{display:flex;gap:.7rem;align-items:center}
+.batch-line{display:flex;justify-content:space-between;gap:1rem;border-top:1px solid #eef1f3;padding-top:.7rem;align-items:flex-start}.batch-line:first-child{border-top:0;padding-top:0}
+.batch-line-desc{display:grid;gap:.15rem}.batch-line-amounts{display:grid;justify-items:end;text-align:right}.batch-line-amounts small{color:#596268}
+.batch-line-status{font-weight:700}.batch-line-paid .batch-line-status{color:#23612d}.batch-line-failed .batch-line-status{color:#8b2421}
+.plan-chooser{border:1px solid #dfe5e8;border-radius:calc(var(--radius) - 4px);padding:1rem;display:grid;gap:.7rem;margin:0}.plan-chooser legend{font-weight:750;padding:0 .3rem}
+.plan-amount{padding:.2rem .2rem .2rem 1.9rem;display:grid;gap:.35rem}.plan-amount .bill-note-strong{color:#8b2421}
+.installment-options{list-style:none;margin:0;padding:.2rem 0 0 1.9rem;display:grid;gap:.5rem}
 .app>footer{background:${o.surface};border-top:1px solid #dfe5e8;padding:1rem max(1rem,calc((100% - 760px)/2));display:flex;justify-content:space-between;color:#596268;font-size:.8rem}
 .app>footer nav{display:flex;gap:1rem}.app>footer a{color:var(--brand)}
 @media(max-width:540px){.choices{grid-template-columns:1fr}.app>main{margin:1.5rem auto}.app>footer{display:grid;gap:.6rem}.intro h1{font-size:1.7rem}.app>header span{display:none}.preference-summary>span{display:grid}}
@@ -129,6 +148,205 @@ export function Footer({ brand, content }: FooterProps) {
 function initials(name: string) {
   return name.split(' ').map(word => word[0]).slice(0, 2).join('');
 }
+`;
+}
+
+// Authors src/skin/flow.tsx — the presentational STRUCTURE of the multi-invoice
+// selection list, cart, and batch review (feature F3). Imports types only from ./contract;
+// no fetch, no payment logic, no fee/total math. The core hands fully preformatted view
+// models + callbacks, so a generated flow can restructure freely while money stays in core.
+export function flowTsx(brief: DesignBrief): string {
+  const noun = brief.bill_type ? `${titleCase(brief.bill_type)} bills` : 'bills';
+  return `import type {
+  BatchReviewProps,
+  CartProps,
+  InvoiceSelectListProps,
+  PaymentPlanChooserProps,
+  SelectableInvoice,
+} from './contract';
+
+// Generated skin flow for ${commentSafe(brief.display_name)} (${commentSafe(brief.biller_slug)}).
+// Presentational only — no fetch, no payment logic, no money math. Features F3 + F4.
+
+export function InvoiceSelectList({ heading, invoices, onToggle, onSelectAll, onClearAll, allSelected }: InvoiceSelectListProps) {
+  return (
+    <section className="card" aria-label={heading} data-testid="invoice-select">
+      <div className="select-head">
+        <h2>{heading}</h2>
+        <button type="button" className="link" data-testid={allSelected ? 'clear-all' : 'select-all'} onClick={allSelected ? onClearAll : onSelectAll}>
+          {allSelected ? 'Clear all' : ${JSON.stringify(`Select all ${noun}`)}}
+        </button>
+      </div>
+      <ul className="invoice-list" role="list">
+        {invoices.map(invoice => (
+          <li key={invoice.id}>
+            <label className="check invoice-option" data-testid={\`invoice-option-\${invoice.id}\`}>
+              <input
+                type="checkbox"
+                checked={invoice.selected}
+                onChange={() => onToggle(invoice.id)}
+                aria-label={\`Pay \${invoice.typeLabel ? \`\${invoice.typeLabel} — \` : ''}\${invoice.description}, \${invoice.amountLabel}\`}
+              />
+              <span className="invoice-body">
+                <span className="invoice-title">
+                  {invoice.typeLabel && <span className="bill-type" data-testid="bill-type">{invoice.typeLabel}</span>}
+                  <strong>{invoice.description}</strong>
+                </span>
+                <small>Due {invoice.dueDateLabel}</small>
+                {invoice.note && <small className={invoice.noteEmphasis ? 'bill-note-strong' : 'bill-note'}>{invoice.note}</small>}
+              </span>
+              <span className="invoice-right">
+                {invoice.statusColor && (
+                  <span className={\`status-dot status-\${invoice.statusColor}\`} title={invoice.statusLabel} aria-label={invoice.statusLabel} />
+                )}
+                <strong>{invoice.amountLabel}</strong>
+              </span>
+            </label>
+          </li>
+        ))}
+      </ul>
+    </section>
+  );
+}
+
+export function Cart({ summary, onRemove, emptyText }: CartProps) {
+  if (summary.count === 0) {
+    return <section className="card cart" aria-label="Your cart" data-testid="cart"><p className="card-copy">{emptyText}</p></section>;
+  }
+  return (
+    <section className="card cart" aria-label="Your cart" data-testid="cart">
+      <h2>Your cart ({summary.count})</h2>
+      <ul className="cart-lines" role="list">
+        {summary.lines.map(line => (
+          <li className="cart-line" key={line.id} data-testid={\`cart-line-\${line.id}\`}>
+            <span>
+              {line.typeLabel && <span className="bill-type">{line.typeLabel}</span>}
+              {line.label}
+            </span>
+            <span className="cart-line-right">
+              <strong>{line.amountLabel}</strong>
+              {onRemove && (
+                <button type="button" className="link" data-testid={\`cart-remove-\${line.id}\`} onClick={() => onRemove(line.id)} aria-label={\`Remove \${line.label} from cart\`}>
+                  Remove
+                </button>
+              )}
+            </span>
+          </li>
+        ))}
+      </ul>
+      <dl>
+        <div><dt>Subtotal</dt><dd data-testid="cart-subtotal">{summary.subtotalLabel}</dd></div>
+        <div><dt>Service fee</dt><dd data-testid="cart-fee">{summary.feeLabel ?? 'Calculated at checkout'}</dd></div>
+        <div className="total"><dt>Total</dt><dd data-testid="cart-total">{summary.totalLabel}</dd></div>
+      </dl>
+    </section>
+  );
+}
+
+export function BatchReview({ heading, lines, totalLabel, consentText }: BatchReviewProps) {
+  return (
+    <section className="card" aria-label={heading} data-testid="batch-review">
+      <h2>{heading}</h2>
+      <ul className="batch-lines" role="list">
+        {lines.map(line => (
+          <li className={\`batch-line batch-line-\${line.status}\`} key={line.id} data-testid={\`batch-line-\${line.id}\`}>
+            <span className="batch-line-desc">
+              {line.typeLabel && <span className="bill-type">{line.typeLabel}</span>}
+              <strong>{line.label}</strong>
+              {line.status !== 'pending' && (
+                <small className="batch-line-status" data-testid={\`batch-status-\${line.id}\`}>
+                  {line.status === 'paid' ? 'Paid' : 'Not charged'}{line.statusMessage ? \` — \${line.statusMessage}\` : ''}
+                </small>
+              )}
+            </span>
+            <span className="batch-line-amounts">
+              <small>{line.amountLabel} · {line.feeLabel}</small>
+              <strong>{line.totalLabel}</strong>
+            </span>
+          </li>
+        ))}
+      </ul>
+      <dl>
+        <div className="total"><dt>Total</dt><dd data-testid="batch-total">{totalLabel}</dd></div>
+      </dl>
+      <p className="consent">{consentText}</p>
+    </section>
+  );
+}
+
+// Amount-entry + installment-plan chooser (feature F4). Rendered only when the biller's policy
+// allows partial payments and/or installments; all labels, the controlled amount string, and the
+// validation message are handed down preformatted by the core, which owns every money decision.
+export function PaymentPlanChooser({
+  allowPartial,
+  allowInstallments,
+  mode,
+  onModeChange,
+  fullLabel,
+  amountValue,
+  onAmountChange,
+  amountHint,
+  amountError,
+  installmentOptions,
+  selectedInstallmentCount,
+  onInstallmentCountChange,
+}: PaymentPlanChooserProps) {
+  if (!allowPartial && !allowInstallments) return null;
+  return (
+    <fieldset className="plan-chooser" data-testid="plan-chooser">
+      <legend>How much would you like to pay?</legend>
+      <label className="check">
+        <input type="radio" name="plan-mode" data-testid="plan-mode-full" checked={mode === 'full'} onChange={() => onModeChange('full')} />
+        <span><strong>{fullLabel}</strong></span>
+      </label>
+      {allowPartial && (
+        <label className="check">
+          <input type="radio" name="plan-mode" data-testid="plan-mode-partial" checked={mode === 'partial'} onChange={() => onModeChange('partial')} />
+          <span><strong>Pay a different amount</strong><small>{amountHint}</small></span>
+        </label>
+      )}
+      {allowPartial && mode === 'partial' && (
+        <div className="plan-amount">
+          <label>
+            Amount
+            <input
+              type="text"
+              inputMode="decimal"
+              data-testid="partial-amount-input"
+              value={amountValue}
+              onChange={event => onAmountChange(event.target.value)}
+              aria-invalid={amountError ? true : undefined}
+              aria-describedby={amountError ? 'plan-amount-error' : undefined}
+            />
+          </label>
+          {amountError && (
+            <small id="plan-amount-error" className="bill-note-strong" data-testid="plan-amount-error" role="alert">{amountError}</small>
+          )}
+        </div>
+      )}
+      {allowInstallments && (
+        <label className="check">
+          <input type="radio" name="plan-mode" data-testid="plan-mode-installment" checked={mode === 'installment'} onChange={() => onModeChange('installment')} />
+          <span><strong>Split into installments</strong><small>Spread the balance across scheduled payments.</small></span>
+        </label>
+      )}
+      {allowInstallments && mode === 'installment' && (
+        <ul className="installment-options" role="list">
+          {installmentOptions.map(option => (
+            <li key={option.count}>
+              <label className="check">
+                <input type="radio" name="installment-count" data-testid={\`installment-option-\${option.count}\`} checked={selectedInstallmentCount === option.count} onChange={() => onInstallmentCountChange(option.count)} />
+                <span>{option.label}</span>
+              </label>
+            </li>
+          ))}
+        </ul>
+      )}
+    </fieldset>
+  );
+}
+
+export type { SelectableInvoice };
 `;
 }
 

@@ -3,6 +3,7 @@ import { join } from 'node:path';
 import { assembleBrief } from './brief';
 import { buildBundle } from './build';
 import { injectCspIntoBundle, runContainmentGate, summarizeReport, type GateReport } from './gate';
+import { runContractGate, summarizeContractReport, type ContractGateReport } from './contract-gate';
 import { createGenerator, type GeneratorMode } from './generators';
 import { publishBundle } from './publish';
 import { resolveUnderRoot, validateRevision, validateSlug } from './paths';
@@ -41,13 +42,17 @@ export interface PipelineResult {
   validated: boolean;
   gate: GateReport;
   csp: string;
+  contractGate?: ContractGateReport;
   published?: { uploaded: number; activeBlob: string | null; sitePrefix: string };
 }
 
 // generate -> persist -> containment gate (AST + core hash manifest) -> build (typecheck
-// gate) -> inject CSP -> validate (Playwright gate) -> publish. The containment gate is the
-// safety precondition: it hard-fails before any build/publish work if the generated skin
-// escapes the allowlist or the fixed core was tampered with.
+// gate) -> inject CSP -> validate (Playwright UX/a11y smoke) -> contract gate (runtime
+// boundary/payment-contract conformance) -> publish. The containment gate is the safety
+// precondition: it hard-fails before any build/publish work if the generated skin escapes the
+// allowlist or the fixed core was tampered with. The contract gate is the correctness
+// precondition for publish: it mounts the built bundle, drives it by accessibility roles, and
+// asserts the requests it emits obey the payment contract.
 export async function runPipeline(options: PipelineOptions): Promise<PipelineResult> {
   const log = options.log ?? (() => {});
   const slug = validateSlug(options.slug);
@@ -64,6 +69,7 @@ export async function runPipeline(options: PipelineOptions): Promise<PipelineRes
   await writeFile(join(artifactsDir, 'design-brief.json'), JSON.stringify(brief, null, 2));
   await writeFile(join(artifactsDir, 'theme.css'), skin.themeCss);
   await writeFile(join(artifactsDir, 'chrome.tsx'), skin.chromeTsx);
+  await writeFile(join(artifactsDir, 'flow.tsx'), skin.flowTsx);
   if (skin.notes) await writeFile(join(artifactsDir, 'notes.txt'), skin.notes);
 
   // Containment / provenance gate — runs before any build/publish work.
@@ -102,6 +108,20 @@ export async function runPipeline(options: PipelineOptions): Promise<PipelineRes
     validated = true;
   }
 
+  // Runtime boundary / payment-contract conformance gate (feature F6). Runs after build,
+  // before publish, alongside the F5 static containment gate. Asserts the REQUESTS the
+  // generated flow emits conform to the sanctioned payment contract.
+  let contractGate: ContractGateReport | undefined;
+  if (options.validate !== false) {
+    log('[gate] runtime payment-contract conformance');
+    contractGate = await runContractGate({ distDir, slug, definitionPath: options.definitionPath });
+    await writeFile(join(artifactsDir, 'contract-gate-report.json'), `${JSON.stringify(contractGate, null, 2)}\n`);
+    log(`[gate] ${summarizeContractReport(contractGate)}`);
+    if (!contractGate.passed) {
+      throw new Error(`Contract gate rejected the bundle for ${slug}:\n${summarizeContractReport(contractGate)}`);
+    }
+  }
+
   let published: PipelineResult['published'];
   if (options.publish) {
     log('[publish] uploading dist to Blob Storage');
@@ -125,6 +145,7 @@ export async function runPipeline(options: PipelineOptions): Promise<PipelineRes
     validated,
     gate,
     csp,
+    contractGate,
     published,
   };
 }

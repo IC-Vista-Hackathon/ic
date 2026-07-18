@@ -1,5 +1,6 @@
 import { DefaultAzureCredential } from '@azure/identity';
 import type { DesignBrief, GeneratedSkin } from '../types';
+import { flowTsx as defaultFlowTsx } from './deterministic';
 import type { SkinGenerator } from './index';
 
 // Real bespoke-authoring path: Claude Opus hosted on Azure AI Foundry, called through
@@ -56,7 +57,7 @@ export class FoundryOpusSkinGenerator implements SkinGenerator {
     const payload = (await response.json()) as { choices?: Array<{ message?: { content?: string } }> };
     const content = payload.choices?.[0]?.message?.content;
     if (!content) throw new Error('Foundry returned no content.');
-    return parseSkin(content);
+    return parseSkin(content, brief);
   }
 
   private resolveUrl(): string {
@@ -76,13 +77,20 @@ export class FoundryOpusSkinGenerator implements SkinGenerator {
   }
 }
 
-function parseSkin(content: string): GeneratedSkin {
+function parseSkin(content: string, brief: DesignBrief): GeneratedSkin {
   const json = stripFence(content);
   const parsed = JSON.parse(json) as Partial<GeneratedSkin>;
   if (!parsed.themeCss || !parsed.chromeTsx) {
     throw new Error('Opus response missing themeCss/chromeTsx.');
   }
-  return { themeCss: parsed.themeCss, chromeTsx: parsed.chromeTsx, notes: parsed.notes };
+  // flow.tsx is authorable but optional: if the model doesn't author the multi-invoice
+  // structure, fall back to the default presentational flow so the bundle still builds.
+  return {
+    themeCss: parsed.themeCss,
+    chromeTsx: parsed.chromeTsx,
+    flowTsx: parsed.flowTsx ?? defaultFlowTsx(brief),
+    notes: parsed.notes,
+  };
 }
 
 function stripFence(text: string): string {
@@ -91,19 +99,35 @@ function stripFence(text: string): string {
   return fence ? fence[1] : trimmed;
 }
 
-const EDITABLE_FILES = ['src/skin/theme.css', 'src/skin/chrome.tsx'];
+const EDITABLE_FILES = ['src/skin/theme.css', 'src/skin/chrome.tsx', 'src/skin/flow.tsx'];
 
 const CONTRACT_TS = `export interface HeaderProps { brand: { display_name: string; primary_color: string; secondary_color: string; font_family: string | null } }
 export interface IntroProps { eyebrow: string; heading: string; subheading: string }
 export interface FooterProps { brand: HeaderProps['brand']; content: { support_text: string; privacy_policy_url: string; terms_of_service_url: string } }
-// chrome.tsx must export: Header(HeaderProps), Intro(IntroProps), Footer(FooterProps)`;
+// chrome.tsx must export: Header(HeaderProps), Intro(IntroProps), Footer(FooterProps)
+// --- flow.tsx (feature F3): the authorable STRUCTURE of the multi-invoice checkout ---
+export interface SelectableInvoice { id: string; typeLabel?: string; description: string; dueDateLabel: string; amountLabel: string; statusColor?: string; statusLabel?: string; note?: string; noteEmphasis?: boolean; selected: boolean }
+export interface InvoiceSelectListProps { heading: string; invoices: SelectableInvoice[]; onToggle: (invoiceId: string) => void; onSelectAll: () => void; onClearAll: () => void; allSelected: boolean }
+export interface CartLine { id: string; label: string; typeLabel?: string; amountLabel: string }
+export interface CartSummary { lines: CartLine[]; count: number; subtotalLabel: string; feeLabel?: string; totalLabel: string }
+export interface CartProps { summary: CartSummary; onRemove?: (invoiceId: string) => void; emptyText: string }
+export type BatchLineStatus = 'pending' | 'paid' | 'failed';
+export interface BatchReviewLine { id: string; label: string; typeLabel?: string; amountLabel: string; feeLabel: string; totalLabel: string; status: BatchLineStatus; statusMessage?: string }
+export interface BatchReviewProps { heading: string; lines: BatchReviewLine[]; totalLabel: string; consentText: string }
+// --- flow.tsx (feature F4): the authorable amount-entry / installment-plan chooser ---
+export type PaymentPlanMode = 'full' | 'partial' | 'installment';
+export interface InstallmentOption { count: number; label: string }
+export interface PaymentPlanChooserProps { allowPartial: boolean; allowInstallments: boolean; mode: PaymentPlanMode; onModeChange: (mode: PaymentPlanMode) => void; fullLabel: string; amountValue: string; onAmountChange: (value: string) => void; amountHint: string; amountError?: string; installmentOptions: InstallmentOption[]; selectedInstallmentCount?: number; onInstallmentCountChange: (count: number) => void }
+// flow.tsx must export: InvoiceSelectList(InvoiceSelectListProps), Cart(CartProps), BatchReview(BatchReviewProps), PaymentPlanChooser(PaymentPlanChooserProps).
+// All money strings (amountLabel/feeLabel/totalLabel/subtotalLabel/fullLabel/amountHint/amountError and each InstallmentOption.label) are preformatted by the core; amountValue is a controlled string the core validates.`;
 
 const SYSTEM_PROMPT = `You are a senior React/CSS designer producing a bespoke skin for one biller's payment PWA.
-Return ONLY a JSON object: {"themeCss": string, "chromeTsx": string, "notes": string}.
+Return ONLY a JSON object: {"themeCss": string, "chromeTsx": string, "flowTsx": string, "notes": string}.
 
 Hard rules — the build and a scripted Playwright gate will reject violations:
-- Edit ONLY the two editable files. Never touch payment flow, service calls, or money logic.
+- Edit ONLY the editable files. Never touch payment flow, service calls, or money logic.
 - chrome.tsx is PRESENTATIONAL ONLY: no fetch, no network, no state with side effects, no payment logic, no new npm imports. Import types only from './contract'. Export exactly Header, Intro, Footer with the given signatures.
+- flow.tsx is PRESENTATIONAL ONLY and authors the multi-invoice selection list, cart, batch review, and the amount-entry / installment-plan chooser STRUCTURE: no fetch, no network, no payment logic, no fee/total/amount math, no parsing of monetary input. Import types only from './contract'. Export exactly InvoiceSelectList, Cart, BatchReview, PaymentPlanChooser with the given signatures. Render the preformatted money strings the core supplies; call the provided callbacks to toggle/select/remove and to change the plan mode / amount / installment count — never compute money, validate amounts, or settle invoices. Keep the data-testid hooks (invoice-select, select-all/clear-all, invoice-option-<id>, cart, cart-line-<id>, cart-subtotal, cart-fee, cart-total, batch-review, batch-line-<id>, batch-status-<id>, batch-total, plan-chooser, plan-mode-full, plan-mode-partial, plan-mode-installment, partial-amount-input, plan-amount-error, installment-option-<count>). PaymentPlanChooser returns null when both allowPartial and allowInstallments are false, and only renders the partial input when mode==='partial' and the installment options when mode==='installment'.
 - Preserve every CSS class name the core renders (app, mark, account-nav, intro, card, card-copy, bill, choices, method-chips, check, notice, consent, actions, success, success-icon, pill, history-row, preference-summary, alert, center). Restyle them freely; do not delete them or the data-testid controls will lose styling.
 - No <script>, no external URLs in CSS except fonts you declare, no @import of untrusted origins, no inline event handlers.
 - Keep strong color contrast (WCAG AA) and respect prefers-reduced-motion.

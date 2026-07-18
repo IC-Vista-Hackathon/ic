@@ -3,6 +3,10 @@
     <IsPackable>false</IsPackable>
     <IsTestProject>true</IsTestProject>
   </PropertyGroup>
+  <!-- The router serves from ASP.NET Core HttpContext; the smoke test drives it in-process. -->
+  <ItemGroup>
+    <FrameworkReference Include="Microsoft.AspNetCore.App" />
+  </ItemGroup>
   <ItemGroup>
     <PackageReference Include="coverlet.collector" PrivateAssets="all" />
     <PackageReference Include="Microsoft.NET.Test.Sdk" />
@@ -11,5 +15,6 @@
   </ItemGroup>
   <ItemGroup>
     <ProjectReference Include="..\..\services\Pronto.BillerExperience.Worker\Pronto.BillerExperience.Worker.csproj" />
+    <ProjectReference Include="..\..\services\Pronto.PayerExperience.Router\Pronto.PayerExperience.Router.csproj" />
   </ItemGroup>
 </Project>
