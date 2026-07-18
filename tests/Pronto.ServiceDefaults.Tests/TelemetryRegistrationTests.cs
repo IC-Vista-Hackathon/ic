@@ -33,10 +33,10 @@ public class TelemetryRegistrationTests
     {
         const string meterName = "Pronto.ServiceDefaults.Tests.Registered";
         var exporter = new CollectingExporter();
+        using var reader = new BaseExportingMetricReader(exporter);
         var builder = WebApplication.CreateBuilder(new WebApplicationOptions { EnvironmentName = "Development" });
         builder.AddServiceDefaults("Test.Service", meters: [meterName]);
-        builder.Services.ConfigureOpenTelemetryMeterProvider(metrics =>
-            metrics.AddReader(new BaseExportingMetricReader(exporter)));
+        builder.Services.ConfigureOpenTelemetryMeterProvider(metrics => metrics.AddReader(reader));
 
         using var app = builder.Build();
         var meterProvider = app.Services.GetRequiredService<MeterProvider>();
@@ -54,10 +54,10 @@ public class TelemetryRegistrationTests
     public void UnregisteredMeterIsNotCollected()
     {
         var exporter = new CollectingExporter();
+        using var reader = new BaseExportingMetricReader(exporter);
         var builder = WebApplication.CreateBuilder(new WebApplicationOptions { EnvironmentName = "Development" });
         builder.AddServiceDefaults("Test.Service", meters: ["Pronto.ServiceDefaults.Tests.Only"]);
-        builder.Services.ConfigureOpenTelemetryMeterProvider(metrics =>
-            metrics.AddReader(new BaseExportingMetricReader(exporter)));
+        builder.Services.ConfigureOpenTelemetryMeterProvider(metrics => metrics.AddReader(reader));
 
         using var app = builder.Build();
         var meterProvider = app.Services.GetRequiredService<MeterProvider>();
