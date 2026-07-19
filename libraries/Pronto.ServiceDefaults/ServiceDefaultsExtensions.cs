@@ -9,17 +9,25 @@ using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Diagnostics.HealthChecks;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Diagnostics.HealthChecks;
 using Microsoft.Extensions.Logging;
+using OpenTelemetry;
 using OpenTelemetry.Instrumentation.AspNetCore;
+using OpenTelemetry.Metrics;
 using OpenTelemetry.Resources;
+using OpenTelemetry.Trace;
 
 namespace Pronto.ServiceDefaults;
 
 public static class ServiceDefaultsExtensions
 {
-    public static WebApplicationBuilder AddServiceDefaults(this WebApplicationBuilder builder, string serviceName)
+    public static WebApplicationBuilder AddServiceDefaults(
+        this WebApplicationBuilder builder,
+        string serviceName,
+        IReadOnlyList<string>? activitySources = null,
+        IReadOnlyList<string>? meters = null)
     {
         builder.Logging.ClearProviders();
         builder.Logging.AddJsonConsole(options =>
@@ -33,12 +41,56 @@ public static class ServiceDefaultsExtensions
         builder.Services.FilterHealthProbeTraces();
         var telemetry = builder.Services.AddOpenTelemetry()
             .ConfigureResource(resource => resource.AddService(serviceName));
-        if (!string.IsNullOrWhiteSpace(builder.Configuration["APPLICATIONINSIGHTS_CONNECTION_STRING"]))
+        if (activitySources is { Count: > 0 })
         {
-            var samplingRatio = ResolveSamplingRatio(builder.Configuration["APPLICATIONINSIGHTS_SAMPLING_RATIO"]);
-            telemetry.UseAzureMonitor(options => options.SamplingRatio = samplingRatio);
+            telemetry.WithTracing(tracing =>
+            {
+                foreach (var source in activitySources)
+                {
+                    tracing.AddSource(source);
+                }
+            });
         }
+        if (meters is { Count: > 0 })
+        {
+            telemetry.WithMetrics(metrics =>
+            {
+                foreach (var meter in meters)
+                {
+                    metrics.AddMeter(meter);
+                }
+            });
+        }
+        telemetry.AddAzureMonitorExporter(builder.Configuration);
         return builder;
+    }
+
+    /// <summary>
+    /// Adds the Azure Monitor exporter with the fixed-rate trace sampling ratio applied, but only
+    /// when <c>APPLICATIONINSIGHTS_CONNECTION_STRING</c> is set. This is the single place the whole
+    /// solution wires Azure Monitor + sampling, so hosts that register OpenTelemetry directly
+    /// (e.g. the orchestration API and worker, which add their own ActivitySources/Meters) honour
+    /// <c>APPLICATIONINSIGHTS_SAMPLING_RATIO</c> identically to hosts that use AddServiceDefaults.
+    /// </summary>
+    public static OpenTelemetryBuilder AddAzureMonitorExporter(
+        this OpenTelemetryBuilder telemetry,
+        IConfiguration configuration)
+    {
+        if (!string.IsNullOrWhiteSpace(configuration["APPLICATIONINSIGHTS_CONNECTION_STRING"]))
+        {
+            var samplingRatio = ResolveSamplingRatio(configuration["APPLICATIONINSIGHTS_SAMPLING_RATIO"]);
+            telemetry.UseAzureMonitor(options =>
+            {
+                options.SamplingRatio = samplingRatio;
+                // Azure.Monitor.OpenTelemetry.AspNetCore 1.5.0 defaults to a rate-limited sampler
+                // (5 traces/sec) via TracesPerSecond, which *takes precedence* over SamplingRatio.
+                // Null it out so the configured fixed-percentage ratio actually applies; when the
+                // env var is unset the ratio is 1.0, i.e. keep 100% (no rate limiting) — the
+                // documented "keep everything" default.
+                options.TracesPerSecond = null;
+            });
+        }
+        return telemetry;
     }
 
     /// <summary>
