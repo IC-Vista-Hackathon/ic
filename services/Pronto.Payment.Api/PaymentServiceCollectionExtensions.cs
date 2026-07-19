@@ -1,3 +1,4 @@
+using Pronto.Payment.Api.Assurance;
 using Pronto.Payment.Api.Clients;
 using Pronto.Payment.Api.Storage;
 using Pronto.Payment.Api.Workflow;
@@ -48,6 +49,8 @@ public static class PaymentServiceCollectionExtensions
         services.TryAddScoped<PaymentWorkflow>();
         services.TryAddScoped<ScheduledPaymentProcessor>();
 
+        AddAssuranceServices(services, configuration);
+
         var processing = configuration.GetSection(PaymentProcessingOptions.SectionName)
             .Get<PaymentProcessingOptions>() ?? new PaymentProcessingOptions();
         if (processing.SchedulerEnabled)
@@ -56,6 +59,27 @@ public static class PaymentServiceCollectionExtensions
         }
 
         return services;
+    }
+
+    /// <summary>
+    /// Registers the post-publish assurance layer: the ledger reconciliation service, the synthetic
+    /// canary runner + target source, and (when a background pass is enabled) the continuous worker.
+    /// </summary>
+    private static void AddAssuranceServices(IServiceCollection services, IConfiguration configuration)
+    {
+        services.AddOptions<AssuranceOptions>().Bind(configuration.GetSection(AssuranceOptions.SectionName));
+        services.AddOptions<CanaryTargetsOptions>().Bind(configuration.GetSection(CanaryTargetsOptions.SectionName));
+
+        services.TryAddScoped<PaymentReconciliationService>();
+        services.TryAddScoped<CanaryPaymentRunner>();
+        services.TryAddSingleton<ICanaryTargetSource, ConfigurationCanaryTargetSource>();
+
+        var assurance = configuration.GetSection(AssuranceOptions.SectionName)
+            .Get<AssuranceOptions>() ?? new AssuranceOptions();
+        if (assurance.ReconciliationEnabled || assurance.CanaryEnabled)
+        {
+            services.AddHostedService<AssuranceWorker>();
+        }
     }
 
     /// <summary>
