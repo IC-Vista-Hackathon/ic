@@ -312,10 +312,7 @@ var openTelemetry = builder.Services.AddOpenTelemetry()
     .WithMetrics(metrics => metrics
         .AddMeter(BillerExperienceTelemetry.MeterName)
         .AddMeter(OrchestrationTelemetry.MeterName));
-if (!string.IsNullOrWhiteSpace(builder.Configuration["APPLICATIONINSIGHTS_CONNECTION_STRING"]))
-{
-    openTelemetry.UseAzureMonitor();
-}
+openTelemetry.AddAzureMonitorExporter(builder.Configuration);
 
 var app = builder.Build();
 
