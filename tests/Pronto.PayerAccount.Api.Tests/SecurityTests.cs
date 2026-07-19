@@ -56,6 +56,55 @@ public sealed class SecurityTests : IClassFixture<TestingAppFactory>
     }
 
     [Fact]
+    public async Task GeneralRegistrationRejectsCrossBillerRole()
+    {
+        // Seeding must not widen the payer-facing registration policy: the broad cross-biller role
+        // is no longer accepted on POST /payers (only the Policy Agent is).
+        var client = _factory.CreateClient();
+        client.DefaultRequestHeaders.Add(TestAuthenticationHandler.RolesHeader, ServiceClaims.CrossBillerRole);
+
+        var response = await client.PostAsJsonAsync(
+            "payers",
+            new RegisterPayerRequest(
+                Guid.NewGuid().ToString(), "Demo Payer", $"{Guid.NewGuid()}@pronto-demo.example", null, []),
+            Wire);
+
+        Assert.Equal(HttpStatusCode.Forbidden, response.StatusCode);
+    }
+
+    [Fact]
+    public async Task SeedEndpointAllowedForDedicatedPayerSeedRole()
+    {
+        // The onboarding seeder holds the narrow, dedicated payer-seed role and seeds via the
+        // dedicated /payers/seed endpoint for any biller it is provisioning.
+        var client = _factory.CreateClient();
+        client.DefaultRequestHeaders.Add(TestAuthenticationHandler.RolesHeader, ServiceClaims.PayerSeedRole);
+
+        var response = await client.PostAsJsonAsync(
+            "payers/seed",
+            new RegisterPayerRequest(
+                Guid.NewGuid().ToString(), "Demo Payer", $"{Guid.NewGuid()}@pronto-demo.example", null, []),
+            Wire);
+
+        Assert.Equal(HttpStatusCode.Created, response.StatusCode);
+    }
+
+    [Fact]
+    public async Task SeedEndpointRejectsUnrelatedRole()
+    {
+        var client = _factory.CreateClient();
+        client.DefaultRequestHeaders.Add(TestAuthenticationHandler.RolesHeader, ServiceClaims.ExecutionAgentRole);
+
+        var response = await client.PostAsJsonAsync(
+            "payers/seed",
+            new RegisterPayerRequest(
+                Guid.NewGuid().ToString(), "Demo Payer", $"{Guid.NewGuid()}@pronto-demo.example", null, []),
+            Wire);
+
+        Assert.Equal(HttpStatusCode.Forbidden, response.StatusCode);
+    }
+
+    [Fact]
     public async Task RegisterAllowedForMatchingBillerClaim()
     {
         var client = _factory.CreateClient();

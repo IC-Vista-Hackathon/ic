@@ -30,7 +30,8 @@ public sealed partial class BillerOnboardingService(
     IInvoiceSeeder? invoiceSeeder = null,
     AgentContextService? agentContextService = null,
     IComplianceReviewService? complianceReviewService = null,
-    IBillingDiscovery? billingDiscovery = null)
+    IBillingDiscovery? billingDiscovery = null,
+    IPayerSeeder? payerSeeder = null)
 {
     private const string RunId = "onboarding";
     private readonly IComplianceReviewService _compliance = complianceReviewService ?? CreateDefaultComplianceService();
@@ -83,8 +84,11 @@ public sealed partial class BillerOnboardingService(
                     $"Create, review, approve, and publish a safe branded payment experience for {biller.Name}.",
                     cancellationToken);
             }
-            await (invoiceSeeder ?? new NullInvoiceSeeder()).SeedAsync(
-                new SeedBillerContext(id, biller.Name, biller.BillType, biller.Website), cancellationToken);
+            // Provision a preview tenant's data: seed invoices + the demo payer into the real
+            // services so the payer site resolves service data, not client-side samples. At creation
+            // the profile is still the assumed one (derived from bill type); publish re-seeds with
+            // whatever discovery finalized. Idempotent, so both calls converge without duplicates.
+            await SeedExperienceDataAsync(biller, run.BillingProfile, cancellationToken);
             LogBillerCreated(logger, id, savedRun.Id, draftGenerator.Provider);
             return (Map(biller), Map(savedRun), Map(savedExperience));
         }
@@ -533,12 +537,14 @@ public sealed partial class BillerOnboardingService(
         }
 
         DeploymentRecord deployment;
+        var initiatingPublication = false;
         if (existing is not null)
         {
             LogDuplicatePublication(logger, billerId, request.Revision, deploymentId);
             deployment = existing;
             if (existing.Status == "failed")
             {
+                initiatingPublication = true;
                 try
                 {
                     deployment = await repository.SaveDeploymentAsync(
@@ -581,6 +587,7 @@ public sealed partial class BillerOnboardingService(
                 new DeploymentRecord(deploymentId, billerId, experience.Version, "requested", now,
                     Traceparent: FormatTraceparent(Activity.Current)),
                 cancellationToken);
+            initiatingPublication = true;
             LogPublicationRequested(logger, billerId, experience.Id, deployment.Id);
         }
 
@@ -608,7 +615,61 @@ public sealed partial class BillerOnboardingService(
             RecordTransition(run.State, OnboardingSessionState.Publishing);
         }
 
+        // Ensure the published biller's demo data exists in the real services, keyed to the finalized
+        // billing profile discovery captured. Idempotent, so re-publishing doesn't duplicate. This is
+        // best-effort: the biller was already seeded at creation, so a transient seed hiccup here must
+        // not fail an otherwise-valid publication.
+        if (initiatingPublication)
+        {
+            try
+            {
+                await SeedExperienceDataAsync(biller, run.BillingProfile, cancellationToken);
+            }
+            catch (Exception exception) when (exception is not OperationCanceledException)
+            {
+                LogPublishSeedFailed(logger, billerId, exception);
+            }
+        }
+
         return Map(deployment);
+    }
+
+    /// <summary>
+    /// Seed a biller's demo data into the real Invoice and PayerAccount services: invoices under the
+    /// shared preview account and a demo payer linked to it, so the live payer site's account lookup
+    /// resolves matching SERVICE data. The set matches what onboarding captured — categories (with
+    /// cadence) become one or more invoices — falling back to assumed categories (from bill type)
+    /// before discovery runs. Both seeders are deterministic and idempotent, so seeding at creation
+    /// and again at publish converges without duplicating.
+    /// </summary>
+    private async ValueTask SeedExperienceDataAsync(
+        BillerRecord biller,
+        BillingProfile? billingProfile,
+        CancellationToken cancellationToken)
+    {
+        var profile = billingProfile ?? BillingProfile.Empty;
+        // Before discovery captures categories, fall back to the assumed profile derived from the
+        // bill type so even a freshly created biller seeds category-labelled invoices.
+        if (profile.Categories.Count == 0 && billingDiscovery is not null)
+        {
+            profile = billingDiscovery.ApplyAssumptions(biller.Id, profile, biller.BillType).State.Profile;
+        }
+
+        var categories = profile.Categories
+            .Select(category => new SeedBillingCategory(
+                category.Id, category.DisplayName, category.Cadence?.Kind.ToString()))
+            .ToArray();
+
+        var context = new SeedBillerContext(biller.Id, biller.Name, biller.BillType, biller.Website)
+        {
+            Categories = categories,
+        };
+
+        await (invoiceSeeder ?? new NullInvoiceSeeder()).SeedAsync(context, cancellationToken);
+        // The payer links to the same preview account the invoices were seeded under; the
+        // PayerAccount service verifies ownership against those invoices before persisting.
+        await (payerSeeder ?? new NullPayerSeeder()).SeedAsync(
+            context, [SeedDefaults.PreviewAccountNumber], cancellationToken);
     }
 
     public async ValueTask<OnboardingSessionResponse> GetSessionAsync(string billerId, CancellationToken cancellationToken) =>
@@ -941,6 +1002,9 @@ public sealed partial class BillerOnboardingService(
 
     [LoggerMessage(1902, LogLevel.Error, "Invoice seeding failed for biller {BillerId}; continuing with biller creation")]
     private static partial void LogInvoiceSeedingFailed(ILogger logger, string billerId, Exception exception);
+
+    [LoggerMessage(1907, LogLevel.Warning, "Publish-time seeding failed for biller {BillerId}; the biller was already seeded at creation, so publication proceeds")]
+    private static partial void LogPublishSeedFailed(ILogger logger, string billerId, Exception exception);
 
     [LoggerMessage(1903, LogLevel.Error, "Approval blocked for biller {BillerId}, revision {Revision}; finding {FindingCode}: {FindingMessage}")]
     private static partial void LogBlockingFinding(

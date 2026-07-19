@@ -1,47 +1,96 @@
 name: Deploy nonprod
 
-# Same-repository PRs can be deployed after a maintainer applies the `safe-to-deploy`
-# label. The two safeguards are: the PR head branch must live in this repo
-# (`head.repo == base repo`), which requires push access and rules out forks/anonymous
-# contributors, and a maintainer must apply the label. The author_association allowlist
-# includes CONTRIBUTOR so any established repo contributor (including automation such as
-# devin-ai-integration[bot]) can be deployed once labelled. The workflow definition comes
-# from the base branch; only then does it build and deploy the reviewed PR head.
+# The pre-merge confidence gate: deploy the change to the shared ic-nonprod environment and run
+# the deployed functional + browser suites against it. This runs as a GitHub **merge queue**
+# check (event `merge_group`) so it executes on the exact commit that is about to land — main
+# with the queued PR merged in — one entry at a time, and blocks the merge unless it is green.
+#
+# Why the merge queue: it only ever contains PRs a maintainer has already approved and enqueued,
+# so the job runs in the trusted base-repo context with secrets without exposing them to
+# unreviewed / fork code. That removes the old labelled deploy-on-PR footgun (secrets reachable
+# from unreviewed head code) while making the functional gate mandatory rather than opt-in.
+#
+# `workflow_dispatch` is kept for on-demand nonprod deploys (demos / manual verification) of any
+# ref chosen in the Actions UI.
+#
+# NOTE (repo settings, one-time): make this a required check by enabling a merge queue on `main`
+# (ruleset: "Require merge queue", max entries to build = 1 so the shared namespace is never
+# deployed twice at once) and marking "Deploy & functional gate (ic-nonprod)" — plus the CI
+# build/test/gate checks, which also run on merge_group — as required status checks.
+#
+# The `pull_request` trigger below does NOT deploy anything: the real deploy/build jobs are
+# guarded with `if: github.event_name != 'pull_request'`, so on a PR they are skipped and only
+# the lightweight `gate` job runs and passes. This is required so the "Deploy & functional gate
+# (ic-nonprod)" status context is reported (green, as a no-op) on the PR — otherwise the required
+# check would never appear on the PR and the branch ruleset would keep it permanently BLOCKED,
+# unable to enter the queue. The actual nonprod deploy + functional gate still runs only in the
+# merge queue (`merge_group`) on the exact commit that will land, with secrets, in the trusted
+# base-repo context. The `pull_request` event (deliberately NOT the labelled base-context variant
+# that exposes secrets to head code) never grants head code access to secrets, and here the PR path
+# executes no head code at all.
 
 on:
-  pull_request_target:
+  pull_request:
     branches: [main]
-    types: [labeled]
+  merge_group:
+  workflow_dispatch:
 
 permissions:
   contents: read
 
 concurrency:
-  # The namespace is shared across PRs, so serialize deployments globally.
-  group: deploy-nonprod
-  cancel-in-progress: true
+  # Real deploys (merge_group / workflow_dispatch) share ONE global group so the single shared
+  # ic-nonprod namespace is never deployed twice at once. cancel-in-progress is false so an
+  # in-flight merge-queue check is allowed to finish (cancelling it would fail the queue entry);
+  # the merge queue's own max-concurrency=1 keeps entries from piling up.
+  #
+  # pull_request runs are no-ops (only the `gate` job) but must NOT join that global group: if they
+  # did, a pending PR gate run would be cancelled whenever it collided with an in-progress deploy
+  # plus another PR update, cancelling the required check and blocking the PR from the queue. Give
+  # them a per-ref group instead so they neither touch the deploy path nor cancel other PRs.
+  group: ${{ github.event_name == 'pull_request' && format('deploy-nonprod-pr-{0}', github.ref) || 'deploy-nonprod' }}
+  cancel-in-progress: false
 
 jobs:
+  resolve:
+    name: Resolve target commit
+    if: github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    outputs:
+      sha: ${{ steps.pick.outputs.sha }}
+      base: ${{ steps.pick.outputs.base }}
+    steps:
+      - id: pick
+        run: |
+          if [ "${{ github.event_name }}" = "merge_group" ]; then
+            # The temporary merge commit (main + queued PR) and the branch it will land on.
+            echo "sha=${{ github.event.merge_group.head_sha }}" >> "$GITHUB_OUTPUT"
+            echo "base=${{ github.event.merge_group.base_sha }}" >> "$GITHUB_OUTPUT"
+          else
+            # workflow_dispatch: deploy whatever ref was selected; full rebuild (no base diff).
+            echo "sha=${{ github.sha }}" >> "$GITHUB_OUTPUT"
+            echo "base=" >> "$GITHUB_OUTPUT"
+          fi
+
   build-images:
-    if: >-
-      github.event.pull_request.head.repo.full_name == github.repository &&
-      contains(fromJSON('["OWNER", "MEMBER", "COLLABORATOR", "CONTRIBUTOR"]'), github.event.pull_request.author_association) &&
-      github.event.label.name == 'safe-to-deploy'
+    needs: resolve
+    if: github.event_name != 'pull_request'
     uses: ./.github/workflows/build-images.yml
     with:
-      image_tag: ${{ github.event.pull_request.head.sha }}
-      source_ref: ${{ github.event.pull_request.head.sha }}
-      base_ref: ${{ github.event.pull_request.base.sha }}
+      image_tag: ${{ needs.resolve.outputs.sha }}
+      source_ref: ${{ needs.resolve.outputs.sha }}
+      base_ref: ${{ needs.resolve.outputs.base }}
     secrets:
       AZURE_CREDENTIALS: ${{ secrets.AZURE_CREDENTIALS }}
 
   deploy:
-    name: Deploy & smoke-test (ic-nonprod)
-    needs: build-images
+    name: Deploy to ic-nonprod
+    if: github.event_name != 'pull_request'
+    needs: [resolve, build-images]
     runs-on: ubuntu-latest
     environment: nonprod
     env:
-      IMAGE_TAG: ${{ github.event.pull_request.head.sha }}
+      IMAGE_TAG: ${{ needs.resolve.outputs.sha }}
       REGISTRY: acrichackjk4zmntatjem4.azurecr.io
       AKS_RG: ${{ vars.AKS_RG || 'rg-ic-hack' }}
       AKS_NAME: ${{ vars.AKS_NAME || 'aks-ic-hack' }}
@@ -49,7 +98,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: ${{ github.event.pull_request.head.sha }}
+          ref: ${{ needs.resolve.outputs.sha }}
 
       - name: Azure login
         uses: azure/login@v2
@@ -78,7 +127,7 @@ jobs:
             --overwrite-existing
           kubelogin convert-kubeconfig -l azurecli
 
-      - name: Pin image tags to the PR head SHA
+      - name: Pin image tags to the target commit
         run: |
           sed -i "s/newTag: latest/newTag: ${IMAGE_TAG}/" "${OVERLAY}/kustomization.yaml"
           grep 'newTag' "${OVERLAY}/kustomization.yaml"
@@ -187,9 +236,9 @@ jobs:
 
       # Deployed functional tests: black-box HTTP acceptance tests that exercise the just-deployed
       # nonprod stack through the gateway (see docs/pronto-functional-testing-policy.md). The
-      # blocking gate (functional & !known-gap) must pass before nonprod is promoted to prod; the
-      # known-gap suite documents behaviors we intend to fix and runs non-blocking (|| true) until
-      # each fix removes its `known-gap` trait, moving it into the blocking gate.
+      # blocking gate (functional & !known-gap) must pass before the merge queue lands the commit;
+      # the known-gap suite documents behaviors we intend to fix and runs non-blocking (|| true)
+      # until each fix removes its `known-gap` trait, moving it into the blocking gate.
       - name: Deployed functional tests (nonprod)
         run: |
           GATEWAY_SVC=$(kubectl get svc -n ic-nonprod \
@@ -216,3 +265,29 @@ jobs:
             --filter 'Category=known-gap' \
             || echo "::warning::Known-gap functional tests failed as expected; see docs/pronto-functional-requirements.md"
           echo "::endgroup::"
+
+  # The required status check the branch ruleset gates on. It always reports on both `pull_request`
+  # (no-op pass, so the PR can enter the merge queue) and `merge_group` (fails unless the real
+  # `deploy` job above succeeded on the queued commit). `if: always()` runs it even though `deploy`
+  # is skipped on PRs. Keeping the gate name stable here means the actual deploy steps can move
+  # without touching the required-check configuration.
+  gate:
+    name: Deploy & functional gate (ic-nonprod)
+    needs: [deploy]
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - name: Confirm nonprod gate
+        run: |
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            echo "PR event: the real ic-nonprod deploy + functional gate runs in the merge queue"
+            echo "(merge_group) on the exact commit that will land. Passing the PR-level check."
+            exit 0
+          fi
+          result="${{ needs.deploy.result }}"
+          echo "nonprod deploy job result: ${result}"
+          if [ "${result}" != "success" ]; then
+            echo "::error::nonprod deploy + functional gate did not succeed (${result})"
+            exit 1
+          fi
+          echo "nonprod deploy + functional gate passed on the queued commit."

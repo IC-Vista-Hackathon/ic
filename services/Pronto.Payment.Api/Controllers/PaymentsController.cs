@@ -54,7 +54,7 @@ public sealed partial class PaymentsController : ControllerBase
 
     [HttpPost]
     [Authorize(Policy = ServiceAuthorization.PaymentsWrite)]
-    public async Task<ActionResult<PaymentResponse>> Create(
+    public async Task<IActionResult> Create(
         CreatePaymentRequest request,
         [FromHeader(Name = "Idempotency-Key")] string? idempotencyHeader,
         CancellationToken cancellationToken)
@@ -73,39 +73,38 @@ public sealed partial class PaymentsController : ControllerBase
         await payerAccounts.ValidateAsync(request.BillerId, request.PayerAccountId, cancellationToken)
             .ConfigureAwait(false);
 
-        // The header wins over the body field; either provides durable client idempotency.
-        var idempotencyKey = Normalize(idempotencyHeader) ?? Normalize(request.IdempotencyKey);
-        if (idempotencyKey is null)
-        {
-            throw ServiceException.BadRequest(
-                "idempotency_key_required",
-                "Idempotency-Key header or idempotency_key body field is required.");
-        }
+        var idempotencyKey = RequireIdempotencyKey(idempotencyHeader, request.IdempotencyKey);
 
-        if (idempotencyKey.Length > MaxIdempotencyKeyLength)
+        // An installment plan is a structurally different journey (a schedule of scheduled partials),
+        // so it has its own enrollment path; a one-time payment (full or partial) stays here.
+        if (request.InstallmentCount is not null)
         {
-            throw ServiceException.BadRequest(
-                "idempotency_key_too_long",
-                $"Idempotency keys must be at most {MaxIdempotencyKeyLength} characters.");
+            return await EnrollInstallmentPlanAsync(request, config, idempotencyKey, cancellationToken)
+                .ConfigureAwait(false);
         }
 
         var paymentId = PaymentRecord.DeriveId(request.BillerId, idempotencyKey);
         var fingerprint = PaymentRecord.Fingerprint(
-            request.InvoiceId, request.Method, request.PayerAccountId, request.ScheduledFor);
+            request.InvoiceId, request.Method, request.PayerAccountId, request.ScheduledFor,
+            request.AmountCents ?? 0);
 
         // Fast path: a retried request with a known key replays the original outcome (finishing a
         // still-pending record if the first attempt crashed mid-workflow) without re-reading state.
-        if (idempotencyKey is not null)
+        // It runs BEFORE the settle-eligibility gate below so a lost confirmation is always
+        // recoverable even if the biller's eligibility changed after the outcome was decided.
+        var existing = await store.FindAsync(request.BillerId, paymentId, cancellationToken)
+            .ConfigureAwait(false);
+        if (existing is not null)
         {
-            var existing = await store.FindAsync(request.BillerId, paymentId, cancellationToken)
-                .ConfigureAwait(false);
-            if (existing is not null)
-            {
-                EnsureSameRequest(existing, fingerprint);
-                var replayed = await workflow.DriveInitialAsync(existing, cancellationToken).ConfigureAwait(false);
-                return BuildResult(replayed, created: false);
-            }
+            EnsureSameRequest(existing, fingerprint);
+            var replayed = await workflow.DriveInitialAsync(existing, cancellationToken).ConfigureAwait(false);
+            return BuildResult(replayed, created: false);
         }
+
+        // A new payment may only settle for a biller whose configuration has cleared the publish +
+        // compliance gate. This state is server-owned (never client/agent input), so it cannot be
+        // bypassed by the request body.
+        RequireSettleEligible(config);
 
         var invoice = await invoices.GetAsync(request.BillerId, request.InvoiceId, cancellationToken)
                 .ConfigureAwait(false)
@@ -124,7 +123,17 @@ public sealed partial class PaymentsController : ControllerBase
                 "invoice_scheduled", $"invoice {request.InvoiceId} already has an active scheduled payment");
         }
 
-        var (feeCents, totalCents) = FeeCalculator.Calculate(config, request.Method, invoice.AmountCents);
+        // The server is authoritative on the balance: it sums the biller's own committed payments
+        // (never a client field) and derives the charge from the invoice it looked up.
+        var outstanding = invoice.AmountCents
+            - await CommittedCentsAsync(request.BillerId, request.InvoiceId, cancellationToken).ConfigureAwait(false);
+        if (outstanding <= 0)
+        {
+            throw ServiceException.Conflict("no_balance_due", $"invoice {request.InvoiceId} has no balance due");
+        }
+
+        var amountToCharge = ResolveChargeAmount(request, config, outstanding);
+        var (feeCents, totalCents) = FeeCalculator.Calculate(config, request.Method, amountToCharge);
         var now = clock.GetUtcNow();
 
         // Payment-first ordering: persist a durable pending record BEFORE the invoice transition,
@@ -136,7 +145,7 @@ public sealed partial class PaymentsController : ControllerBase
             InvoiceId = request.InvoiceId,
             PayerAccountId = request.PayerAccountId,
             Method = request.Method,
-            AmountCents = invoice.AmountCents,
+            AmountCents = amountToCharge,
             FeeCents = feeCents,
             TotalCents = totalCents,
             Confirmation = MintConfirmation(),
@@ -163,7 +172,275 @@ public sealed partial class PaymentsController : ControllerBase
         return BuildResult(finalized, created: begin.Created);
     }
 
-    private ActionResult<PaymentResponse> BuildResult(PaymentRecord record, bool created)
+    /// <summary>
+    /// Resolve the amount to charge for a one-time payment. Omitting <c>amount_cents</c> pays the
+    /// full outstanding balance (the default path). A requested amount is a partial payment and is
+    /// validated against the biller's policy and the server-computed balance: partials must be
+    /// enabled, above the minimum, and no greater than the balance — never trust the client.
+    /// </summary>
+    private static int ResolveChargeAmount(CreatePaymentRequest request, BillerPaymentConfig config, int outstanding)
+    {
+        if (request.AmountCents is not { } requested)
+        {
+            return outstanding;
+        }
+
+        if (requested <= 0)
+        {
+            throw ServiceException.BadRequest("invalid_amount", "amount_cents must be a positive number of cents.");
+        }
+
+        if (requested > outstanding)
+        {
+            throw ServiceException.BadRequest(
+                "amount_exceeds_balance",
+                $"amount_cents {requested} exceeds the outstanding balance of {outstanding}.");
+        }
+
+        // Paying the exact remaining balance is always allowed; the partial-payment policy only
+        // gates leaving a balance behind.
+        if (requested < outstanding)
+        {
+            if (!config.PartialPaymentsAllowed)
+            {
+                throw ServiceException.BadRequest(
+                    "partial_payments_not_allowed", "this biller does not accept partial payments.");
+            }
+
+            if (requested <= config.MinPartialPaymentCents)
+            {
+                throw ServiceException.BadRequest(
+                    "amount_below_minimum",
+                    $"a partial payment must be more than the minimum of {config.MinPartialPaymentCents} cents.");
+            }
+
+            if (request.ScheduledFor is not null)
+            {
+                throw ServiceException.BadRequest(
+                    "partial_payment_not_schedulable", "a partial payment cannot be scheduled for a future date.");
+            }
+        }
+
+        return requested;
+    }
+
+    /// <summary>
+    /// Enroll an installment plan: validate the plan against the biller's policy, split the
+    /// server-computed balance into a schedule of scheduled partial payments (summing exactly to
+    /// the balance), and persist them idempotently. The invoice is not reserved at enrollment; each
+    /// installment settles on its date and only the one that clears the balance marks it paid.
+    /// </summary>
+    private async Task<IActionResult> EnrollInstallmentPlanAsync(
+        CreatePaymentRequest request, BillerPaymentConfig config, string idempotencyKey, CancellationToken cancellationToken)
+    {
+        var count = request.InstallmentCount!.Value;
+
+        if (!config.InstallmentsAllowed)
+        {
+            throw ServiceException.BadRequest(
+                "installments_not_allowed", "this biller does not offer installment plans.");
+        }
+
+        if (count < 2)
+        {
+            throw ServiceException.BadRequest(
+                "invalid_installment_count", "an installment plan needs at least 2 installments.");
+        }
+
+        if (config.MaxInstallments > 0 && count > config.MaxInstallments)
+        {
+            throw ServiceException.BadRequest(
+                "installment_count_exceeds_max",
+                $"this biller allows at most {config.MaxInstallments} installments.");
+        }
+
+        if (request.AmountCents is not null)
+        {
+            throw ServiceException.BadRequest(
+                "amount_with_installments_unsupported",
+                "an installment plan covers the full balance; omit amount_cents.");
+        }
+
+        if (request.ScheduledFor is not null)
+        {
+            throw ServiceException.BadRequest(
+                "scheduled_with_installments_unsupported", "an installment plan sets its own dates.");
+        }
+
+        var planId = PaymentRecord.DeriveId(request.BillerId, $"{idempotencyKey}\u001fplan");
+
+        // Fast path: replay an already-enrolled plan without recomputing the balance.
+        var firstInstallmentId = PaymentRecord.DeriveId(request.BillerId, InstallmentKey(idempotencyKey, 0));
+        var existingFirst = await store.FindAsync(request.BillerId, firstInstallmentId, cancellationToken)
+            .ConfigureAwait(false);
+        if (existingFirst is not null)
+        {
+            EnsureSameRequest(existingFirst, InstallmentFingerprint(request, existingFirst.ScheduledFor, existingFirst.AmountCents, 0));
+            if (existingFirst.InstallmentCount != count)
+            {
+                throw ServiceException.Conflict(
+                    "idempotency_key_conflict",
+                    "the idempotency key was already used for a different installment plan.");
+            }
+
+            var replayed = await GatherPlanAsync(request.BillerId, request.InvoiceId, planId, cancellationToken)
+                .ConfigureAwait(false);
+            return BuildPlanResult(planId, request, count, replayed, created: false);
+        }
+
+        // A new plan may only be enrolled for a settle-eligible biller (server-owned state), matching
+        // the single-payment path; the replay fast-path above stays recoverable regardless.
+        RequireSettleEligible(config);
+
+        var invoice = await invoices.GetAsync(request.BillerId, request.InvoiceId, cancellationToken)
+                .ConfigureAwait(false)
+            ?? throw ServiceException.NotFound("invoice_not_found", $"invoice {request.InvoiceId} not found");
+
+        if (invoice.Status == InvoiceStatus.Paid)
+        {
+            throw ServiceException.Conflict("already_paid", $"invoice {request.InvoiceId} is already paid");
+        }
+
+        if (invoice.Status == InvoiceStatus.Scheduled)
+        {
+            throw ServiceException.Conflict(
+                "invoice_scheduled", $"invoice {request.InvoiceId} already has an active scheduled payment");
+        }
+
+        var outstanding = invoice.AmountCents
+            - await CommittedCentsAsync(request.BillerId, request.InvoiceId, cancellationToken).ConfigureAwait(false);
+        if (outstanding <= 0)
+        {
+            throw ServiceException.Conflict("no_balance_due", $"invoice {request.InvoiceId} has no balance due");
+        }
+
+        if (outstanding < count)
+        {
+            throw ServiceException.BadRequest(
+                "installments_exceed_balance",
+                $"the balance of {outstanding} cents is too small to split into {count} installments.");
+        }
+
+        var amounts = PaymentAmounts.SplitIntoInstallments(outstanding, count);
+        var today = DateOnly.FromDateTime(clock.GetUtcNow().UtcDateTime);
+        var maxDate = today.AddDays(options.MaxScheduleDays);
+        var now = clock.GetUtcNow();
+
+        // Validate the whole schedule length before persisting anything: the final installment is
+        // the latest, so if it fits the window every installment does. Persisting first and then
+        // throwing mid-loop would leave earlier installments durably scheduled and auto-charged.
+        if (today.AddMonths(count - 1) > maxDate)
+        {
+            throw ServiceException.BadRequest(
+                "installment_schedule_too_long",
+                $"a {count}-installment monthly schedule would fall beyond the {options.MaxScheduleDays}-day scheduling window.");
+        }
+
+        var installments = new List<PaymentRecord>(count);
+        for (var sequence = 0; sequence < count; sequence++)
+        {
+            var dueDate = today.AddMonths(sequence);
+            var (feeCents, totalCents) = FeeCalculator.Calculate(config, request.Method, amounts[sequence]);
+            var installmentKey = InstallmentKey(idempotencyKey, sequence);
+            var record = new PaymentRecord
+            {
+                PaymentId = PaymentRecord.DeriveId(request.BillerId, installmentKey),
+                BillerId = request.BillerId,
+                InvoiceId = request.InvoiceId,
+                PayerAccountId = request.PayerAccountId,
+                Method = request.Method,
+                AmountCents = amounts[sequence],
+                FeeCents = feeCents,
+                TotalCents = totalCents,
+                Confirmation = MintConfirmation(),
+                ScheduledFor = dueDate,
+                InstallmentPlanId = planId,
+                InstallmentSequence = sequence,
+                InstallmentCount = count,
+                ReceiptMessage = config.ReceiptMessage,
+                // Persisted directly as scheduled: an installment reserves no invoice state at
+                // enrollment, so there is no invoice transition to order a pending record before.
+                Lifecycle = PaymentLifecycle.Scheduled,
+                IdempotencyKey = installmentKey,
+                RequestFingerprint = InstallmentFingerprint(request, dueDate, amounts[sequence], sequence),
+                CreatedAt = now,
+                UpdatedAt = now,
+            };
+
+            var begin = await store.BeginAsync(record, cancellationToken).ConfigureAwait(false);
+            installments.Add(begin.Record);
+        }
+
+        LogPaymentCreated(logger, planId, request.BillerId, request.InvoiceId, PaymentStatus.Scheduled, outstanding, Activity.Current?.TraceId.ToString());
+        return BuildPlanResult(planId, request, count, installments, created: true);
+    }
+
+    private static string InstallmentKey(string idempotencyKey, int sequence)
+        => $"{idempotencyKey}\u001finst{sequence}";
+
+    private static string InstallmentFingerprint(CreatePaymentRequest request, DateOnly? dueDate, int amountCents, int sequence)
+        => PaymentRecord.Fingerprint(
+            request.InvoiceId, request.Method, request.PayerAccountId, dueDate, amountCents, sequence);
+
+    private async Task<int> CommittedCentsAsync(string billerId, string invoiceId, CancellationToken cancellationToken)
+    {
+        // Committed = every non-failed payment recorded against the invoice (succeeded + scheduled).
+        var recorded = await store.ListAsync(billerId, payerAccountId: null, invoiceId: invoiceId, cancellationToken)
+            .ConfigureAwait(false);
+        return recorded
+            .Where(payment => payment.Lifecycle != PaymentLifecycle.Failed)
+            .Sum(payment => payment.AmountCents);
+    }
+
+    private async Task<IReadOnlyList<PaymentRecord>> GatherPlanAsync(
+        string billerId, string invoiceId, string planId, CancellationToken cancellationToken)
+    {
+        var recorded = await store.ListAsync(billerId, payerAccountId: null, invoiceId: invoiceId, cancellationToken)
+            .ConfigureAwait(false);
+        return recorded
+            .Where(payment => string.Equals(payment.InstallmentPlanId, planId, StringComparison.Ordinal))
+            .OrderBy(payment => payment.InstallmentSequence)
+            .ToArray();
+    }
+
+    private IActionResult BuildPlanResult(
+        string planId, CreatePaymentRequest request, int count, IReadOnlyList<PaymentRecord> installments, bool created)
+    {
+        var response = new InstallmentPlanResponse(
+            InstallmentPlanId: planId,
+            BillerId: request.BillerId,
+            InvoiceId: request.InvoiceId,
+            InstallmentCount: count,
+            TotalAmountCents: installments.Sum(record => record.AmountCents),
+            Installments: installments.Select(record => record.ToResponse()).ToArray());
+
+        return created
+            ? Created($"/payments?biller_id={response.BillerId}&invoice_id={response.InvoiceId}", response)
+            : Ok(response);
+    }
+
+    private static string RequireIdempotencyKey(string? idempotencyHeader, string? bodyKey)
+    {
+        // The header wins over the body field; either provides durable client idempotency.
+        var idempotencyKey = Normalize(idempotencyHeader) ?? Normalize(bodyKey);
+        if (idempotencyKey is null)
+        {
+            throw ServiceException.BadRequest(
+                "idempotency_key_required",
+                "Idempotency-Key header or idempotency_key body field is required.");
+        }
+
+        if (idempotencyKey.Length > MaxIdempotencyKeyLength)
+        {
+            throw ServiceException.BadRequest(
+                "idempotency_key_too_long",
+                $"Idempotency keys must be at most {MaxIdempotencyKeyLength} characters.");
+        }
+
+        return idempotencyKey;
+    }
+
+    private IActionResult BuildResult(PaymentRecord record, bool created)
     {
         if (record.Lifecycle == PaymentLifecycle.Failed)
         {
@@ -201,6 +478,21 @@ public sealed partial class PaymentsController : ControllerBase
         }
     }
 
+    private static void RequireSettleEligible(BillerPaymentConfig config)
+    {
+        if (config.SettlementState == BillerSettlementState.Published)
+        {
+            return;
+        }
+
+        var reason = config.SettlementState == BillerSettlementState.ComplianceNotPassed
+            ? "its configuration has not passed the compliance gate"
+            : "its configuration is not published";
+        throw ServiceException.Conflict(
+            "biller_not_publishable",
+            $"payments cannot be settled for this biller because {reason}.");
+    }
+
     private static void EnsureSameRequest(PaymentRecord existing, string fingerprint)
     {
         if (existing.RequestFingerprint is not null
@@ -224,6 +516,7 @@ public sealed partial class PaymentsController : ControllerBase
         [FromQuery(Name = "biller_id")] string? billerId,
         [FromQuery(Name = "invoice_id")] string? invoiceId,
         [FromQuery] string? method,
+        [FromQuery(Name = "amount_cents")] int? amountCents,
         CancellationToken cancellationToken)
     {
         var requiredBillerId = RequireQueryValue(billerId, "biller_id");
@@ -245,9 +538,31 @@ public sealed partial class PaymentsController : ControllerBase
             throw ServiceException.Conflict("already_paid", $"invoice {requiredInvoiceId} is already paid");
         }
 
-        var (feeCents, totalCents) = FeeCalculator.Calculate(config, requiredMethod, invoice.AmountCents);
+        // Quote the fee on the balance the payment would actually charge: the full outstanding
+        // balance by default, or a requested partial amount (validated against that balance).
+        var outstanding = invoice.AmountCents
+            - await CommittedCentsAsync(requiredBillerId, requiredInvoiceId, cancellationToken).ConfigureAwait(false);
+        if (outstanding <= 0)
+        {
+            throw ServiceException.Conflict("no_balance_due", $"invoice {requiredInvoiceId} has no balance due");
+        }
+
+        var amountToQuote = amountCents ?? outstanding;
+        if (amountToQuote <= 0)
+        {
+            throw ServiceException.BadRequest("invalid_amount", "amount_cents must be a positive number of cents.");
+        }
+
+        if (amountToQuote > outstanding)
+        {
+            throw ServiceException.BadRequest(
+                "amount_exceeds_balance",
+                $"amount_cents {amountToQuote} exceeds the outstanding balance of {outstanding}.");
+        }
+
+        var (feeCents, totalCents) = FeeCalculator.Calculate(config, requiredMethod, amountToQuote);
         return new PaymentQuoteResponse(
-            requiredBillerId, requiredInvoiceId, requiredMethod, invoice.AmountCents, feeCents, totalCents);
+            requiredBillerId, requiredInvoiceId, requiredMethod, amountToQuote, feeCents, totalCents, outstanding);
     }
 
     [HttpGet("{paymentId}")]

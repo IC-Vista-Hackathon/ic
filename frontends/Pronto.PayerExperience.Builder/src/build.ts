@@ -54,7 +54,9 @@ export async function buildBundle({ pwaDir, workRoot, slug, skin }: BuildInputs)
 async function overlaySkin(workDir: string, skin: GeneratedSkin): Promise<void> {
   const themePath = join(workDir, 'src', 'skin', 'theme.css');
   const chromePath = join(workDir, 'src', 'skin', 'chrome.tsx');
+  const flowPath = join(workDir, 'src', 'skin', 'flow.tsx');
   await mkdir(dirname(themePath), { recursive: true });
   await writeFile(themePath, skin.themeCss, 'utf8');
   await writeFile(chromePath, skin.chromeTsx, 'utf8');
+  await writeFile(flowPath, skin.flowTsx, 'utf8');
 }
