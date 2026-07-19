@@ -207,7 +207,29 @@ User approval applies only to the resulting draft and cannot bypass workflow gat
 a passing compliance check enforced server-side, and only the payment path (post explicit payer
 confirmation) moves money. Agents cannot set readiness, approve, or publish.
 
-Test: _covered by existing in-process tests; deployed coverage to be added with the publish flow._
+The server-side publish gate is a **deterministic compliance suite** that emits a signed, auditable
+attestation (F8): a compliant revision publishes and the 202 response carries an `attestation` with
+`passed: true`, a signature, and per-checker results; a revision that violates a hard checker is
+blocked at publish with a 422 problem-details response whose `findings` name the failing checker —
+even when it passed the advisory approval review. The color-contrast checker is a good black-box
+probe: a valid-hex but sub-WCAG-AA palette is accepted at approval yet blocked at publish.
+
+```gherkin
+Feature: Deterministic publish gate with signed attestation
+  Scenario: A compliant revision publishes with a verifiable attestation
+    Given an approved revision whose palette clears WCAG AA and whose fees are disclosed
+    When I publish it
+    Then the response is 202 Accepted
+    And it carries a compliance attestation with passed=true, a signature, and checker results
+
+  Scenario: A hard checker blocks publish after an advisory-clean approval
+    Given a revision with a valid-hex but sub-WCAG-AA brand color that approval accepts
+    When I publish it
+    Then the response is 422 with a finding on "brand.primary_color"
+```
+
+Tests: `CompliancePublishGateTests.PublishProducesSignedAttestationForCompliantRevision`,
+`CompliancePublishGateTests.PublishIsBlockedByHardComplianceChecker`
 
 ---
 
