@@ -315,6 +315,16 @@ builder.Services.AddControllers().AddJsonOptions(json =>
     json.JsonSerializerOptions.Converters.Add(
         new JsonStringEnumConverter(JsonNamingPolicy.SnakeCaseLower, allowIntegerValues: false));
 });
+// Keep the raw HTTP JSON writer (used by the problem-details error path in GlobalExceptionHandler)
+// on the same snake_case wire contract as the controllers, so surfaced compliance findings expose
+// field_path/requires_review consistently to the Studio and functional tests.
+builder.Services.ConfigureHttpJsonOptions(json =>
+{
+    json.SerializerOptions.PropertyNamingPolicy = JsonNamingPolicy.SnakeCaseLower;
+    json.SerializerOptions.DictionaryKeyPolicy = JsonNamingPolicy.SnakeCaseLower;
+    json.SerializerOptions.Converters.Add(
+        new JsonStringEnumConverter(JsonNamingPolicy.SnakeCaseLower, allowIntegerValues: false));
+});
 builder.Services.AddProblemDetails();
 builder.Services.AddExceptionHandler<GlobalExceptionHandler>();
 var healthChecks = builder.Services.AddHealthChecks();
