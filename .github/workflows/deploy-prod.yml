@@ -84,6 +84,16 @@ jobs:
       - name: Deploy
         run: kubectl apply -k "${OVERLAY}"
 
+      # The Biller Experience API fails closed at startup unless a real, non-default compliance
+      # attestation signing key is configured (see base/biller-experience-api/deployment.yaml).
+      # Generate it once and persist it as a Secret so it stays stable across deploys — existing
+      # secrets are left untouched, keeping previously-signed attestations verifiable.
+      - name: Ensure compliance attestation signing key
+        run: |
+          kubectl -n ic get secret ic-compliance-attestation >/dev/null 2>&1 || \
+            kubectl -n ic create secret generic ic-compliance-attestation \
+              --from-literal=signing-key="$(openssl rand -hex 32)"
+
       - name: Configure runtime deployment values
         run: |
           APPINSIGHTS=$(az deployment sub show --name ic-hack --query 'properties.outputs.appInsightsConnectionString.value' -o tsv)
