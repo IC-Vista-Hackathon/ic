@@ -215,11 +215,14 @@ public sealed class BillerOnboardingServiceTests
     {
         var repository = new InMemoryBillerExperienceRepository();
         var compliance = new RecordingComplianceReviewService();
+        // Research brands the otherwise-unbranded bootstrap draft with valid, high-contrast colors so
+        // it clears both approval and the deterministic publish suite — the same path production takes.
         var service = new BillerOnboardingService(
             repository,
             new DeterministicExperienceDraftGenerator(NullLogger<DeterministicExperienceDraftGenerator>.Instance),
             new OrchestrationRunner(),
             NullLogger<BillerOnboardingService>.Instance,
+            new StubResearchCoordinator(BrandResearch()),
             complianceReviewService: compliance);
         var created = await service.CreateAsync(CreateRequest(), CancellationToken.None);
         var chat = await service.SendMessageAsync(created.Biller.BillerId, new("Ready for review"), CancellationToken.None);
@@ -278,10 +281,15 @@ public sealed class BillerOnboardingServiceTests
         var created = await service.CreateAsync(CreateRequest(), CancellationToken.None);
 
         // A washed-out primary color is valid hex (so it clears approval), but fails the WCAG AA
-        // contrast checker at publish — a deterministic hard failure.
+        // contrast checker at publish — a deterministic hard failure. The secondary color is a valid
+        // hex too so the unbranded-bootstrap draft still clears the approval-stage color policy.
         var lowContrast = created.Draft.Definition with
         {
-            Brand = created.Draft.Definition.Brand with { PrimaryColor = "#EEEEEE" }
+            Brand = created.Draft.Definition.Brand with
+            {
+                PrimaryColor = "#EEEEEE",
+                SecondaryColor = "#123456"
+            }
         };
         var updated = await service.UpdateDraftAsync(
             created.Biller.BillerId,
@@ -308,11 +316,14 @@ public sealed class BillerOnboardingServiceTests
     public async Task PublishSucceedsAndPersistsASignedAttestationWhenAllCheckersPass()
     {
         var repository = new InMemoryBillerExperienceRepository();
+        // Research brands the otherwise-unbranded bootstrap draft with valid, high-contrast colors so
+        // every deterministic checker passes and publication produces a verifiable attestation.
         var service = new BillerOnboardingService(
             repository,
             new DeterministicExperienceDraftGenerator(NullLogger<DeterministicExperienceDraftGenerator>.Instance),
             new OrchestrationRunner(),
-            NullLogger<BillerOnboardingService>.Instance);
+            NullLogger<BillerOnboardingService>.Instance,
+            new StubResearchCoordinator(BrandResearch()));
         var created = await service.CreateAsync(CreateRequest(), CancellationToken.None);
         var chat = await service.SendMessageAsync(created.Biller.BillerId, new("Ready for review"), CancellationToken.None);
         var approved = await service.ApproveAsync(
