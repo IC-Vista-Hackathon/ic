@@ -7,7 +7,7 @@ import type { FooterProps, HeaderProps, IntroProps } from './contract';
 
 export function Header({ brand }: HeaderProps) {
   return (
-    <header data-testid="app-header" style={{ background: brand.primary_color }}>
+    <header data-testid="app-header" style={{ background: brand.primary_color || 'var(--brand)' }}>
       <div className="mark">{initials(brand.display_name)}</div>
       <strong>{brand.display_name}</strong>
       <span>Secure account services</span>
