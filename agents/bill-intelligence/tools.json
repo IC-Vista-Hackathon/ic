@@ -1,17 +1,54 @@
 {
+  "_comment": "Payer-side reads go through the MCP service router, never raw endpoints. Identity (biller_id, payer_id) is bound to the short-lived capability token issued by IC orchestration for this run; it is never a tool argument.",
   "tools": [
     {
       "type": "function",
       "function": {
-        "name": "get_invoices",
-        "description": "Look up a payer's open invoices for a biller by account number. Backed by GET /billers/{id}/invoices?account_number=. Scoped to the current biller tenant.",
+        "name": "list_invoices",
+        "description": "List a payer account's invoices for the capability's biller, looked up by account number. Backed by the MCP router tool list_invoices. The biller tenant is bound to the capability token, not passed as an argument.",
         "parameters": {
           "type": "object",
           "properties": {
-            "biller_id": { "type": "string", "description": "The biller tenant for the current portal session (partition key)." },
-            "account_number": { "type": "string", "description": "The payer's external biller account number." }
+            "capability_token": { "type": "string", "description": "Short-lived biller capability issued by IC orchestration for this run." },
+            "account_number": { "type": "string", "description": "The payer's external biller account number." },
+            "include_closed": { "type": "boolean", "description": "Include paid/closed invoices in addition to open ones." }
           },
-          "required": ["biller_id", "account_number"]
+          "required": ["capability_token", "account_number", "include_closed"]
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "get_invoice",
+        "description": "Read one invoice by id for the capability's biller. Backed by the MCP router tool get_invoice. The biller tenant is bound to the capability token, not passed as an argument.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "capability_token": { "type": "string", "description": "Short-lived biller capability issued by IC orchestration for this run." },
+            "invoice_id": { "type": "string", "description": "The invoice id to read." }
+          },
+          "required": ["capability_token", "invoice_id"]
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "get_payment_quote",
+        "description": "Return the pre-confirmation fee quote for an invoice and payment method; the quoted total matches what a payment would charge. Backed by the MCP router tool get_payment_quote. Read-only, so the payment plan can reason over fees per method without moving money.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "capability_token": { "type": "string", "description": "Short-lived biller capability issued by IC orchestration for this run." },
+            "invoice_id": { "type": "string", "description": "The invoice id to quote." },
+            "method": {
+              "type": "string",
+              "enum": ["card", "ach", "applepay", "googlepay", "paypal"],
+              "description": "Payment method token; must be one of the biller's configured payment methods."
+            }
+          },
+          "required": ["capability_token", "invoice_id", "method"]
         }
       }
     }

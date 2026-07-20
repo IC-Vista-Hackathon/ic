@@ -27,6 +27,10 @@ spec:
           env:
             - name: BillerExperience__SupportingServices__InvoiceBaseUrl
               value: http://ic-invoice-api:8080/
+            - name: BillerExperience__SupportingServices__PaymentBaseUrl
+              value: http://ic-payment-api:8080/
+            - name: BillerExperience__SupportingServices__PayerAccountBaseUrl
+              value: http://ic-payer-account-api:8080/
             # Signed compliance attestations require a real, non-default HMAC key outside
             # Development (enforced at startup). The key is a per-namespace secret generated
             # once by the deploy workflow (never committed), so it stays stable across deploys

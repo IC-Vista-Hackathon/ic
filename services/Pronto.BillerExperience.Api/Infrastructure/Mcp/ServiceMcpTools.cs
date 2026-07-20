@@ -162,20 +162,46 @@ public sealed partial class ServiceMcpTools(
                 cancellationToken).AsTask());
     }
 
-    [McpServerTool(Name = ServiceToolRegistry.ToolNames.CreatePaymentIntent, ReadOnly = true, Idempotent = false, OpenWorld = false, UseStructuredContent = true)]
-    [Description("Quote a payment for the verified payer and return a confirmation-required intent (carrying an idempotency key) for them to approve. Requires a write-capable, payer-bound capability. No money moves; submit_payment executes the approved intent.")]
-    public async ValueTask<PaymentIntentView> CreatePaymentIntentAsync(
+    [McpServerTool(Name = ServiceToolRegistry.ToolNames.BindExecutionCapability, ReadOnly = true, Idempotent = true, OpenWorld = false, UseStructuredContent = true)]
+    [Description("Re-issue a verified, write-capable payer capability as an Execution-bound capability at the Policy->Execution handoff. The biller, run, payer binding, and write scope are preserved from the presented capability; only the agent id is rebound to the Execution Agent. No money moves — the returned capability is what create_payment_intent/submit_payment require for a registered payer.")]
+    public async ValueTask<ExecutionCapabilityResult> BindExecutionCapabilityAsync(
         [Description("Write-capable payer-bound capability returned by verify_payer_account.")] string capabilityToken,
+        CancellationToken cancellationToken)
+    {
+        // The presented capability must already be a verified, write-capable payer capability; the
+        // payer id and tenant are trusted from the signed token, never a tool argument. The re-issued
+        // token is bound to the configured Execution Agent so the server-side Execution-Agent-only
+        // submission rule holds without ever weakening it or exposing tokens across the model boundary.
+        var capability = ValidateCapability(
+            ServiceToolRegistry.ToolNames.BindExecutionCapability,
+            capabilityToken,
+            writeRequired: true,
+            payerRequired: true);
+        return await InvokeAsync(ServiceToolRegistry.ToolNames.BindExecutionCapability, capability, () =>
+        {
+            var executionToken = capabilities.Issue(
+                capability.BillerId, capability.RunId, executionAgentId, capability.CanWrite, capability.PayerId,
+                notAfter: capability.ExpiresAt);
+            return Task.FromResult(new ExecutionCapabilityResult(executionToken));
+        });
+    }
+
+    [McpServerTool(Name = ServiceToolRegistry.ToolNames.CreatePaymentIntent, ReadOnly = true, Idempotent = false, OpenWorld = false, UseStructuredContent = true)]
+    [Description("Quote a payment and return a confirmation-required intent (carrying an idempotency key) to approve. Requires a write-capable capability. When the capability is payer-bound the intent is for that payer; a biller-scoped capability produces a guest intent (no payer account). No money moves; submit_payment executes the approved intent.")]
+    public async ValueTask<PaymentIntentView> CreatePaymentIntentAsync(
+        [Description("Write-capable capability: an Execution-bound payer capability for a registered payer, or a biller capability for guest pay.")] string capabilityToken,
         [Description("The invoice id to pay.")] string invoiceId,
         [Description("The payment method token (must be enabled for the biller).")] string method,
         [Description("Optional future date (yyyy-MM-dd) to schedule the payment; omit to pay now.")] DateOnly? scheduledFor,
         CancellationToken cancellationToken)
     {
+        // Guest pay is biller-scoped: a write capability is always required, but a payer binding is
+        // optional. A payer-bound capability produces an intent for that payer; a biller capability
+        // produces a guest intent with no payer account. Identity still comes only from the token.
         var capability = ValidateCapability(
             ServiceToolRegistry.ToolNames.CreatePaymentIntent,
             capabilityToken,
-            writeRequired: true,
-            payerRequired: true);
+            writeRequired: true);
         return await InvokeAsync(ServiceToolRegistry.ToolNames.CreatePaymentIntent, capability, async () =>
         {
             var requiredInvoiceId = RequireArgument(invoiceId, nameof(invoiceId));
@@ -195,9 +221,9 @@ public sealed partial class ServiceMcpTools(
     }
 
     [McpServerTool(Name = ServiceToolRegistry.ToolNames.SubmitPayment, ReadOnly = false, Idempotent = true, OpenWorld = false, UseStructuredContent = true)]
-    [Description("Submit an approved payment intent, moving money via the idempotent Payment Service. Restricted to the Execution Agent and only after explicit payer confirmation. Requires a write-capable, payer-bound capability. Resubmitting the same intent id resolves to the original payment (no double charge).")]
+    [Description("Submit an approved payment intent, moving money via the idempotent Payment Service. Restricted to the Execution Agent and only after explicit payer confirmation. Requires a write-capable capability; pays as the bound payer, or as a biller-scoped guest when the capability carries no payer. Resubmitting the same intent id resolves to the original payment (no double charge).")]
     public async ValueTask<PaymentResponse> SubmitPaymentAsync(
-        [Description("Write-capable payer-bound capability returned by verify_payer_account.")] string capabilityToken,
+        [Description("Write-capable capability: an Execution-bound payer capability for a registered payer, or a biller capability for guest pay.")] string capabilityToken,
         [Description("The intent id returned by create_payment_intent; used as the idempotency key so retries never double-charge.")] string intentId,
         [Description("The invoice id from the approved intent.")] string invoiceId,
         [Description("The payment method from the approved intent.")] string method,
@@ -205,11 +231,13 @@ public sealed partial class ServiceMcpTools(
         [Description("Optional schedule date from the approved intent; omit to pay now.")] DateOnly? scheduledFor,
         CancellationToken cancellationToken)
     {
+        // Guest pay is biller-scoped: the Execution-Agent-only and payer-confirmation gates below
+        // are unconditional, but the payer binding is optional. capability.PayerId flows through as
+        // the payer account (null for a guest), so the Payment Service records a guest payment.
         var capability = ValidateCapability(
             ServiceToolRegistry.ToolNames.SubmitPayment,
             capabilityToken,
-            writeRequired: true,
-            payerRequired: true);
+            writeRequired: true);
         return await InvokeAsync(ServiceToolRegistry.ToolNames.SubmitPayment, capability, async () =>
         {
             if (!string.Equals(capability.AgentId, executionAgentId, StringComparison.Ordinal))
@@ -258,6 +286,40 @@ public sealed partial class ServiceMcpTools(
                 capability.BillerId,
                 new SeedInvoicesRequest(count, accountNumber, billType),
                 cancellationToken);
+        });
+    }
+
+    [McpServerTool(Name = ServiceToolRegistry.ToolNames.RegisterPayer, ReadOnly = false, Idempotent = false, OpenWorld = false, UseStructuredContent = true)]
+    [Description("Register a payer account for the capability's biller after explicit payer opt-in. Requires a write-capable biller capability. Registration is offered, never imposed — guest pay must remain available. The biller is bound from the capability, never an argument.")]
+    public async ValueTask<PayerResponse> RegisterPayerAsync(
+        [Description("Write-capable biller capability issued by IC orchestration.")] string capabilityToken,
+        [Description("The payer's full name.")] string name,
+        [Description("The payer's email address.")] string email,
+        [Description("The payer's phone number. Omit if not provided.")] string? phone,
+        [Description("External biller account numbers to link to this payer.")] IReadOnlyList<string> accountNumbers,
+        [Description("Enable autopay. Omit to leave preferences at registration defaults.")] bool? autopay,
+        [Description("Enable paperless billing. Omit to leave preferences at registration defaults.")] bool? paperless,
+        [Description("Day of month (1-28) to run autopay. Omit to leave unset.")] int? paymentDay,
+        CancellationToken cancellationToken)
+    {
+        var capability = ValidateCapability(
+            ServiceToolRegistry.ToolNames.RegisterPayer,
+            capabilityToken,
+            writeRequired: true);
+        return await InvokeAsync(ServiceToolRegistry.ToolNames.RegisterPayer, capability, () =>
+        {
+            PayerPreferences? preferences = autopay is null && paperless is null && paymentDay is null
+                ? null
+                : new PayerPreferences(autopay ?? false, paperless ?? false, Channels: [], paymentDay);
+            return payers.RegisterAsync(
+                new RegisterPayerRequest(
+                    capability.BillerId,
+                    RequireArgument(name, nameof(name)),
+                    RequireArgument(email, nameof(email)),
+                    string.IsNullOrWhiteSpace(phone) ? null : phone.Trim(),
+                    accountNumbers ?? [],
+                    preferences),
+                cancellationToken).AsTask();
         });
     }
 
@@ -339,6 +401,13 @@ public sealed record PayerVerificationResult(
     string PayerId,
     string Name,
     string PayerCapabilityToken);
+
+/// <summary>
+/// An Execution-bound re-issue of a verified payer capability, produced at the Policy->Execution
+/// handoff. It preserves the biller/run/payer scope and write flag of the presented capability and
+/// binds the agent id to the Execution Agent so the payment path's Execution-Agent-only rule holds.
+/// </summary>
+public sealed record ExecutionCapabilityResult(string ExecutionCapabilityToken);
 
 /// <summary>Agent-facing projection of a payer's payment history.</summary>
 public sealed record PaymentHistoryView(IReadOnlyList<PaymentResponse> Payments);

@@ -26,5 +26,7 @@
   </ItemGroup>
   <ItemGroup>
     <Content Include="..\..\agents\**\*.md" Link="agents\%(RecursiveDir)%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" />
+    <!-- tools.json feeds the per-agent MCP allowlist derived at provisioning time (FoundryAgentReconciler). -->
+    <Content Include="..\..\agents\**\tools.json" Link="agents\%(RecursiveDir)%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
 </Project>

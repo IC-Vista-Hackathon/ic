@@ -159,6 +159,69 @@ spec:
           kind: Service
           name: ic-biller-experience-studio
           port: 8080
+    # Studio preview embeds the SAME shipped payer PWA at /pay/?preview=<id> — with no
+    # published slug — so the router (which resolves a published biller from /pay/{slug}
+    # in blob storage) can't serve it and 404s, leaving the preview iframe blank. Serve
+    # the standalone PWA build (ic-biller-payments-pwa, base /pay/) for the SPA shell and
+    # its build artifacts, and keep published /pay/{slug} traffic on the router below.
+    # A published biller's own assets are served by the router under /pay/{slug}/assets/...,
+    # so they carry the slug and never match these reserved /pay/{asset} paths.
+    - matches:
+        - path: { type: Exact, value: /pay/ }
+        - path: { type: Exact, value: /pay }
+      filters:
+        - type: URLRewrite
+          urlRewrite:
+            path: { type: ReplaceFullPath, replaceFullPath: /index.html }
+      backendRefs:
+        - group: ""
+          kind: Service
+          name: ic-biller-payments-pwa
+          port: 8080
+    - matches:
+        - path: { type: PathPrefix, value: /pay/assets }
+      filters:
+        - type: URLRewrite
+          urlRewrite:
+            path: { type: ReplacePrefixMatch, replacePrefixMatch: /assets }
+      backendRefs:
+        - group: ""
+          kind: Service
+          name: ic-biller-payments-pwa
+          port: 8080
+    - matches:
+        - path: { type: Exact, value: /pay/sw.js }
+      filters:
+        - type: URLRewrite
+          urlRewrite:
+            path: { type: ReplaceFullPath, replaceFullPath: /sw.js }
+      backendRefs:
+        - group: ""
+          kind: Service
+          name: ic-biller-payments-pwa
+          port: 8080
+    - matches:
+        - path: { type: Exact, value: /pay/manifest.webmanifest }
+      filters:
+        - type: URLRewrite
+          urlRewrite:
+            path: { type: ReplaceFullPath, replaceFullPath: /manifest.webmanifest }
+      backendRefs:
+        - group: ""
+          kind: Service
+          name: ic-biller-payments-pwa
+          port: 8080
+    - matches:
+        - path: { type: Exact, value: /pay/config.json }
+      filters:
+        - type: URLRewrite
+          urlRewrite:
+            path: { type: ReplaceFullPath, replaceFullPath: /config.json }
+      backendRefs:
+        - group: ""
+          kind: Service
+          name: ic-biller-payments-pwa
+          port: 8080
     # The router needs the full /pay/{slug}/... path to resolve the biller and blob
     # key, so this rule intentionally does NOT rewrite the prefix (unlike the API routes).
     - matches:
