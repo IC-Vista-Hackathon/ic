@@ -121,7 +121,7 @@ public sealed class DeterministicFinancialPlanningAgent : IFinancialPlanningAgen
     private static string Money(int cents) =>
         cents < 100
             ? $"{cents}¢"
-            : (cents / 100m).ToString("C", CultureInfo.GetCultureInfo("en-US"));
+            : $"${(cents / 100m).ToString("N2", CultureInfo.InvariantCulture)}";
 
     private static string MethodLabel(string method) => method switch
     {
