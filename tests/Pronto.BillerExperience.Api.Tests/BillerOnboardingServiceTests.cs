@@ -93,7 +93,9 @@ public sealed class BillerOnboardingServiceTests
             ActivityStopped = activities.Add
         };
         ActivitySource.AddActivityListener(listener);
-        var service = CreateService();
+        // The draft is unbranded until research runs, so a reachable-site research result is what
+        // makes it publishable — the same path production takes.
+        var service = CreateService(researchCoordinator: new StubResearchCoordinator(BrandResearch()));
 
         var created = await service.CreateAsync(CreateRequest(), CancellationToken.None);
         var chat = await service.SendMessageAsync(
@@ -142,7 +144,7 @@ public sealed class BillerOnboardingServiceTests
     [Fact]
     public async Task DuplicatePublishIsIdempotent()
     {
-        var service = CreateService();
+        var service = CreateService(researchCoordinator: new StubResearchCoordinator(BrandResearch()));
         var created = await service.CreateAsync(CreateRequest(), CancellationToken.None);
         var chat = await service.SendMessageAsync(created.Biller.BillerId, new("Ready for review"), CancellationToken.None);
         var approved = await service.ApproveAsync(created.Biller.BillerId, new(chat.Draft!.Revision, "test-user"), CancellationToken.None);
@@ -285,6 +287,60 @@ public sealed class BillerOnboardingServiceTests
     }
 
     [Fact]
+    public async Task BootstrapDraftIsUnbrandedBeforeResearch()
+    {
+        var service = CreateService();
+
+        var created = await service.CreateAsync(CreateRequest(), CancellationToken.None);
+
+        // FR-5: the bootstrap draft asserts no brand color, logo, font, or design brief before the
+        // research agent has produced evidence from the biller's real site.
+        var brand = created.Draft.Definition.Brand;
+        Assert.True(string.IsNullOrEmpty(brand.PrimaryColor));
+        Assert.True(string.IsNullOrEmpty(brand.SecondaryColor));
+        Assert.Null(brand.LogoAssetId);
+        Assert.Null(brand.FontFamily);
+        Assert.Null(created.Draft.Definition.Brief);
+        Assert.NotEqual("#085368", brand.PrimaryColor);
+    }
+
+    [Fact]
+    public async Task ResearchEvidenceBrandsTheDraftAndLeavesExplicitChoicesIntact()
+    {
+        var service = CreateService(researchCoordinator: new StubResearchCoordinator(BrandResearch()));
+        var created = await service.CreateAsync(CreateRequest(), CancellationToken.None);
+
+        // The chat picks the primary color explicitly; research supplies the rest.
+        var chat = await service.SendMessageAsync(
+            created.Biller.BillerId,
+            new("Use #174A5B and pull the rest of the brand from our site."),
+            CancellationToken.None);
+
+        var brand = chat.Draft!.Definition.Brand;
+        Assert.Equal("#174A5B", brand.PrimaryColor); // explicit request wins over researched primary
+        Assert.Equal("#abcdef", brand.SecondaryColor); // researched
+        Assert.Equal("https://vista.example/logo.png", brand.LogoAssetId); // researched, first-party
+        Assert.NotNull(chat.Draft.Definition.Brief); // brief derived from researched evidence
+    }
+
+    [Fact]
+    public async Task UnreachableResearchLeavesDraftUnbrandedButUsable()
+    {
+        var coordinator = new StubResearchCoordinator(new BillerResearchResponse(
+            ResearchOutcome.Failed, [], [], ["research.request_failed"], "research.request_failed", true));
+        var service = CreateService(researchCoordinator: coordinator);
+        var created = await service.CreateAsync(CreateRequest(), CancellationToken.None);
+
+        var chat = await service.SendMessageAsync(
+            created.Biller.BillerId, new("Use our real brand from our website."), CancellationToken.None);
+
+        // No evidence means the brand stays unset rather than falling back to an invented default.
+        Assert.NotNull(chat.Draft);
+        Assert.True(string.IsNullOrEmpty(chat.Draft!.Definition.Brand.PrimaryColor));
+        Assert.Null(chat.Draft.Definition.Brand.LogoAssetId);
+    }
+
+    [Fact]
     public async Task PublishPersistsW3CTraceparentFromCurrentActivity()
     {
         using var listener = new ActivityListener
@@ -299,7 +355,8 @@ public sealed class BillerOnboardingServiceTests
             repository,
             new DeterministicExperienceDraftGenerator(NullLogger<DeterministicExperienceDraftGenerator>.Instance),
             new OrchestrationRunner(),
-            NullLogger<BillerOnboardingService>.Instance);
+            NullLogger<BillerOnboardingService>.Instance,
+            new StubResearchCoordinator(BrandResearch()));
         var created = await service.CreateAsync(CreateRequest(), CancellationToken.None);
         var chat = await service.SendMessageAsync(created.Biller.BillerId, new("Ready for review"), CancellationToken.None);
         var approved = await service.ApproveAsync(created.Biller.BillerId, new(chat.Draft!.Revision, "test-user"), CancellationToken.None);
@@ -580,6 +637,23 @@ public sealed class BillerOnboardingServiceTests
 
     private static CreateBillerRequest CreateRequest() =>
         new("City of Vista", "city-of-vista", "Utility", "02110", new Uri("https://vista.example"));
+
+    // A completed research result carrying first-party brand evidence for the CreateRequest() site,
+    // used to brand an otherwise-unbranded draft the same way the real research agent would.
+    private static BillerResearchResponse BrandResearch()
+    {
+        var source = new Uri("https://vista.example/");
+        return new BillerResearchResponse(
+            ResearchOutcome.Completed,
+            [
+                new ResearchFact(BrandEvidenceFacts.PrimaryColor, "#123456", source, 0.9),
+                new ResearchFact(BrandEvidenceFacts.SecondaryColor, "#abcdef", source, 0.8),
+                new ResearchFact(BrandEvidenceFacts.LogoUrl, "https://vista.example/logo.png", source, 0.9),
+                new ResearchFact(BrandEvidenceFacts.Tagline, "Serving the City of Vista.", source, 0.7)
+            ],
+            [new ResearchSource(source, "City of Vista", DateTimeOffset.UtcNow)],
+            []);
+    }
 
     private sealed class RecordingInvoiceSeeder(Exception? failure = null) : IInvoiceSeeder
     {

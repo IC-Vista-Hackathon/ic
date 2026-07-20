@@ -877,8 +877,11 @@ public sealed partial class BillerOnboardingService(
 
     private static BillerExperienceDefinition CreateInitialDefinition(BillerRecord biller)
     {
-        var primary = biller.Brand?.PrimaryColor ?? "#085368";
-        var secondary = biller.Brand?.SecondaryColor ?? "#18B4E9";
+        // FR-5: the bootstrap draft must not assert a brand before research produces evidence.
+        // Only an explicitly supplied biller brand is honored; otherwise brand tokens stay unset
+        // (empty color / null logo / null font) and the design brief is null until research runs.
+        var primary = biller.Brand?.PrimaryColor ?? string.Empty;
+        var secondary = biller.Brand?.SecondaryColor ?? string.Empty;
         var root = biller.Website ?? new Uri($"https://{biller.Slug}.example.invalid");
         var capabilities = biller.PaymentRails.Count == 0
             ? new[] { "card", "ach" }
@@ -886,7 +889,7 @@ public sealed partial class BillerOnboardingService(
         return new BillerExperienceDefinition(
             "1.1",
             biller.Id,
-            new ExperienceBrand(biller.Name, primary, secondary, biller.Brand?.LogoAssetId, biller.Brand?.FontFamily ?? "Inter"),
+            new ExperienceBrand(biller.Name, primary, secondary, biller.Brand?.LogoAssetId, biller.Brand?.FontFamily),
             new ExperienceContent(
                 $"Pay your {biller.BillType.ToLowerInvariant()} bill",
                 $"A simple, secure way to pay {biller.Name}.",
@@ -922,33 +925,9 @@ public sealed partial class BillerOnboardingService(
                     ["offer_autopay"] = "AutoPay gives returning payers a convenient recurring option.",
                     ["offer_paperless"] = "Paperless billing can be offered independently at checkout."
                 }),
-            CreateInitialBrief(biller, root));
-    }
-
-    private static DesignBrief CreateInitialBrief(BillerRecord biller, Uri root)
-    {
-        var keywords = new List<string> { "trustworthy", "secure", "straightforward", biller.BillType.ToLowerInvariant() };
-        if (biller.BillType.Contains("tax", StringComparison.OrdinalIgnoreCase)
-            || biller.BillType.Contains("utility", StringComparison.OrdinalIgnoreCase)
-            || biller.Name.Contains("city", StringComparison.OrdinalIgnoreCase)
-            || biller.Name.Contains("county", StringComparison.OrdinalIgnoreCase))
-        {
-            keywords.Add("civic");
-            keywords.Add("community");
-        }
-
-        var assets = new List<BrandAsset>();
-        if (biller.Brand?.LogoAssetId is { Length: > 0 } logo)
-        {
-            assets.Add(new BrandAsset("logo", new Uri(logo, UriKind.RelativeOrAbsolute), $"{biller.Name} logo"));
-        }
-
-        return new DesignBrief(
-            VoiceAndTone: "Reassuring, plain-language, and efficient. Confident without jargon.",
-            VisualStyle: "Modern civic: generous whitespace, calm surfaces, clear hierarchy, accessible contrast.",
-            BrandKeywords: keywords,
-            Assets: assets,
-            ReferenceUrl: biller.Website ?? root);
+            // FR-5: no design brief is invented at creation time; it is derived from researched
+            // brand evidence during onboarding (see ResearchBrandApplicator).
+            Brief: null);
     }
 
     private static BillerResponse Map(BillerRecord record) =>

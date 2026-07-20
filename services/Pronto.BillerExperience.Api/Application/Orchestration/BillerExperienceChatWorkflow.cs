@@ -79,6 +79,14 @@ internal sealed partial class BillerExperienceChatWorkflow(
             input.EventSink, logger);
         var generated = await designStep.ExecuteAsync(input.Experience, context, cancellationToken);
 
+        // FR-4: fold the researched, cited brand evidence onto the freshly generated draft before it
+        // is reviewed and persisted, so the logo/colors/typeface the biller previews come from their
+        // real site rather than a placeholder. Only unset tokens are filled, so explicit choices win.
+        generated = generated with
+        {
+            Definition = ResearchBrandApplicator.Apply(generated.Definition, input.Biller, research)
+        };
+
         var accessibilityStep = new ObservableOrchestrationStep<DraftGenerationResult, IReadOnlyList<ComplianceFinding>>(
             "accessibility", "Accessibility", "Checking colors, hierarchy, and action clarity",
             (result, _, token) => accessibilityAgent.ReviewAsync(result.Definition, token), input.EventSink, logger);

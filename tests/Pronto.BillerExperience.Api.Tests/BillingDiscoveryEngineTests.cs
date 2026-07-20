@@ -160,7 +160,8 @@ public sealed class BillingDiscoveryEngineTests
         var service = new BillerOnboardingService(repository, generator, new OrchestrationRunner(),
             NullLogger<BillerOnboardingService>.Instance, billingDiscovery: _engine);
         var created = await service.CreateAsync(
-            new CreateBillerRequest("Association", "association", "Other", "10001"), CancellationToken.None);
+            new CreateBillerRequest("Association", "association", "Other", "10001",
+                Brand: new BillerBrand("#174A5B", "#18B4E9")), CancellationToken.None);
 
         var approved = await service.ApproveAsync(
             created.Biller.BillerId, new ApproveExperienceRequest(created.Draft.Revision, "tester"), CancellationToken.None);
