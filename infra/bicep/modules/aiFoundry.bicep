@@ -101,7 +101,10 @@ resource sharedContextMcpConnection 'Microsoft.CognitiveServices/accounts/projec
     metadata: {
       Kind: 'RemoteMCP'
       ServerLabel: 'ic_shared_context'
-      AllowedTools: 'get_goal_context,append_context'
+      // Connection-level superset of the MCP tools any agent may be granted. The per-agent
+      // allowlist is derived from each agent's tools.json at provisioning time
+      // (FoundryAgentReconciler), so an individual agent only ever receives the subset it declares.
+      AllowedTools: 'get_goal_context,append_context,get_biller_configuration,list_invoices,get_invoice,get_payment_quote,verify_payer_account,get_payer_profile,get_payment_history,update_payer_preferences,bind_execution_capability,create_payment_intent,submit_payment,seed_invoices,register_payer'
       ResponsibleAiPolicy: 'agents/RESPONSIBLE_AI.md'
     }
   }

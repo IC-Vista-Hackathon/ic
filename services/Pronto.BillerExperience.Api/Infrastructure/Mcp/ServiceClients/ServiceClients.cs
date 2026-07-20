@@ -39,6 +39,7 @@ public interface IPayerAccountServiceClient
     ValueTask<PayerResponse?> FindByAccountAsync(string billerId, string accountNumber, CancellationToken cancellationToken);
     ValueTask<PayerResponse?> GetAsync(string billerId, string payerId, CancellationToken cancellationToken);
     ValueTask<PayerPreferences> UpdatePreferencesAsync(string billerId, string payerId, UpdatePayerPreferencesRequest request, CancellationToken cancellationToken);
+    ValueTask<PayerResponse> RegisterAsync(RegisterPayerRequest request, CancellationToken cancellationToken);
 }
 
 internal static class ServiceClientJson
@@ -138,6 +139,12 @@ public sealed class HttpPayerAccountServiceClient(HttpClient http) : IPayerAccou
         using var response = await http.PatchAsJsonAsync(path, request, ServiceClientJson.WireOptions, cancellationToken).ConfigureAwait(false);
         return await ServiceClientJson.ReadRequiredAsync<PayerPreferences>(response, cancellationToken).ConfigureAwait(false);
     }
+
+    public async ValueTask<PayerResponse> RegisterAsync(RegisterPayerRequest request, CancellationToken cancellationToken)
+    {
+        using var response = await http.PostAsJsonAsync("payers", request, ServiceClientJson.WireOptions, cancellationToken).ConfigureAwait(false);
+        return await ServiceClientJson.ReadRequiredAsync<PayerResponse>(response, cancellationToken).ConfigureAwait(false);
+    }
 }
 
 /// <summary>Registered when a downstream base URL is not configured; fails fast with a clear reason.</summary>
@@ -156,4 +163,5 @@ public sealed class UnavailableServiceClient(string serviceName)
     ValueTask<PayerResponse?> IPayerAccountServiceClient.FindByAccountAsync(string billerId, string accountNumber, CancellationToken cancellationToken) => throw NotConfigured();
     ValueTask<PayerResponse?> IPayerAccountServiceClient.GetAsync(string billerId, string payerId, CancellationToken cancellationToken) => throw NotConfigured();
     ValueTask<PayerPreferences> IPayerAccountServiceClient.UpdatePreferencesAsync(string billerId, string payerId, UpdatePayerPreferencesRequest request, CancellationToken cancellationToken) => throw NotConfigured();
+    ValueTask<PayerResponse> IPayerAccountServiceClient.RegisterAsync(RegisterPayerRequest request, CancellationToken cancellationToken) => throw NotConfigured();
 }

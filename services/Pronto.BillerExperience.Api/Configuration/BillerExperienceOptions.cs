@@ -27,6 +27,20 @@ public sealed class ComplianceOptions
     public string FoundryAgentId { get; set; } = string.Empty;
     public bool RequireFoundryEvidence { get; set; }
     public string PolicyVersion { get; set; } = "2026-07-15";
+
+    /// <summary>
+    /// Well-known development default for <see cref="AttestationSigningKey"/>. Keeps the local and
+    /// in-memory paths working, but is rejected at startup outside Development so a real deployment can
+    /// never sign attestations with a publicly-known key.
+    /// </summary>
+    public const string DevelopmentAttestationSigningKey = "dev-compliance-attestation-signing-key-change-me";
+
+    /// <summary>
+    /// HMAC key the deterministic compliance suite signs attestations with. The development default
+    /// keeps the local/in-memory path working; outside Development a real secret of at least 32
+    /// characters (and not the development default) is required — enforced at startup.
+    /// </summary>
+    public string AttestationSigningKey { get; set; } = DevelopmentAttestationSigningKey;
 }
 
 public sealed class McpOptions

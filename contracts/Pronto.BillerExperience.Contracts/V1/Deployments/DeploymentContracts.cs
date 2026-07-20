@@ -17,7 +17,8 @@ public sealed record DeploymentStatusResponse(
     Uri? PublishedUrl,
     string? FailureCode,
     string? FailureMessage,
-    DateTimeOffset UpdatedAt);
+    DateTimeOffset UpdatedAt,
+    Compliance.ComplianceAttestation? Attestation = null);
 
 public enum DeploymentState
 {

@@ -1,49 +1,74 @@
 {
+  "_comment": "Payer preferences, registration, and the payer-verification handshake all go through the MCP service router — never raw endpoints. Identity (biller_id, payer_id) is bound to the capability token, never a tool argument: verify_payer_account matches an account number and mints a payer-bound token that the payer-scoped read/update tools require, while register_payer creates a new payer under the biller bound to a write-capable biller capability.",
   "tools": [
     {
       "type": "function",
       "function": {
-        "name": "get_preferences",
-        "description": "Fetch a registered payer's profile and preferences (autopay, paperless, channels, payment_day). Backed by GET /payers/{id}?biller_id=. Only for payers with an account in session; guest payers have none.",
+        "name": "verify_payer_account",
+        "description": "Match an account number to a registered payer for the capability's biller. On success returns a payer-bound capability token that payer-scoped tools (get_payer_profile, update_payer_preferences, create_payment_intent, submit_payment) require. Backed by the MCP router tool verify_payer_account. The payer id is bound server-side and can never be passed as an argument.",
         "parameters": {
           "type": "object",
           "properties": {
-            "biller_id": { "type": "string", "description": "The biller tenant for the current portal session (partition key)." },
-            "payer_id": { "type": "string", "description": "The PayerAccount id in session." }
+            "capability_token": { "type": "string", "description": "Short-lived biller capability issued by IC orchestration for this run." },
+            "account_number": { "type": "string", "description": "The account number the payer supplied to prove ownership." }
           },
-          "required": ["biller_id", "payer_id"]
+          "required": ["capability_token", "account_number"]
         }
       }
     },
     {
       "type": "function",
       "function": {
-        "name": "create_payer_account",
-        "description": "Register a payer account for this biller. Backed by POST /payers. Call ONLY after explicit payer opt-in — registration is offered, never imposed, and guest pay must remain available.",
+        "name": "get_payer_profile",
+        "description": "Read the verified payer's profile and preferences (autopay, paperless, channels, payment_day). Backed by the MCP router tool get_payer_profile. Requires the payer-bound capability token returned by verify_payer_account; guest payers have none.",
         "parameters": {
           "type": "object",
           "properties": {
-            "biller_id": { "type": "string", "description": "The biller tenant for the current portal session (partition key)." },
-            "name": { "type": "string" },
-            "email": { "type": "string" },
-            "phone": { "type": "string" },
+            "capability_token": { "type": "string", "description": "Payer-bound capability returned by verify_payer_account." }
+          },
+          "required": ["capability_token"]
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "update_payer_preferences",
+        "description": "Update the verified payer's notification/autopay preferences. Backed by the MCP router tool update_payer_preferences. Requires a write-capable, payer-bound capability. Only supplied fields change; omit a field to leave it unchanged.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "capability_token": { "type": "string", "description": "Write-capable payer-bound capability returned by verify_payer_account." },
+            "autopay": { "type": ["boolean", "null"], "description": "Enable/disable autopay. Omit or null to leave unchanged." },
+            "paperless": { "type": ["boolean", "null"], "description": "Enable/disable paperless billing. Omit or null to leave unchanged." },
+            "payment_day": { "type": ["integer", "null"], "description": "Day of month (1-28) to run autopay. Omit or null to leave unchanged." }
+          },
+          "required": ["capability_token"]
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "register_payer",
+        "description": "Register a payer account for the capability's biller. Backed by the MCP router tool register_payer. Call ONLY after explicit payer opt-in — registration is offered, never imposed, and guest pay must remain available. The biller tenant is bound to the capability token; you never pass biller_id.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "capability_token": { "type": "string", "description": "Write-capable biller capability issued by IC orchestration for this run." },
+            "name": { "type": "string", "description": "The payer's full name." },
+            "email": { "type": "string", "description": "The payer's email address." },
+            "phone": { "type": ["string", "null"], "description": "The payer's phone number. Omit or null if not provided." },
             "account_numbers": {
               "type": "array",
               "items": { "type": "string" },
               "description": "External biller account numbers to link to this payer."
             },
-            "preferences": {
-              "type": "object",
-              "properties": {
-                "autopay": { "type": "boolean" },
-                "paperless": { "type": "boolean" },
-                "channels": { "type": "array", "items": { "type": "string", "enum": ["email", "sms"] } },
-                "payment_day": { "type": "integer", "description": "Preferred day of month for scheduled payments." }
-              },
-              "additionalProperties": false
-            }
+            "autopay": { "type": ["boolean", "null"], "description": "Enable autopay. Omit or null to leave at registration defaults." },
+            "paperless": { "type": ["boolean", "null"], "description": "Enable paperless billing. Omit or null to leave at registration defaults." },
+            "payment_day": { "type": ["integer", "null"], "description": "Preferred day of month (1-28) for autopay. Omit or null to leave unset." }
           },
-          "required": ["biller_id"]
+          "required": ["capability_token", "name", "email", "account_numbers"]
         }
       }
     }

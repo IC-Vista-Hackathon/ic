@@ -1,34 +1,70 @@
 {
+  "_comment": "The Execution Agent is the only agent on the payment path. It goes through the MCP service router, never raw endpoints. For a registered payer, Policy hands over the payer-bound capability from verify_payer_account; Execution first calls bind_execution_capability to re-issue it as an Execution-bound capability (the server-side Execution-Agent-only rule requires this), then create_payment_intent (no money moves) and submit_payment (after explicit payer confirmation). For a guest with no payer account, Execution uses its own biller capability directly — no verification or rebind — and the payment is recorded with no payer account. Identity (biller_id, payer_id) is bound to the capability token, never a tool argument.",
   "tools": [
     {
       "type": "function",
       "function": {
-        "name": "pay_invoice",
-        "description": "Pay an invoice via the Payment Service (mock auth). Backed by POST /payments. CALL ONLY after an explicit prior {confirm: true} from the client for the pending plan — approval from the Policy Agent is NOT confirmation. Returns payment_id, confirmation code, amount_cents, fee_cents, and receipt_message.",
+        "name": "bind_execution_capability",
+        "description": "Re-issue the payer-bound capability handed over from Policy as an Execution-bound capability, so create_payment_intent/submit_payment pass the server-side Execution-Agent-only check for a registered payer. Backed by the MCP router tool bind_execution_capability. Preserves the biller, run, payer binding, and write scope; only the agent id is rebound. No money moves. Guest pay does not use this — a guest uses the biller capability directly.",
         "parameters": {
           "type": "object",
           "properties": {
-            "biller_id": { "type": "string", "description": "The biller tenant for the current portal session (partition key)." },
-            "invoice_id": { "type": "string", "description": "The invoice to pay, from the confirmed plan." },
+            "capability_token": { "type": "string", "description": "Write-capable payer-bound capability returned by verify_payer_account and handed over by Policy." }
+          },
+          "required": ["capability_token"]
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "create_payment_intent",
+        "description": "Quote a payment for the verified payer and return a confirmation-required intent (carrying an idempotency key) for the payer to approve. Backed by the MCP router tool create_payment_intent. Requires a write-capable, payer-bound capability. NO money moves here — present the returned total/fees to the payer and obtain explicit confirmation before calling submit_payment.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "capability_token": { "type": "string", "description": "Write-capable payer-bound capability returned by verify_payer_account." },
+            "invoice_id": { "type": "string", "description": "The invoice to pay, from the payment plan." },
             "method": {
               "type": "string",
               "enum": ["card", "ach", "applepay", "googlepay", "paypal"],
-              "description": "Payment method from the confirmed plan; must be one of the biller's configured payment_methods."
-            },
-            "payer_account_id": {
-              "type": ["string", "null"],
-              "description": "The PayerAccount id if the payer has an account in session; null for guest pay."
+              "description": "Payment method from the plan; must be one of the biller's configured payment methods."
             },
             "scheduled_for": {
               "type": ["string", "null"],
-              "description": "ISO date (YYYY-MM-DD) to schedule the payment for, from the confirmed plan's 'when'; null to pay immediately. Future-dated plans MUST pass this — omitting it executes the payment now."
-            },
-            "idempotency_key": {
-              "type": "string",
-              "description": "Stable unique key for this confirmed payment attempt. Reuse the same key when retrying after a timeout or transient failure."
+              "description": "ISO date (YYYY-MM-DD) to schedule the payment for, from the plan's 'when'; null to pay immediately."
             }
           },
-          "required": ["biller_id", "invoice_id", "method", "payer_account_id", "scheduled_for", "idempotency_key"]
+          "required": ["capability_token", "invoice_id", "method", "scheduled_for"]
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "submit_payment",
+        "description": "Submit an approved payment intent, moving money via the idempotent Payment Service. Backed by the MCP router tool submit_payment. CALL ONLY after an explicit prior {confirm: true} from the client for the pending plan — approval from the Policy Agent is NOT confirmation. Pass the intent_id from create_payment_intent as the idempotency key; resubmitting the same intent resolves to the original payment (no double charge). Returns payment_id, confirmation code, amount_cents, fee_cents, and receipt_message.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "capability_token": { "type": "string", "description": "Write-capable payer-bound capability returned by verify_payer_account." },
+            "intent_id": { "type": "string", "description": "The intent id returned by create_payment_intent; used as the idempotency key." },
+            "invoice_id": { "type": "string", "description": "The invoice id from the approved intent." },
+            "method": {
+              "type": "string",
+              "enum": ["card", "ach", "applepay", "googlepay", "paypal"],
+              "description": "The payment method from the approved intent."
+            },
+            "payer_confirmed": {
+              "type": "boolean",
+              "description": "Must be true: the payer has explicitly confirmed this payment. The router refuses to submit otherwise."
+            },
+            "scheduled_for": {
+              "type": ["string", "null"],
+              "description": "ISO date (YYYY-MM-DD) from the approved intent; null to pay immediately."
+            }
+          },
+          "required": ["capability_token", "intent_id", "invoice_id", "method", "payer_confirmed", "scheduled_for"]
         }
       }
     }
