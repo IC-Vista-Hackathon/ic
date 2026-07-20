@@ -11,6 +11,7 @@ using Pronto.BillerExperience.Api.Application;
 using Pronto.BillerExperience.Api.Application.Agents;
 using Pronto.BillerExperience.Api.Application.Preview;
 using Pronto.BillerExperience.Api.Application.Compliance;
+using Pronto.BillerExperience.Api.Application.Compliance.Checkers;
 using Pronto.BillerExperience.Api.Configuration;
 using Pronto.BillerExperience.Api.Infrastructure;
 using Pronto.BillerExperience.Api.Infrastructure.AI;
@@ -65,6 +66,21 @@ if (options.Mcp.Enabled)
     {
         throw new InvalidOperationException(
             "BillerExperience:Mcp:PublicEndpoint must be an absolute HTTP or HTTPS URL.");
+    }
+}
+
+if (!builder.Environment.IsDevelopment())
+{
+    // Outside Development the attestation signing key must be a real, sufficiently strong secret —
+    // never the publicly-known development default — so signed attestations remain tamper-evident.
+    if (options.Compliance.AttestationSigningKey.Length < 32 ||
+        string.Equals(
+            options.Compliance.AttestationSigningKey,
+            ComplianceOptions.DevelopmentAttestationSigningKey,
+            StringComparison.Ordinal))
+    {
+        throw new InvalidOperationException(
+            "BillerExperience:Compliance:AttestationSigningKey must be set to a non-default secret of at least 32 characters outside Development.");
     }
 }
 
@@ -153,6 +169,17 @@ builder.Services.AddSingleton<IComplianceReviewService>(services => new Complian
     services.GetRequiredService<Microsoft.Extensions.Options.IOptions<BillerExperienceOptions>>(),
     services.GetRequiredService<ILogger<ComplianceReviewService>>(),
     services.GetService<IComplianceKnowledgeReviewer>()));
+
+// Deterministic compliance checker suite + signed attestation: this is the certifying gate for
+// publish (the LLM reviewer above stays advisory).
+builder.Services.AddSingleton(JurisdictionPaymentMethodPolicy.Default);
+builder.Services.AddSingleton<IComplianceChecker, FeeDisclosureChecker>();
+builder.Services.AddSingleton<IComplianceChecker, PaymentMethodJurisdictionChecker>();
+builder.Services.AddSingleton<IComplianceChecker, LegalLinksChecker>();
+builder.Services.AddSingleton<IComplianceChecker, ColorContrastChecker>();
+builder.Services.AddSingleton<IComplianceChecker, TelemetryPiiChecker>();
+builder.Services.AddSingleton(new ComplianceAttestationSigner(options.Compliance.AttestationSigningKey));
+builder.Services.AddSingleton<IComplianceAttestationService, ComplianceAttestationService>();
 builder.Services.AddSingleton<ISeedInvoiceGenerator, DeterministicSeedInvoiceGenerator>();
 if (Uri.TryCreate(options.SupportingServices.InvoiceBaseUrl, UriKind.Absolute, out var invoiceBaseUri))
 {
@@ -288,6 +315,16 @@ builder.Services.AddControllers().AddJsonOptions(json =>
     json.JsonSerializerOptions.PropertyNamingPolicy = JsonNamingPolicy.SnakeCaseLower;
     json.JsonSerializerOptions.DictionaryKeyPolicy = JsonNamingPolicy.SnakeCaseLower;
     json.JsonSerializerOptions.Converters.Add(
+        new JsonStringEnumConverter(JsonNamingPolicy.SnakeCaseLower, allowIntegerValues: false));
+});
+// Keep the raw HTTP JSON writer (used by the problem-details error path in GlobalExceptionHandler)
+// on the same snake_case wire contract as the controllers, so surfaced compliance findings expose
+// field_path/requires_review consistently to the Studio and functional tests.
+builder.Services.ConfigureHttpJsonOptions(json =>
+{
+    json.SerializerOptions.PropertyNamingPolicy = JsonNamingPolicy.SnakeCaseLower;
+    json.SerializerOptions.DictionaryKeyPolicy = JsonNamingPolicy.SnakeCaseLower;
+    json.SerializerOptions.Converters.Add(
         new JsonStringEnumConverter(JsonNamingPolicy.SnakeCaseLower, allowIntegerValues: false));
 });
 builder.Services.AddProblemDetails();

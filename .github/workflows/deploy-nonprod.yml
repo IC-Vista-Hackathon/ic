@@ -158,6 +158,17 @@ jobs:
       - name: Deploy
         run: kubectl apply -k "${OVERLAY}"
 
+      # The Biller Experience API fails closed at startup unless a real, non-default compliance
+      # attestation signing key is configured (see base/biller-experience-api/deployment.yaml).
+      # Generate it once per namespace and persist it as a Secret so it stays stable across
+      # deploys; `apply -k` creates the namespace, so this runs after Deploy. Existing secrets are
+      # left untouched, keeping previously-signed attestations verifiable.
+      - name: Ensure compliance attestation signing key
+        run: |
+          kubectl -n ic-nonprod get secret ic-compliance-attestation >/dev/null 2>&1 || \
+            kubectl -n ic-nonprod create secret generic ic-compliance-attestation \
+              --from-literal=signing-key="$(openssl rand -hex 32)"
+
       # Wait for the static frontends to finish rolling out before smoke-testing them. The APIs
       # get their own rollout waits below (after the telemetry env is set); the frontends need an
       # explicit wait here because the browser smoke otherwise races the rollout and can hit the

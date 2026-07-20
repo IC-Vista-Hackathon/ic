@@ -31,6 +31,15 @@ spec:
               value: http://ic-payment-api:8080/
             - name: BillerExperience__SupportingServices__PayerAccountBaseUrl
               value: http://ic-payer-account-api:8080/
+            # Signed compliance attestations require a real, non-default HMAC key outside
+            # Development (enforced at startup). The key is a per-namespace secret generated
+            # once by the deploy workflow (never committed), so it stays stable across deploys
+            # — attestations persisted with a revision remain verifiable later.
+            - name: BillerExperience__Compliance__AttestationSigningKey
+              valueFrom:
+                secretKeyRef:
+                  name: ic-compliance-attestation
+                  key: signing-key
           readinessProbe:
             httpGet:
               path: /health/ready

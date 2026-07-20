@@ -1,6 +1,7 @@
 using Pronto.BillerExperience.Contracts.V1.Billers;
 using Pronto.BillerExperience.Contracts.V1.AgentContext;
 using Pronto.BillerExperience.Contracts.V1.Billing;
+using Pronto.BillerExperience.Contracts.V1.Compliance;
 using Pronto.BillerExperience.Contracts.V1.Experiences;
 using Pronto.BillerExperience.Contracts.V1.Onboarding;
 using Newtonsoft.Json;
@@ -61,6 +62,7 @@ public sealed record DeploymentRecord(
     [property: JsonProperty("claimed_at")] DateTimeOffset? ClaimedAt = null,
     [property: JsonProperty("lease_expires_at")] DateTimeOffset? LeaseExpiresAt = null,
     [property: JsonProperty("attempt")] int Attempt = 0,
+    [property: JsonProperty("attestation")] ComplianceAttestation? Attestation = null,
     [property: JsonIgnore] string? ETag = null);
 
 public sealed record AgentContextRecord(
