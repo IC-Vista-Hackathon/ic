@@ -51,7 +51,7 @@ internal static class PayerChatResponder
         {
             var lines = quotes
                 .OrderBy(quote => quote.TotalCents)
-                .Select(quote => $"{MethodLabel(quote.Method)} is a {Money(quote.FeeCents)} fee ({Money(quote.TotalCents)} total)");
+                .Select(quote => $"{MethodLabel(quote.Method)} has {FeePhrase(quote, bill.AmountCents)} ({Money(quote.TotalCents)} total)");
             return $"On this {Money(bill.AmountCents)} bill: {string.Join("; ", lines)}. "
                 + $"I recommend {MethodLabel(plan.Method)} — the lowest total at {Money(plan.TotalCents)}.";
         }
@@ -65,13 +65,13 @@ internal static class PayerChatResponder
 
         if (MentionsAny(text, "card", "credit", "debit"))
         {
-            return DescribeMethod("card", plan, quotes)
+            return DescribeMethod("card", plan, quotes, bill.AmountCents)
                 ?? "This biller doesn't accept card payments for this bill.";
         }
 
         if (MentionsAny(text, "ach", "bank", "checking", "account", "transfer"))
         {
-            return DescribeMethod("ach", plan, quotes)
+            return DescribeMethod("ach", plan, quotes, bill.AmountCents)
                 ?? "This biller doesn't accept bank-account (ACH) payments for this bill.";
         }
 
@@ -101,7 +101,8 @@ internal static class PayerChatResponder
     private static string? DescribeMethod(
         string method,
         PaymentPlan plan,
-        IReadOnlyList<PaymentQuoteResponse> quotes)
+        IReadOnlyList<PaymentQuoteResponse> quotes,
+        int amountCents)
     {
         var quote = quotes.FirstOrDefault(item =>
             string.Equals(item.Method, method, StringComparison.OrdinalIgnoreCase));
@@ -111,7 +112,7 @@ internal static class PayerChatResponder
         }
 
         var label = MethodLabel(method);
-        var detail = $"{label} is a {Money(quote.FeeCents)} fee, {Money(quote.TotalCents)} total.";
+        var detail = $"{label} has {FeePhrase(quote, amountCents)}, {Money(quote.TotalCents)} total.";
         if (string.Equals(plan.Method, method, StringComparison.OrdinalIgnoreCase))
         {
             return $"{detail} That's the one I recommend — it's the lowest total.";
@@ -144,6 +145,14 @@ internal static class PayerChatResponder
 
         var scheduledFor = plan.ScheduledFor?.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture);
         return new PayerChatAction(PayerChatAction.ConfirmPayment, plan.Method, plan.TotalCents, scheduledFor);
+    }
+
+    // The fee the payer actually pays is total − bill amount (zero when the biller absorbs it), not
+    // the quote's raw FeeCents, which is reported for display even when the biller covers it.
+    private static string FeePhrase(PaymentQuoteResponse quote, int amountCents)
+    {
+        var payerFeeCents = quote.TotalCents - amountCents;
+        return payerFeeCents <= 0 ? "no added fee" : $"a {Money(payerFeeCents)} fee";
     }
 
     private static bool IsScheduleIntent(string text) =>

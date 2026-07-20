@@ -157,6 +157,31 @@ describe('payment assistant surface', () => {
     expect(pay.mock.calls[0][0].method).toBe('ach');
   });
 
+  it('in-chat confirm pays the full balance even when a partial plan is selected', async () => {
+    // A biller that allows installments unlocks the partial/installment journey below the assistant.
+    const partialConfig = { ...config, billing: { categories: [{ id: 'c1', display_name: 'Water', cadence_label: 'Monthly', state_summary: 'Active', payment_mode: 'installments_allowed', maximum_installments: 4 }] } };
+    vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify(partialConfig), { status: 200 })));
+    chat.mockResolvedValue({ reply: 'You can confirm right here.', method: 'ach', scheduledFor: '2026-08-01', feeCents: 150, totalCents: 5150, rationale: 'ACH is cheaper.', action: { kind: 'confirm_payment', method: 'ach', totalCents: 5150 } });
+    const { App } = await import('./App');
+    const user = userEvent.setup();
+    render(<App />);
+    await user.click(await screen.findByTestId('lookup-submit'));
+    await screen.findByTestId('assistant-transcript');
+
+    // Payer selects a partial plan and enters a smaller amount, then confirms the assistant's
+    // full-balance total from chat — the charge must be the full balance, not the partial amount.
+    await user.click(await screen.findByTestId('plan-mode-partial'));
+    await user.type(await screen.findByTestId('partial-amount-input'), '10.00');
+    await user.type(await screen.findByTestId('assistant-input'), "let's pay it now");
+    await user.click(await screen.findByTestId('assistant-send'));
+    await user.click(await screen.findByTestId('assistant-confirm'));
+
+    await waitFor(() => expect(pay).toHaveBeenCalledTimes(1));
+    const request = pay.mock.calls[0][0];
+    expect(request.amountCents).toBeUndefined();
+    expect(request.installmentCount).toBeUndefined();
+  });
+
   it('shows no confirm control for a plain question', async () => {
     const { App } = await import('./App');
     const user = userEvent.setup();

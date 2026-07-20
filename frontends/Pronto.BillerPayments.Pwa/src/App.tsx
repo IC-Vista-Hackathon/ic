@@ -156,12 +156,14 @@ export function App() {
   }
   // The chat's "Confirm & pay" control: the payer's explicit confirmation. It selects the offered
   // method and submits through the same guarded single-invoice pay() path, then lands on the receipt.
+  // The confirm button advertises the assistant's full-balance total, so it always pays in full —
+  // it never inherits a partial/installment plan the payer may have selected below.
   async function confirmFromChat(action: AssistantAction) {
     if (!isPaymentMethod(action.method)) return;
     selectMethod(action.method);
     trackEvent('pwa.assistant_pay_confirmed', { method: action.method });
     setChatAction(undefined);
-    await paySingle(action.method);
+    await paySingle(action.method, true);
   }
   function applyRecommendation() { if (recommendation && isPaymentMethod(recommendation.method) && acceptedMethods.includes(recommendation.method)) selectMethod(recommendation.method); }
 
@@ -268,7 +270,7 @@ export function App() {
 
   async function pay() { return multi ? payBatch() : paySingle(); }
 
-  async function paySingle(methodOverride?: PaymentMethod) {
+  async function paySingle(methodOverride?: PaymentMethod, forceFullPayment = false) {
     if (!invoice || !provider || paymentInFlight.current) return;
     const payMethod = methodOverride ?? method;
     paymentInFlight.current = true;
@@ -276,7 +278,7 @@ export function App() {
     setError('');
     trackEvent('pwa.payment_submitted', { method: payMethod, scheduled: schedulesPayment, autopay_opt_in: autoPay, paperless_opt_in: paperless });
     try {
-      const completed = await provider.pay(planRequestFor(invoice, payMethod));
+      const completed = await provider.pay(forceFullPayment ? paymentRequestFor(invoice, payMethod) : planRequestFor(invoice, payMethod));
       paymentKeys.current.delete(invoice.id);
       setReceipt(completed);
       setStep('complete');

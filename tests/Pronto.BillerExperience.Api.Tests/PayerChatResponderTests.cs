@@ -45,6 +45,25 @@ public sealed class PayerChatResponderTests
     }
 
     [Fact]
+    public void FeeQuestionReportsNoAddedFeeWhenTheBillerAbsorbsIt()
+    {
+        // Absorbed fee: the quote still reports FeeCents for display, but TotalCents == AmountCents,
+        // so the payer pays nothing extra. The reply must not claim a fee the payer doesn't pay.
+        var absorbedPlan = new PaymentPlan("ach", new DateOnly(2026, 7, 29), 0, 8420, "No added fee on this $84.20 bill.");
+        IReadOnlyList<PaymentQuoteResponse> absorbedQuotes =
+        [
+            new("b_1", "i_1", "ach", 8420, 150, 8420),
+            new("b_1", "i_1", "card", 8420, 211, 8420),
+        ];
+
+        var reply = PayerChatResponder.Reply("what are the fees?", Bill, absorbedPlan, absorbedQuotes);
+
+        Assert.Contains("no added fee", reply);
+        Assert.DoesNotContain("$1.50", reply);
+        Assert.DoesNotContain("$2.11", reply);
+    }
+
+    [Fact]
     public void TimingQuestionExplainsTheSchedule()
     {
         var reply = PayerChatResponder.Reply("when will it be paid?", Bill, Plan, Quotes);
