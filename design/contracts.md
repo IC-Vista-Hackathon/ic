@@ -99,10 +99,13 @@ Execution only proceeds after the client posts back `{confirm: true}` for a pend
 | `update_config(patch)` | PATCH config | Onboarding, Research, Aesthetics agents; rejects patches touching `compliance` — that field is server-written only, by the publish gate |
 | `research_website(url)` | crawler | Biller Research Agent |
 | `run_compliance_check(config)` | rules engine | Compliance Agent; publish gate |
-| `get_invoices(biller_id, account_number)` | Invoice Service | Bill Intelligence Agent |
-| `get_preferences(biller_id, payer_id)` | Payer Account Service | Policy Agent |
-| `create_payer_account(biller_id, ...)` | Payer Account Service | Policy Agent (payer opt-in) |
-| `pay_invoice(biller_id, invoice_id, method, payer_account_id, scheduled_for)` | Payment Service | Execution Agent only, post-confirmation; `scheduled_for` is an ISO date or explicit `null` for immediate payment |
+| `list_invoices(capability_token, account_number, include_closed)` / `get_invoice(capability_token, invoice_id)` | MCP router → Invoice Service | Bill Intelligence Agent; biller bound to the capability token, never an argument |
+| `get_payment_quote(capability_token, invoice_id, method)` | MCP router → Payment Service | Bill Intelligence Agent; read-only fee quote for the payment plan, no money moves |
+| `verify_payer_account(capability_token, account_number)` | MCP router → Payer Account Service | Policy Agent; account-number handshake that returns the payer-bound capability the payer-scoped tools require |
+| `get_payer_profile(capability_token)` / `update_payer_preferences(capability_token, ...)` | MCP router → Payer Account Service | Policy Agent; require a payer-bound capability (update also write-capable) |
+| `register_payer(capability_token, name, email, account_numbers, ...)` | MCP router → Payer Account Service | Policy Agent (payer opt-in); write-capable biller capability, biller bound to the token |
+| `bind_execution_capability(capability_token)` | MCP router (server-side re-issue) | Execution Agent; at the Policy→Execution handoff, re-issues the payer-bound capability from `verify_payer_account` as an Execution-bound one (preserves biller/run/payer/write, rebinds only the agent id) so the payment tools pass the Execution-Agent-only check. No money moves |
+| `create_payment_intent(capability_token, invoice_id, method, scheduled_for)` / `submit_payment(capability_token, intent_id, invoice_id, method, payer_confirmed, scheduled_for)` | MCP router → Payment Service | Execution Agent only; intent moves no money, `submit_payment` requires `payer_confirmed` post-confirmation, `intent_id` is the idempotency key; `scheduled_for` is an ISO date or explicit `null` for immediate payment. Both require a write-capable capability; an Execution-bound payer capability pays as that payer, a biller capability pays as a guest (no payer account) |
 | `send_notification(biller_id, channel, template, to, payload, payer_id?)` | Notification Service | stretch |
 
 ## Notification Service (stretch)

@@ -39,9 +39,11 @@ public sealed class ServiceToolRegistry
         public const string GetPayerProfile = "get_payer_profile";
         public const string GetPaymentHistory = "get_payment_history";
         public const string UpdatePayerPreferences = "update_payer_preferences";
+        public const string BindExecutionCapability = "bind_execution_capability";
         public const string CreatePaymentIntent = "create_payment_intent";
         public const string SubmitPayment = "submit_payment";
         public const string SeedInvoices = "seed_invoices";
+        public const string RegisterPayer = "register_payer";
     }
 
     private static readonly IReadOnlyList<ServiceToolDescriptor> Descriptors =
@@ -70,15 +72,21 @@ public sealed class ServiceToolRegistry
         new(ToolNames.UpdatePayerPreferences, "Update payer preferences", ReadOnly: false, Idempotent: true,
             ToolScope.Payer, WriteCapabilityRequired: true,
             "Updates the verified payer's notification/autopay preferences. Requires a write-capable, payer-bound capability."),
+        new(ToolNames.BindExecutionCapability, "Bind execution capability", ReadOnly: true, Idempotent: true,
+            ToolScope.Payer, WriteCapabilityRequired: true,
+            "Re-issues a verified, write-capable payer capability as an Execution-bound capability at the Policy->Execution handoff. Preserves biller/run/payer scope and write; only the agent id is rebound to the Execution Agent. No money moves."),
         new(ToolNames.CreatePaymentIntent, "Create payment intent", ReadOnly: true, Idempotent: false,
-            ToolScope.Payer, WriteCapabilityRequired: true,
-            "Quotes a payment and returns a confirmation-required intent (with an idempotency key) for the payer to approve. Requires a write-capable, payer-bound capability. No money moves."),
+            ToolScope.Biller, WriteCapabilityRequired: true,
+            "Quotes a payment and returns a confirmation-required intent (with an idempotency key) to approve. Requires a write-capable capability; binds the payer when the capability carries one, otherwise a biller-scoped guest intent. No money moves."),
         new(ToolNames.SubmitPayment, "Submit payment", ReadOnly: false, Idempotent: true,
-            ToolScope.Payer, WriteCapabilityRequired: true,
-            "Submits a confirmed payment intent (money moves) via the idempotent Payment Service. Execution-Agent-only and requires explicit payer confirmation plus a write-capable, payer-bound capability."),
+            ToolScope.Biller, WriteCapabilityRequired: true,
+            "Submits a confirmed payment intent (money moves) via the idempotent Payment Service. Execution-Agent-only and requires explicit payer confirmation plus a write-capable capability. Pays as the bound payer, or as a biller-scoped guest when the capability carries no payer."),
         new(ToolNames.SeedInvoices, "Seed invoices", ReadOnly: false, Idempotent: false,
             ToolScope.Biller, WriteCapabilityRequired: true,
             "Seeds fake demo invoices for the biller. Nonprod/demo-gated; requires a write-capable biller capability."),
+        new(ToolNames.RegisterPayer, "Register payer", ReadOnly: false, Idempotent: false,
+            ToolScope.Biller, WriteCapabilityRequired: true,
+            "Registers a payer account for the biller after explicit payer opt-in. Requires a write-capable biller capability; the biller is bound from the capability, never an argument."),
     ];
 
     public IReadOnlyList<ServiceToolDescriptor> All => Descriptors;

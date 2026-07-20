@@ -295,6 +295,13 @@ public sealed class McpServiceRouterTests
             UpdatePayerPreferencesRequest request,
             CancellationToken cancellationToken) =>
             ValueTask.FromResult(Payer?.Preferences ?? new PayerPreferences(false, false, [], null));
+
+        public ValueTask<PayerResponse> RegisterAsync(
+            RegisterPayerRequest request, CancellationToken cancellationToken) =>
+            ValueTask.FromResult(new PayerResponse(
+                "payer-new", request.BillerId, request.Name, request.Email, request.Phone,
+                request.AccountNumbers,
+                request.Preferences ?? new PayerPreferences(false, false, [], null)));
     }
 
     private sealed class UnusedDraftGenerator : IExperienceDraftGenerator

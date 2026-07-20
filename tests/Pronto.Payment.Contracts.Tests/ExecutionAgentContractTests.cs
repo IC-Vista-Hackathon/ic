@@ -13,19 +13,16 @@ public sealed class ExecutionAgentContractTests
             Path.Join(root, "agents", "execution", "instructions.md"));
         using var tools = JsonDocument.Parse(
             File.ReadAllText(Path.Join(root, "agents", "execution", "tools.json")));
-        var payInvoice = tools.RootElement
-            .GetProperty("tools")
-            .EnumerateArray()
-            .Single(tool =>
-                tool.GetProperty("function").GetProperty("name").GetString() == "pay_invoice");
-
-        foreach (var required in payInvoice
-                     .GetProperty("function")
-                     .GetProperty("parameters")
-                     .GetProperty("required")
-                     .EnumerateArray())
+        foreach (var tool in tools.RootElement.GetProperty("tools").EnumerateArray())
         {
-            Assert.Contains(required.GetString()!, instructions, StringComparison.Ordinal);
+            foreach (var required in tool
+                         .GetProperty("function")
+                         .GetProperty("parameters")
+                         .GetProperty("required")
+                         .EnumerateArray())
+            {
+                Assert.Contains(required.GetString()!, instructions, StringComparison.Ordinal);
+            }
         }
     }
 

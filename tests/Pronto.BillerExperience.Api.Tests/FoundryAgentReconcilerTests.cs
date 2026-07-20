@@ -44,6 +44,45 @@ public sealed class FoundryAgentReconcilerTests
     }
 
     [Fact]
+    public void PerAgentAllowedToolsExposeDeclaredRouterToolsPlusSharedContext()
+    {
+        var desired = FoundryAgentReconciler.LoadDesired(
+            new AgentProvisioningOptions { DefinitionsPath = "agents" },
+            FindRepositoryRoot());
+
+        // Every provisioned agent keeps the shared-context tools.
+        Assert.All(desired, agent =>
+        {
+            Assert.Contains("get_goal_context", agent.AllowedTools);
+            Assert.Contains("append_context", agent.AllowedTools);
+        });
+
+        // Payer-side agents additionally receive exactly the router tools they declare.
+        var billIntelligence = Assert.Single(desired, item => item.Name == "bill-intelligence");
+        Assert.Equal(
+            ["get_goal_context", "append_context", "list_invoices", "get_invoice", "get_payment_quote"],
+            billIntelligence.AllowedTools);
+
+        var policy = Assert.Single(desired, item => item.Name == "policy");
+        Assert.Equal(
+            ["get_goal_context", "append_context", "verify_payer_account", "get_payer_profile", "update_payer_preferences", "register_payer"],
+            policy.AllowedTools);
+
+        var execution = Assert.Single(desired, item => item.Name == "execution");
+        Assert.Equal(
+            ["get_goal_context", "append_context", "bind_execution_capability", "create_payment_intent", "submit_payment"],
+            execution.AllowedTools);
+
+        // A tool-less reasoning stage gets only the shared-context tools.
+        var planning = Assert.Single(desired, item => item.Name == "financial-planning");
+        Assert.Equal(["get_goal_context", "append_context"], planning.AllowedTools);
+
+        // Non-MCP declarations (update_config, research_website) are never granted as MCP tools.
+        var research = Assert.Single(desired, item => item.Name == "biller-research");
+        Assert.Equal(["get_goal_context", "append_context"], research.AllowedTools);
+    }
+
+    [Fact]
     public async Task ReconcilesAgentWhoseCapabilityMetadataDrifted()
     {
         var root = FindRepositoryRoot();
