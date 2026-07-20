@@ -57,6 +57,8 @@ describe('unbranded config (evidence-gated branding not yet chosen)', () => {
     expect(screen.queryByText(/configuration is incomplete/i)).toBeNull();
     // Empty colors must not override the skin's default brand token.
     expect(document.documentElement.style.getPropertyValue('--brand')).toBe('');
+    // Header must still paint a background (falls back to the brand token) so its white title stays visible.
+    expect(screen.getByTestId('app-header').style.background).toBe('var(--brand)');
   });
 });
 
