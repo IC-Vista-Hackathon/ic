@@ -27,6 +27,9 @@ public sealed class FoundryAgentReconcilerTests
         Assert.Contains(gateway.Created, item => item.Name == "biller-research" && item.Capability == "biller_research");
         Assert.Contains(gateway.Created, item => item.Name == "biller-brand-research" && item.Capability == "biller_research");
         Assert.Contains(gateway.Created, item => item.Name == "biller-payment-policy-research" && item.Capability == "biller_research");
+        Assert.True(Assert.Single(gateway.Created, item => item.Name == "research-coordinator").RuntimeEnabled);
+        Assert.False(Assert.Single(gateway.Created, item => item.Name == "aesthetics-accessibility").RuntimeEnabled);
+        Assert.False(Assert.Single(gateway.Created, item => item.Name == "bill-intelligence").RuntimeEnabled);
         Assert.All(gateway.Created, item => Assert.Equal(64, item.Fingerprint.Length));
     }
 
@@ -89,7 +92,7 @@ public sealed class FoundryAgentReconcilerTests
         var options = new AgentProvisioningOptions { Enabled = true, DefinitionsPath = "agents" };
         var desired = Assert.Single(FoundryAgentReconciler.LoadDesired(options, root), item => item.Name == "biller-payment-policy-research");
         var gateway = new RecordingGateway(true,
-            new ExistingFoundryAgent(desired.Name, desired.Fingerprint, true, "biller_payment_policy_research"));
+            new ExistingFoundryAgent(desired.Name, desired.Fingerprint, true, "biller_payment_policy_research", true));
         var configuration = new BillerExperienceOptions { AgentProvisioning = options };
         var reconciler = new FoundryAgentReconciler(gateway, Options.Create(configuration), new TestEnvironment(root), NullLogger<FoundryAgentReconciler>.Instance);
 
@@ -126,7 +129,8 @@ public sealed class FoundryAgentReconcilerTests
         public List<DesiredFoundryAgent> Created { get; } = [];
         public Task<IReadOnlyList<ExistingFoundryAgent>> ListAsync(CancellationToken cancellationToken)
         {
-            var current = Created.Select(item => new ExistingFoundryAgent(item.Name, item.Fingerprint, attachMcp, item.Capability)).ToList();
+            var current = Created.Select(item => new ExistingFoundryAgent(
+                item.Name, item.Fingerprint, attachMcp, item.Capability, item.RuntimeEnabled)).ToList();
             if (initial is not null && current.All(item => item.Name != initial.Name)) current.Add(initial);
             return Task.FromResult<IReadOnlyList<ExistingFoundryAgent>>(current);
         }

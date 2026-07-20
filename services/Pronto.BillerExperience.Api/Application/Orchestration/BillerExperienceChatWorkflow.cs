@@ -138,9 +138,18 @@ internal sealed partial class BillerExperienceChatWorkflow(
                 BillerName: biller.Name,
                 BillType: biller.BillType,
                 PostalCode: biller.PostalCode),
-            new ResearchExecutionContext(biller.Id, context.RunId, eventSink),
+            new ResearchExecutionContext(
+                BillerId: biller.Id,
+                ExecutionId: context.RunId,
+                ContextRunId: RequireContextRunId(context),
+                ActivitySink: eventSink),
             cancellationToken));
     }
+
+    private static string RequireContextRunId(OrchestrationContext context) =>
+        !string.IsNullOrWhiteSpace(context.SessionId)
+            ? context.SessionId
+            : throw new InvalidOperationException("Biller research requires a persisted onboarding session id.");
 
     [LoggerMessage(1950, LogLevel.Error,
         "Optional biller research failed for biller {BillerId} with {ErrorCode}; retryable {Retryable}, trace {TraceId}; continuing degraded")]

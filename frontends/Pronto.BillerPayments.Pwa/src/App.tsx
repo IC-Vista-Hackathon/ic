@@ -64,7 +64,10 @@ export function App() {
     // Preview config is served from the draft (no published manifest); only wire the manifest for live slugs.
     const manifest = document.querySelector<HTMLLinkElement>('#experience-manifest'); if (manifest && !preview) manifest.href = `/api/public/experiences/${encodeURIComponent(slug)}/manifest.webmanifest`;
     observed('pwa.config.load', async () => { const response = await fetchWithTimeout(configUrl, { cache: 'no-store' }); if (!response.ok) throw await requestError(response, 'Experience configuration is unavailable.'); return validateConfig(await response.json()); })
-      .then(value => { setConfig(value); setConfigState('ready'); document.title = value.pwa.name; document.documentElement.style.setProperty('--brand', value.brand.primary_color); document.documentElement.style.setProperty('--brand-secondary', value.brand.secondary_color); if (value.brand.font_family) document.documentElement.style.setProperty('--brand-font', value.brand.font_family); })
+      // Branding is evidence-gated (a biller may go live before any colors are chosen), so only
+      // override the skin's default brand tokens when a value is actually set — an empty color
+      // must fall back to the theme default, never blank out the button/link/bill styling.
+      .then(value => { setConfig(value); setConfigState('ready'); document.title = value.pwa.name; if (value.brand.primary_color) document.documentElement.style.setProperty('--brand', value.brand.primary_color); if (value.brand.secondary_color) document.documentElement.style.setProperty('--brand-secondary', value.brand.secondary_color); if (value.brand.font_family) document.documentElement.style.setProperty('--brand-font', value.brand.font_family); })
       .catch(caught => { setConfigState('error'); setError(`Load payment experience: ${errorMessage(caught)}`); logError('pwa.config.failed', caught, { biller_slug: slug }); });
   }, [configAttempt]);
 
@@ -435,8 +438,9 @@ function validateConfig(value: unknown): ExperienceDefinition {
     !hasString(value, 'biller_id') ||
     !isRecord(brand) ||
     !hasString(brand, 'display_name') ||
-    !hasString(brand, 'primary_color') ||
-    !hasString(brand, 'secondary_color') ||
+    // Brand colors are evidence-gated and may be empty until chosen; the skin supplies defaults.
+    !hasString(brand, 'primary_color', true) ||
+    !hasString(brand, 'secondary_color', true) ||
     !hasNullableString(brand, 'font_family') ||
     !isRecord(content) ||
     !hasString(content, 'heading') ||
@@ -447,19 +451,22 @@ function validateConfig(value: unknown): ExperienceDefinition {
     !isRecord(pwa) ||
     !hasString(pwa, 'name') ||
     !hasString(pwa, 'short_name') ||
-    !hasString(pwa, 'theme_color') ||
-    !hasString(pwa, 'background_color') ||
+    !hasString(pwa, 'theme_color', true) ||
+    !hasString(pwa, 'background_color', true) ||
     !isStringArray(capabilities)
   ) {
     throw new Error('The payment experience configuration is incomplete.');
   }
-  if (value.ui !== undefined && !isValidUi(value.ui)) {
+  // ui/preferences/billing are optional sections a biller may not have configured yet; a null
+  // (not just absent) value must be treated as "not provided" and skipped — the renderer already
+  // null-guards them (e.g. `config?.billing?.categories ?? []`) — rather than failing validation.
+  if (value.ui != null && !isValidUi(value.ui)) {
     throw new Error('The payment experience interface configuration is invalid.');
   }
-  if (value.preferences !== undefined && !isValidPreferences(value.preferences)) {
+  if (value.preferences != null && !isValidPreferences(value.preferences)) {
     throw new Error('The payment experience preferences are invalid.');
   }
-  if (value.billing !== undefined && !isValidBilling(value.billing)) {
+  if (value.billing != null && !isValidBilling(value.billing)) {
     throw new Error('The payment experience billing options are invalid.');
   }
   const accepted = isRecord(value.preferences) && isStringArray(value.preferences.accepted_methods)

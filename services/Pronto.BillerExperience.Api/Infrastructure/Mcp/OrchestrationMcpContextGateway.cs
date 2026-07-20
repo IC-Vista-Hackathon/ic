@@ -18,10 +18,13 @@ public sealed partial class OrchestrationMcpContextGateway(
     HttpClient httpClient,
     IOptions<BillerExperienceOptions> options,
     ILoggerFactory loggerFactory,
-    ILogger<OrchestrationMcpContextGateway> logger) : IAgentContextMcpGateway
+    ILogger<OrchestrationMcpContextGateway> logger) : IAgentContextMcpGateway, IAsyncDisposable
 {
     private static readonly JsonSerializerOptions JsonOptions = CreateJsonOptions();
     private readonly McpOptions _options = options.Value.Mcp;
+    private readonly SemaphoreSlim _clientGate = new(1, 1);
+    private HttpClientTransport? _transport;
+    private McpClient? _client;
 
     public Task<AgentContextSnapshot> GetAsync(
         string capabilityToken,
@@ -55,25 +58,7 @@ public sealed partial class OrchestrationMcpContextGateway(
         var startedAt = Stopwatch.GetTimestamp();
         try
         {
-            var transportOptions = new HttpClientTransportOptions
-            {
-                Endpoint = new Uri(_options.PublicEndpoint),
-                Name = "ic-orchestration-context",
-                TransportMode = HttpTransportMode.StreamableHttp,
-                AdditionalHeaders = new Dictionary<string, string>
-                {
-                    ["X-IC-MCP-Key"] = _options.ApiKey
-                }
-            };
-            await using var transport = new HttpClientTransport(
-                transportOptions,
-                httpClient,
-                loggerFactory,
-                ownsHttpClient: false);
-            await using var client = await McpClient.CreateAsync(
-                transport,
-                loggerFactory: loggerFactory,
-                cancellationToken: cancellationToken);
+            var client = await GetClientAsync(cancellationToken);
             var result = await client.CallToolAsync(
                 toolName,
                 arguments,
@@ -95,6 +80,81 @@ public sealed partial class OrchestrationMcpContextGateway(
             LogFailed(logger, toolName, Stopwatch.GetElapsedTime(startedAt).TotalMilliseconds,
                 Activity.Current?.TraceId.ToString(), exception);
             throw;
+        }
+    }
+
+    private async Task<McpClient> GetClientAsync(CancellationToken cancellationToken)
+    {
+        if (_client is not null)
+        {
+            return _client;
+        }
+
+        await _clientGate.WaitAsync(cancellationToken);
+        try
+        {
+            if (_client is not null)
+            {
+                return _client;
+            }
+
+            var transportOptions = new HttpClientTransportOptions
+            {
+                Endpoint = new Uri(_options.PublicEndpoint),
+                Name = "ic-orchestration-context",
+                TransportMode = HttpTransportMode.StreamableHttp,
+                AdditionalHeaders = new Dictionary<string, string>
+                {
+                    ["X-IC-MCP-Key"] = _options.ApiKey
+                }
+            };
+            var transport = new HttpClientTransport(
+                transportOptions,
+                httpClient,
+                loggerFactory,
+                ownsHttpClient: false);
+            try
+            {
+                var client = await McpClient.CreateAsync(
+                    transport,
+                    loggerFactory: loggerFactory,
+                    cancellationToken: cancellationToken);
+                _transport = transport;
+                _client = client;
+                return client;
+            }
+            catch
+            {
+                await transport.DisposeAsync();
+                throw;
+            }
+        }
+        finally
+        {
+            _clientGate.Release();
+        }
+    }
+
+    public async ValueTask DisposeAsync()
+    {
+        await _clientGate.WaitAsync();
+        try
+        {
+            if (_client is not null)
+            {
+                await _client.DisposeAsync();
+                _client = null;
+            }
+            if (_transport is not null)
+            {
+                await _transport.DisposeAsync();
+                _transport = null;
+            }
+        }
+        finally
+        {
+            _clientGate.Release();
+            _clientGate.Dispose();
         }
     }
 

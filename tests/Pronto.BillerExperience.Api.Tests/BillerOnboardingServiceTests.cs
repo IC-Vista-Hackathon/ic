@@ -10,11 +10,13 @@ using Pronto.BillerExperience.Api.Application.Compliance.Checkers;
 using Pronto.BillerExperience.Api.Configuration;
 using Pronto.BillerExperience.Api.Infrastructure;
 using Pronto.BillerExperience.Api.Infrastructure.AI;
+using Pronto.BillerExperience.Api.Infrastructure.Mcp;
 using Pronto.BillerExperience.Api.Infrastructure.Persistence;
 using Pronto.BillerExperience.Api.Infrastructure.Research;
 using Pronto.BillerExperience.Api.Infrastructure.SupportingServices;
 using Pronto.BillerExperience.Contracts.V1.Billers;
 using Pronto.BillerExperience.Contracts.V1.Billing;
+using Pronto.BillerExperience.Contracts.V1.AgentContext;
 using Pronto.BillerExperience.Contracts.V1.Deployments;
 using Pronto.BillerExperience.Contracts.V1.Experiences;
 using Pronto.BillerExperience.Contracts.V1.Onboarding;
@@ -520,6 +522,30 @@ public sealed class BillerOnboardingServiceTests
 
         Assert.Equal("biller-experience-chat-turn", runner.WorkflowName);
         Assert.Equal(created.Biller.BillerId, runner.Context?.BillerId);
+        Assert.NotEqual("onboarding", runner.Context?.RunId);
+        var (_, activity) = await service.GetSessionActivityAsync(created.Biller.BillerId, CancellationToken.None);
+        Assert.All(activity, item => Assert.Equal(runner.Context?.RunId, item.RunId));
+    }
+
+    [Fact]
+    public async Task BrowserCancellationDoesNotCancelStartedOrchestration()
+    {
+        var runner = new PausingOrchestrationRunner();
+        var service = CreateService(runner: runner);
+        var created = await service.CreateAsync(CreateRequest(), CancellationToken.None);
+        using var requestCancellation = new CancellationTokenSource();
+
+        var chat = service.SendMessageAsync(
+            created.Biller.BillerId,
+            new("Ready for review"),
+            requestCancellation.Token).AsTask();
+        await runner.Started.Task.WaitAsync(TimeSpan.FromSeconds(2));
+        requestCancellation.Cancel();
+        runner.Resume.TrySetResult();
+
+        var response = await chat.WaitAsync(TimeSpan.FromSeconds(5));
+
+        Assert.NotNull(response.Draft);
     }
 
     [Fact]
@@ -622,6 +648,81 @@ public sealed class BillerOnboardingServiceTests
         Assert.Equal(CreateRequest().BillType, coordinator.Request.BillType);
         Assert.Equal(CreateRequest().PostalCode, coordinator.Request.PostalCode);
         Assert.Equal(ResearchOutcome.Completed, generator.Research?.Outcome);
+    }
+
+    [Fact]
+    public async Task ChatWithMcpEnabledReadsOnboardingContextAndAppliesResearchEvidence()
+    {
+        var repository = new InMemoryBillerExperienceRepository();
+        var configuration = Options.Create(new BillerExperienceOptions
+        {
+            Mcp = new McpOptions
+            {
+                Enabled = true,
+                PublicEndpoint = "https://mcp.example.test/mcp",
+                ApiKey = new string('a', 32),
+                CapabilitySigningKey = new string('s', 48)
+            },
+            Research = new ResearchOptions
+            {
+                MaxAgentCount = 1,
+                MaxParallelAgents = 1,
+                AgentTimeoutSeconds = 5
+            }
+        });
+        var contextService = new AgentContextService(repository, NullLogger<AgentContextService>.Instance);
+        var capabilities = new AgentContextCapabilityService(
+            configuration,
+            TimeProvider.System,
+            NullLogger<AgentContextCapabilityService>.Instance);
+        var mcpTools = new AgentContextMcpTools(
+            contextService,
+            capabilities,
+            NullLogger<AgentContextMcpTools>.Instance);
+        var dispatcher = new ContextCapturingResearchDispatcher(BrandResearch());
+        using var coordinator = new BillerResearchCoordinator(
+            new SingleResearchAgentCatalog(),
+            dispatcher,
+            configuration,
+            NullLogger<BillerResearchCoordinator>.Instance,
+            capabilityIssuer: capabilities,
+            contextGateway: new InProcessAgentContextMcpGateway(mcpTools));
+        var service = new BillerOnboardingService(
+            repository,
+            new DeterministicExperienceDraftGenerator(NullLogger<DeterministicExperienceDraftGenerator>.Instance),
+            new OrchestrationRunner(),
+            NullLogger<BillerOnboardingService>.Instance,
+            researchCoordinator: coordinator,
+            agentContextService: contextService,
+            options: configuration);
+        var created = await service.CreateAsync(CreateRequest(), CancellationToken.None);
+
+        var chat = await service.SendMessageAsync(
+            created.Biller.BillerId,
+            new("Use the researched brand."),
+            CancellationToken.None);
+
+        Assert.Equal("#123456", chat.Draft!.Definition.Brand.PrimaryColor);
+        Assert.Equal("onboarding", dispatcher.InvocationContext?.SharedContext.RunId);
+        var sharedContext = await contextService.GetAsync(
+            created.Biller.BillerId,
+            "onboarding",
+            CancellationToken.None);
+        Assert.Contains(sharedContext.Entries, item =>
+            item.AgentId == "biller-research" && item.Scope == "research");
+
+        var (_, activity) = await service.GetSessionActivityAsync(
+            created.Biller.BillerId,
+            CancellationToken.None);
+        var executionId = Assert.Single(activity.Select(item => item.RunId).Distinct(StringComparer.Ordinal));
+        Assert.NotEqual("onboarding", executionId);
+        Assert.Contains(activity, item =>
+            item.AgentId == "biller-research" && item.Status == AgentActivityStatus.Completed);
+        Assert.DoesNotContain(activity, item => item.ErrorCode == "research.mcp_context_read_failed");
+        Assert.Null(await repository.GetAgentContextAsync(
+            created.Biller.BillerId,
+            executionId,
+            CancellationToken.None));
     }
 
     [Fact]
@@ -818,6 +919,23 @@ public sealed class BillerOnboardingServiceTests
         }
     }
 
+    private sealed class PausingOrchestrationRunner : IOrchestrationRunner
+    {
+        public TaskCompletionSource Started { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public TaskCompletionSource Resume { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public async ValueTask<TOutput> RunAsync<TInput, TOutput>(
+            IOrchestrationWorkflow<TInput, TOutput> workflow,
+            TInput input,
+            OrchestrationContext context,
+            CancellationToken cancellationToken = default)
+        {
+            Started.TrySetResult();
+            await Resume.Task.WaitAsync(cancellationToken);
+            return await workflow.ExecuteAsync(input, context, cancellationToken);
+        }
+    }
+
     private sealed class FailingDraftGenerator : IExperienceDraftGenerator
     {
         public string Provider => "failing-test";
@@ -865,6 +983,50 @@ public sealed class BillerOnboardingServiceTests
             Request = request;
             return Task.FromResult(response);
         }
+    }
+
+    private sealed class SingleResearchAgentCatalog : IResearchAgentCatalog
+    {
+        public Task<IReadOnlyList<ResearchAgentDescriptor>> ListAsync(CancellationToken cancellationToken) =>
+            Task.FromResult<IReadOnlyList<ResearchAgentDescriptor>>(
+                [new("biller-research", "Biller Research", new HashSet<string> { "biller_research" })]);
+    }
+
+    private sealed class ContextCapturingResearchDispatcher(BillerResearchResponse response) : IResearchAgentDispatcher
+    {
+        public ResearchAgentInvocationContext? InvocationContext { get; private set; }
+
+        public Task<BillerResearchResponse> DispatchAsync(
+            ResearchAgentDescriptor agent,
+            BillerResearchRequest request,
+            ResearchAgentInvocationContext? invocationContext,
+            CancellationToken cancellationToken)
+        {
+            InvocationContext = invocationContext;
+            return Task.FromResult(response);
+        }
+    }
+
+    private sealed class InProcessAgentContextMcpGateway(AgentContextMcpTools tools) : IAgentContextMcpGateway
+    {
+        public Task<AgentContextSnapshot> GetAsync(
+            string capabilityToken,
+            CancellationToken cancellationToken) =>
+            tools.GetGoalContextAsync(capabilityToken, cancellationToken).AsTask();
+
+        public Task<AgentContextSnapshot> AppendAsync(
+            string capabilityToken,
+            AppendAgentContextRequest request,
+            CancellationToken cancellationToken) =>
+            tools.AppendContextAsync(
+                capabilityToken,
+                request.ExpectedVersion,
+                request.Kind,
+                request.Scope,
+                request.Content,
+                request.Sources.Select(source => source.AbsoluteUri).ToArray(),
+                request.External,
+                cancellationToken).AsTask();
     }
 
     private sealed class RecordingComplianceReviewService(bool blockPublish = false) : IComplianceReviewService
