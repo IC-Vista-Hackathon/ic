@@ -2,7 +2,7 @@
   "algorithm": "sha256",
   "files": {
     "index.html": "f4c943eecadb5f80ef2c7916c2d3beee1b816623ef218dfb9c0e9b2c3f59fb9e",
-    "src/App.tsx": "f6c595ad18dfdaf88c5df8a7edc2da1f88c43e87958d28ecaee7a62513ae4e66",
+    "src/App.tsx": "d1c892c1f82fc92c953bb9c4b20609ccb96231f0911b49dd876c9da177a6918f",
     "src/ErrorBoundary.tsx": "16deca540875b4a7469cafc735a3eb998cc579bf5f7c8b7532f314e90a0441bf",
     "src/batch.ts": "8b2627ece0967c2df09d936b23333a7d67e9e58982379109ce0427f6d443efee",
     "src/billerSlug.ts": "ea20e1cc910a583a1c0911ea0cbe5748ce508880b6acaf7a44a8478c40e5b60d",
