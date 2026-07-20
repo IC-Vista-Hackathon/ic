@@ -52,7 +52,10 @@ public sealed record PaymentResponse(
     DateTimeOffset CreatedAt,
     string? InstallmentPlanId = null,
     int? InstallmentSequence = null,
-    int? InstallmentCount = null);
+    int? InstallmentCount = null,
+    // Synthetic settlement made against an isolated Studio preview tenant on the fake rail. Flagged
+    // so it can be excluded from real reporting/reconciliation; defaults false for genuine traffic.
+    bool IsPreview = false);
 
 /// <summary>
 /// The persisted installment schedule returned when a plan is enrolled: one entry per installment,

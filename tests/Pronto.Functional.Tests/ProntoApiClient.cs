@@ -11,7 +11,7 @@ namespace Pronto.Functional.Tests;
 /// without coupling to server-internal response records. Every created biller is tracked so the
 /// fixture can purge it (nonprod exposes DELETE /internal/test-data).
 /// </summary>
-public sealed class ProntoApiClient : IDisposable
+public sealed partial class ProntoApiClient : IDisposable
 {
     private readonly HttpClient _billerApi = ProntoEnvironment.CreateBillerApiClient();
     private readonly HttpClient _invoiceApi = ProntoEnvironment.CreateInvoiceApiClient();

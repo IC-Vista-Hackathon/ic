@@ -18,6 +18,7 @@ using Pronto.BillerExperience.Contracts.V1.AgentContext;
 using Pronto.BillerExperience.Contracts.V1.Deployments;
 using Pronto.BillerExperience.Contracts.V1.Experiences;
 using Pronto.BillerExperience.Contracts.V1.Onboarding;
+using Pronto.ServiceDefaults;
 
 namespace Pronto.BillerExperience.Api.Application;
 
@@ -645,7 +646,8 @@ public sealed partial class BillerOnboardingService(
     private async ValueTask SeedExperienceDataAsync(
         BillerRecord biller,
         BillingProfile? billingProfile,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        string? billerIdOverride = null)
     {
         var profile = billingProfile ?? BillingProfile.Empty;
         // Before discovery captures categories, fall back to the assumed profile derived from the
@@ -660,7 +662,10 @@ public sealed partial class BillerOnboardingService(
                 category.Id, category.DisplayName, category.Cadence?.Kind.ToString()))
             .ToArray();
 
-        var context = new SeedBillerContext(biller.Id, biller.Name, biller.BillType, biller.Website)
+        // billerIdOverride targets an isolated preview partition (preview-{id}) for F2's Studio
+        // preview, reusing this exact seed path so the preview gets the same invoices + demo payer
+        // that ship — just addressed to the preview tenant, never the live/published one.
+        var context = new SeedBillerContext(billerIdOverride ?? biller.Id, biller.Name, biller.BillType, biller.Website)
         {
             Categories = categories,
         };
@@ -670,6 +675,20 @@ public sealed partial class BillerOnboardingService(
         // PayerAccount service verifies ownership against those invoices before persisting.
         await (payerSeeder ?? new NullPayerSeeder()).SeedAsync(
             context, [SeedDefaults.PreviewAccountNumber], cancellationToken);
+    }
+
+    /// <summary>
+    /// Seed the isolated preview tenant (<c>preview-{billerId}</c>) with the same synthetic invoices
+    /// + demo payer F1 seeds for the live biller, reusing the deterministic, replace-on-reseed
+    /// seeders so a Studio "Restart preview" re-seeds without accumulating and multi-category billers
+    /// get category-labelled invoices — matching exactly what ships. Never touches the live partition.
+    /// </summary>
+    public async ValueTask SeedPreviewExperienceDataAsync(string billerId, CancellationToken cancellationToken)
+    {
+        var biller = await GetRequiredBillerAsync(billerId, cancellationToken);
+        var run = await GetRequiredRunAsync(billerId, cancellationToken);
+        await SeedExperienceDataAsync(
+            biller, run.BillingProfile, cancellationToken, PreviewTenant.ForBiller(biller.Id));
     }
 
     public async ValueTask<OnboardingSessionResponse> GetSessionAsync(string billerId, CancellationToken cancellationToken) =>

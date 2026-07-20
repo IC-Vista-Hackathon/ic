@@ -98,3 +98,4 @@ export interface Bootstrap {
 export interface ChatResponse { reply: string; session: Session; draft: ExperienceRevision; generation_mode?: string }
 export interface Deployment { deployment_id: string; state: string; revision: string; published_url?: string; failure_code?: string; failure_message?: string }
 export interface PreviewInvoice { id: string; account_number: string; payer_name: string; description: string; amount_cents: number; due_date: string; status: 'due'|'scheduled'|'paid' }
+export interface PreviewTenant { biller_id: string; preview_biller_id: string; account_number: string; config_path: string }

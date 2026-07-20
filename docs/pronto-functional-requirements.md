@@ -231,6 +231,38 @@ Tests: `HealthAndConfigTests.ApiLivenessAndReadinessProbesReturnOk`,
 
 ---
 
+## FR-10 — Studio preview runs the shipped bundle against an isolated, seeded, resettable tenant
+
+The Studio preview renders the same built payer PWA as production, but scoped to an isolated
+`preview-{billerId}` partition seeded with synthetic demo data (F2). Provisioning seeds that
+partition; the served preview config is the current draft with its `biller_id` rewritten to the
+preview tenant (so every downstream service call targets the isolated partition); and reset
+re-seeds deterministically — a repeat converges on the same seed set rather than accumulating.
+
+```gherkin
+Feature: Real-services Studio preview
+  Scenario: Provisioning seeds an isolated preview tenant
+    Given a biller
+    When I provision its preview
+    Then I get a preview tenant id of "preview-{billerId}" with a seeded demo account
+    And the preview partition has demo invoices for that account
+
+  Scenario: The served preview config is scoped to the preview tenant
+    When I fetch the preview config
+    Then its biller_id is the preview tenant, not the live biller
+
+  Scenario: Reset is deterministic
+    Given a provisioned, seeded preview
+    When I reset it
+    Then the preview account's seeded invoice count is unchanged (re-seed converges)
+```
+
+Tests: `StudioPreviewTests.ProvisioningSeedsAnIsolatedPreviewTenant`,
+`StudioPreviewTests.PreviewConfigServesTheDraftScopedToThePreviewTenant`,
+`StudioPreviewTests.ResetIsDeterministicAndDoesNotAccumulateSeedData`
+
+---
+
 ## Cross-cutting testability requirements
 
 - **Nonprod, never prod.** Functional tests target the nonprod gateway; they must never run against
