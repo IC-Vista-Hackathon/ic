@@ -15,10 +15,11 @@ public sealed partial class BillerResearchCoordinator(
     ILogger<BillerResearchCoordinator> logger,
     IFoundryResearchConsolidator? consolidator = null,
     IAgentContextCapabilityIssuer? capabilityIssuer = null,
-    IAgentContextMcpGateway? contextGateway = null) : IBillerResearchCoordinator
+    IAgentContextMcpGateway? contextGateway = null) : IBillerResearchCoordinator, IDisposable
 {
     private readonly ResearchOptions _options = options.Value.Research;
     private readonly McpOptions _optionsForMcp = options.Value.Mcp;
+    private readonly SemaphoreSlim _contextWriteGate = new(1, 1);
 
     public async Task<BillerResearchResponse> ResearchAsync(
         BillerResearchRequest request,
@@ -44,39 +45,27 @@ public sealed partial class BillerResearchCoordinator(
             throw;
         }
 
-        foreach (var agent in discovered)
+        var agents = discovered
+            .Where(agent => IsEligible(agent, _options.AllowedAgentIds))
+            .Take(Math.Max(1, _options.MaxAgentCount))
+            .ToArray();
+
+        LogAgentSelection(
+            logger,
+            discovered.Count,
+            agents.Length,
+            discovered.Count - agents.Length,
+            Activity.Current?.TraceId.ToString());
+
+        foreach (var agent in agents)
         {
-            var eligible = IsEligible(agent, _options.AllowedAgentIds);
-            var eligibilitySummary = eligible
-                ? $"Discovered approved {agent.Provider} agent with capability {_options.RequiredCapability}."
-                : DescribeIneligibility(agent, _options.AllowedAgentIds);
             await PublishActivityAsync(
                 executionContext,
                 agent,
                 OrchestrationEventStatus.Discovered,
-                eligibilitySummary,
+                $"Selected approved {agent.Provider} agent with capability {_options.RequiredCapability}.",
                 cancellationToken: cancellationToken);
-            if (!eligible)
-            {
-                await PublishActivityAsync(
-                    executionContext,
-                    agent,
-                    OrchestrationEventStatus.Skipped,
-                    eligibilitySummary,
-                    "research.agent_ineligible",
-                    cancellationToken: cancellationToken);
-            }
         }
-
-        var allowlist = _options.AllowedAgentIds.ToHashSet(StringComparer.OrdinalIgnoreCase);
-        var agents = discovered
-            .Where(agent => agent.Approved)
-            .Where(agent => agent.Enabled)
-            .Where(agent => allowlist.Count == 0 || allowlist.Contains(agent.Id))
-            .Where(agent => agent.Capabilities.Any(capability =>
-                capability.Equals(_options.RequiredCapability, StringComparison.OrdinalIgnoreCase)))
-            .Take(Math.Max(1, _options.MaxAgentCount))
-            .ToArray();
 
         if (agents.Length == 0)
         {
@@ -132,11 +121,36 @@ public sealed partial class BillerResearchCoordinator(
         var merged = new BillerResearchResponse(ResearchOutcome.Completed, facts, sources, warnings);
         if (consolidator is not null && successful.Length > 1)
         {
+            var coordinatorAgent = CoordinatorAgent();
+            await PublishActivityAsync(
+                executionContext,
+                coordinatorAgent,
+                OrchestrationEventStatus.Discovered,
+                "Selected Foundry coordinator to consolidate research results.",
+                cancellationToken: cancellationToken);
+            await PublishActivityAsync(
+                executionContext,
+                coordinatorAgent,
+                OrchestrationEventStatus.Running,
+                $"Consolidating results from {successful.Length} research agents.",
+                cancellationToken: cancellationToken);
+            var consolidationStartedAt = Stopwatch.GetTimestamp();
             try
             {
                 var consolidated = await consolidator.ConsolidateAsync(request, successful, executionContext, cancellationToken);
                 if (consolidated.Outcome != ResearchOutcome.Failed)
                 {
+                    await PublishActivityAsync(
+                        executionContext,
+                        coordinatorAgent,
+                        consolidated.Outcome == ResearchOutcome.Degraded
+                            ? OrchestrationEventStatus.Degraded
+                            : OrchestrationEventStatus.Completed,
+                        $"Consolidated {successful.Length} research results.",
+                        consolidated.ErrorCode,
+                        consolidated.Retryable,
+                        Stopwatch.GetElapsedTime(consolidationStartedAt).TotalMilliseconds,
+                        CancellationToken.None);
                     activity?.SetTag("research.consolidated", true);
                     activity?.SetTag("research.agent.succeeded", successful.Length);
                     var consolidatedWarnings = consolidated.Warnings.Concat(warnings)
@@ -146,11 +160,42 @@ public sealed partial class BillerResearchCoordinator(
                 }
 
                 var code = consolidated.ErrorCode ?? "research.consolidation_failed";
+                await PublishActivityAsync(
+                    executionContext,
+                    coordinatorAgent,
+                    OrchestrationEventStatus.Failed,
+                    "Research consolidation failed; using the merged worker results.",
+                    code,
+                    consolidated.Retryable,
+                    Stopwatch.GetElapsedTime(consolidationStartedAt).TotalMilliseconds,
+                    CancellationToken.None);
                 LogConsolidationFailure(logger, code, Activity.Current?.TraceId.ToString());
                 warnings.Add(code);
             }
+            catch (OperationCanceledException)
+            {
+                await PublishActivityAsync(
+                    executionContext,
+                    coordinatorAgent,
+                    OrchestrationEventStatus.Failed,
+                    "Research consolidation was cancelled because the onboarding request ended.",
+                    "research.request_cancelled",
+                    true,
+                    Stopwatch.GetElapsedTime(consolidationStartedAt).TotalMilliseconds,
+                    CancellationToken.None);
+                throw;
+            }
             catch (Exception exception)
             {
+                await PublishActivityAsync(
+                    executionContext,
+                    coordinatorAgent,
+                    OrchestrationEventStatus.Failed,
+                    "Research consolidation failed unexpectedly; using the merged worker results.",
+                    "research.consolidation_failed",
+                    true,
+                    Stopwatch.GetElapsedTime(consolidationStartedAt).TotalMilliseconds,
+                    CancellationToken.None);
                 LogConsolidationException(logger, Activity.Current?.TraceId.ToString(), exception);
                 warnings.Add("research.consolidation_failed");
             }
@@ -389,34 +434,46 @@ public sealed partial class BillerResearchCoordinator(
             content,
             sources,
             External: true);
+        await _contextWriteGate.WaitAsync(cancellationToken);
         try
         {
-            await contextGateway.AppendAsync(context.CapabilityToken, request, cancellationToken);
-            return response;
-        }
-        catch (Exception exception) when (exception is not OperationCanceledException)
-        {
-            LogContextWriteFailure(logger, agent.Id, retrying: true, Activity.Current?.TraceId.ToString(), exception);
-        }
-
-        try
-        {
-            var latest = await contextGateway.GetAsync(context.CapabilityToken, cancellationToken);
-            await contextGateway.AppendAsync(
-                context.CapabilityToken,
-                request with { ExpectedVersion = latest.Version },
-                cancellationToken);
-            return response;
-        }
-        catch (Exception exception) when (exception is not OperationCanceledException)
-        {
-            LogContextWriteFailure(logger, agent.Id, retrying: false, Activity.Current?.TraceId.ToString(), exception);
-            const string warning = "research.mcp_context_write_failed";
-            return response with
+            try
             {
-                Outcome = ResearchOutcome.Degraded,
-                Warnings = response.Warnings.Append(warning).Distinct(StringComparer.Ordinal).ToArray()
-            };
+                var latest = await contextGateway.GetAsync(context.CapabilityToken, cancellationToken);
+                await contextGateway.AppendAsync(
+                    context.CapabilityToken,
+                    request with { ExpectedVersion = latest.Version },
+                    cancellationToken);
+                return response;
+            }
+            catch (Exception exception) when (exception is not OperationCanceledException)
+            {
+                LogContextWriteFailure(logger, agent.Id, retrying: true, Activity.Current?.TraceId.ToString(), exception);
+            }
+
+            try
+            {
+                var latest = await contextGateway.GetAsync(context.CapabilityToken, cancellationToken);
+                await contextGateway.AppendAsync(
+                    context.CapabilityToken,
+                    request with { ExpectedVersion = latest.Version },
+                    cancellationToken);
+                return response;
+            }
+            catch (Exception exception) when (exception is not OperationCanceledException)
+            {
+                LogContextWriteFailure(logger, agent.Id, retrying: false, Activity.Current?.TraceId.ToString(), exception);
+                const string warning = "research.mcp_context_write_failed";
+                return response with
+                {
+                    Outcome = ResearchOutcome.Degraded,
+                    Warnings = response.Warnings.Append(warning).Distinct(StringComparer.Ordinal).ToArray()
+                };
+            }
+        }
+        finally
+        {
+            _contextWriteGate.Release();
         }
     }
 
@@ -427,18 +484,13 @@ public sealed partial class BillerResearchCoordinator(
         agent.Capabilities.Any(capability =>
             capability.Equals(_options.RequiredCapability, StringComparison.OrdinalIgnoreCase));
 
-    private string DescribeIneligibility(ResearchAgentDescriptor agent, string[] allowedAgentIds)
-    {
-        var reasons = new List<string>();
-        if (!agent.Approved) reasons.Add("not approved");
-        if (!agent.Enabled) reasons.Add("disabled");
-        if (allowedAgentIds.Length > 0 && !allowedAgentIds.Contains(agent.Id, StringComparer.OrdinalIgnoreCase))
-            reasons.Add("not allowlisted");
-        if (!agent.Capabilities.Any(capability =>
-                capability.Equals(_options.RequiredCapability, StringComparison.OrdinalIgnoreCase)))
-            reasons.Add($"missing capability {_options.RequiredCapability}");
-        return $"Available in the {agent.Provider} inventory; not invoked ({string.Join(", ", reasons)}).";
-    }
+    private ResearchAgentDescriptor CoordinatorAgent() => new(
+        string.IsNullOrWhiteSpace(_options.CoordinatorAgentId)
+            ? "research-coordinator"
+            : _options.CoordinatorAgentId,
+        "Research Coordinator",
+        new HashSet<string>(StringComparer.OrdinalIgnoreCase) { "research_consolidation" },
+        Provider: "foundry");
 
     private async ValueTask PublishActivityAsync(
         ResearchExecutionContext? executionContext,
@@ -479,6 +531,8 @@ public sealed partial class BillerResearchCoordinator(
         AgentContextSnapshot Snapshot,
         ResearchAgentInvocationContext InvocationContext);
 
+    public void Dispose() => _contextWriteGate.Dispose();
+
     [LoggerMessage(2650, LogLevel.Error, "Research agent catalog discovery failed; trace {TraceId}")]
     private static partial void LogCatalogFailure(ILogger logger, Exception exception, string? traceId);
 
@@ -511,4 +565,7 @@ public sealed partial class BillerResearchCoordinator(
 
     [LoggerMessage(2658, LogLevel.Error, "Orchestration failed to append MCP context for research agent {AgentId}; retrying {Retrying}; trace {TraceId}")]
     private static partial void LogContextWriteFailure(ILogger logger, string agentId, bool retrying, string? traceId, Exception exception);
+
+    [LoggerMessage(2661, LogLevel.Information, "Research selected {SelectedCount} eligible agents from {DiscoveredCount}; ignored {IgnoredCount} inventory agents; trace {TraceId}")]
+    private static partial void LogAgentSelection(ILogger logger, int discoveredCount, int selectedCount, int ignoredCount, string? traceId);
 }

@@ -428,6 +428,30 @@ public sealed class BillerOnboardingServiceTests
 
         Assert.Equal("biller-experience-chat-turn", runner.WorkflowName);
         Assert.Equal(created.Biller.BillerId, runner.Context?.BillerId);
+        Assert.NotEqual("onboarding", runner.Context?.RunId);
+        var (_, activity) = await service.GetSessionActivityAsync(created.Biller.BillerId, CancellationToken.None);
+        Assert.All(activity, item => Assert.Equal(runner.Context?.RunId, item.RunId));
+    }
+
+    [Fact]
+    public async Task BrowserCancellationDoesNotCancelStartedOrchestration()
+    {
+        var runner = new PausingOrchestrationRunner();
+        var service = CreateService(runner: runner);
+        var created = await service.CreateAsync(CreateRequest(), CancellationToken.None);
+        using var requestCancellation = new CancellationTokenSource();
+
+        var chat = service.SendMessageAsync(
+            created.Biller.BillerId,
+            new("Ready for review"),
+            requestCancellation.Token).AsTask();
+        await runner.Started.Task.WaitAsync(TimeSpan.FromSeconds(2));
+        requestCancellation.Cancel();
+        runner.Resume.TrySetResult();
+
+        var response = await chat.WaitAsync(TimeSpan.FromSeconds(5));
+
+        Assert.NotNull(response.Draft);
     }
 
     [Fact]
@@ -723,6 +747,23 @@ public sealed class BillerOnboardingServiceTests
             WorkflowName = workflow.Name;
             Context = context;
             return workflow.ExecuteAsync(input, context, cancellationToken);
+        }
+    }
+
+    private sealed class PausingOrchestrationRunner : IOrchestrationRunner
+    {
+        public TaskCompletionSource Started { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public TaskCompletionSource Resume { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public async ValueTask<TOutput> RunAsync<TInput, TOutput>(
+            IOrchestrationWorkflow<TInput, TOutput> workflow,
+            TInput input,
+            OrchestrationContext context,
+            CancellationToken cancellationToken = default)
+        {
+            Started.TrySetResult();
+            await Resume.Task.WaitAsync(cancellationToken);
+            return await workflow.ExecuteAsync(input, context, cancellationToken);
         }
     }
 

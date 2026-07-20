@@ -117,11 +117,17 @@ public sealed class BillerResearchCoordinatorTests
         var dispatcher = new StubDispatcher((agent, _) => Completed(agent.Id));
         var consolidator = new StubConsolidator(Completed("consolidated"));
         var coordinator = Create(catalog, dispatcher, ["one", "two"], consolidator);
+        var sink = new RecordingSink();
 
-        var response = await coordinator.ResearchAsync(Request());
+        var response = await coordinator.ResearchAsync(
+            Request(),
+            new ResearchExecutionContext("biller-1", "run-1", sink));
 
         Assert.True(consolidator.Called);
         Assert.Contains(response.Facts, fact => fact.Value == "consolidated");
+        Assert.Contains(sink.Events, item => item.AgentId == "research-coordinator" && item.Status == OrchestrationEventStatus.Discovered);
+        Assert.Contains(sink.Events, item => item.AgentId == "research-coordinator" && item.Status == OrchestrationEventStatus.Running);
+        Assert.Contains(sink.Events, item => item.AgentId == "research-coordinator" && item.Status == OrchestrationEventStatus.Completed && item.DurationMs >= 0);
     }
 
     [Fact]
@@ -137,11 +143,9 @@ public sealed class BillerResearchCoordinatorTests
         await coordinator.ResearchAsync(Request(), new ResearchExecutionContext("biller-1", "run-1", sink));
 
         Assert.Contains(sink.Events, item => item.AgentId == "eligible" && item.Status == OrchestrationEventStatus.Discovered);
-        Assert.Contains(sink.Events, item => item.AgentId == "rejected" && item.Status == OrchestrationEventStatus.Discovered && item.Summary.Contains("not approved"));
-        Assert.Contains(sink.Events, item => item.AgentId == "rejected" && item.Status == OrchestrationEventStatus.Skipped && item.ErrorCode == "research.agent_ineligible");
         Assert.Contains(sink.Events, item => item.AgentId == "eligible" && item.Status == OrchestrationEventStatus.Running);
         Assert.Contains(sink.Events, item => item.AgentId == "eligible" && item.Status == OrchestrationEventStatus.Completed && item.DurationMs >= 0);
-        Assert.DoesNotContain(sink.Events, item => item.AgentId == "rejected" && item.Status == OrchestrationEventStatus.Running);
+        Assert.DoesNotContain(sink.Events, item => item.AgentId == "rejected");
     }
 
     [Fact]
@@ -241,7 +245,7 @@ public sealed class BillerResearchCoordinatorTests
         Assert.Equal(ResearchOutcome.Degraded, response.Outcome);
         Assert.Contains("research.mcp_context_write_failed", response.Warnings);
         Assert.Single(response.Facts);
-        Assert.Equal(2, gateway.GetCount);
+        Assert.Equal(3, gateway.GetCount);
         Assert.Equal(2, gateway.AppendCount);
     }
 
