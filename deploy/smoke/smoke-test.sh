@@ -52,6 +52,9 @@ EXPECTED_DEPLOYMENTS=(
 # collection endpoints return 400 to an incomplete GET, proving the routed service answered.
 HTTP_CHECKS=(
   "/studio/ 200"
+  # The Studio preview embeds the shipped payer PWA at /pay/ (no published slug); it must
+  # serve the SPA shell, not 404 through the per-biller router.
+  "/pay/ 200"
   "/api/ 200"
   "/invoices/ 200"
   "/payments/ 400"
