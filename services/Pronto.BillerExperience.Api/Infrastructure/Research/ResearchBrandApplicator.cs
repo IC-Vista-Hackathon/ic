@@ -1,5 +1,6 @@
 using System.Text.RegularExpressions;
 using Pronto.BillerExperience.Api.Domain;
+using Pronto.BillerExperience.Contracts.V1.Billers;
 using Pronto.BillerExperience.Contracts.V1.Experiences;
 using Pronto.BillerExperience.Contracts.V1.Research;
 
@@ -19,6 +20,11 @@ public static partial class ResearchBrandApplicator
         BillerRecord biller,
         BillerResearchResponse research)
     {
+        // An explicit biller-supplied brand choice is authoritative: it overrides the generated
+        // draft (a model may re-emit different colors/font) and researched evidence, so a biller's
+        // manual selection is never silently lost on the way to preview/publish.
+        definition = ApplyExplicitBrand(definition, biller.Brand);
+
         if (research.Facts.Count == 0)
         {
             return definition;
@@ -123,6 +129,27 @@ public static partial class ResearchBrandApplicator
             BrandKeywords: keywords,
             Assets: assets,
             ReferenceUrl: biller.Website);
+    }
+
+    // Overlays a biller's explicitly-supplied brand tokens onto the draft. Only non-blank values are
+    // applied, so an explicit color/font selection wins while unset tokens still fall through to
+    // researched evidence below.
+    private static BillerExperienceDefinition ApplyExplicitBrand(
+        BillerExperienceDefinition definition, BillerBrand? chosen)
+    {
+        if (chosen is null)
+        {
+            return definition;
+        }
+
+        var brand = definition.Brand with
+        {
+            PrimaryColor = IsBlank(chosen.PrimaryColor) ? definition.Brand.PrimaryColor : chosen.PrimaryColor,
+            SecondaryColor = IsBlank(chosen.SecondaryColor) ? definition.Brand.SecondaryColor : chosen.SecondaryColor,
+            FontFamily = IsBlank(chosen.FontFamily) ? definition.Brand.FontFamily : chosen.FontFamily,
+            LogoAssetId = IsBlank(chosen.LogoAssetId) ? definition.Brand.LogoAssetId : chosen.LogoAssetId,
+        };
+        return definition with { Brand = brand };
     }
 
     private static string? Lookup(IReadOnlyDictionary<string, string> evidence, string name) =>

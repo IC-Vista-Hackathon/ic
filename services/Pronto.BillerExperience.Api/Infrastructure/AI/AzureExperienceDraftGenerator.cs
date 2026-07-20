@@ -5,6 +5,7 @@ using Pronto.BillerExperience.Api.Domain;
 using Pronto.BillerExperience.Api.Infrastructure;
 using Pronto.BillerExperience.Contracts.V1.Onboarding;
 using Pronto.BillerExperience.Contracts.V1.Billing;
+using Pronto.BillerExperience.Contracts.V1.Experiences;
 using Pronto.BillerExperience.Contracts.V1.Research;
 using OpenAI.Chat;
 
@@ -84,7 +85,7 @@ public sealed partial class AzureExperienceDraftGenerator(
             var result = JsonSerializer.Deserialize<DraftGenerationResult>(json, SerializerOptions)
                 ?? throw new InvalidOperationException("Azure AI returned an invalid structured draft.");
             BillerExperienceTelemetry.ModelCalls.Add(1, new("provider", Provider), new("outcome", "success"));
-            return result with { GenerationMode = GenerationModes.AzureAi };
+            return PreserveLegalContent(result, current.Definition) with { GenerationMode = GenerationModes.AzureAi };
         }
         catch (Exception exception)
         {
@@ -99,6 +100,24 @@ public sealed partial class AzureExperienceDraftGenerator(
                 Stopwatch.GetElapsedTime(startedAt).TotalMilliseconds,
                 new KeyValuePair<string, object?>("provider", Provider));
         }
+    }
+
+    /// <summary>
+    /// The structured-draft schema intentionally omits the refund/dispute policy URL and fee
+    /// disclosure (the model must never author legal URLs), so a round-trip through it would null
+    /// them out and break the compliance publish gate. Carry those known content values forward from
+    /// the current definition whenever the model didn't supply them.
+    /// </summary>
+    private static DraftGenerationResult PreserveLegalContent(
+        DraftGenerationResult result, BillerExperienceDefinition current)
+    {
+        var generated = result.Definition.Content;
+        var preserved = generated with
+        {
+            RefundPolicyUrl = generated.RefundPolicyUrl ?? current.Content.RefundPolicyUrl,
+            FeeDisclosure = generated.FeeDisclosure ?? current.Content.FeeDisclosure,
+        };
+        return result with { Definition = result.Definition with { Content = preserved } };
     }
 
     private const string SystemInstructions = """
