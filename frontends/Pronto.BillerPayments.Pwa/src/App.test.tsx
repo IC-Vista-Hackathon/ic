@@ -40,6 +40,26 @@ const config = {
   enabled_payment_capabilities: ['card', 'ach'],
 };
 
+describe('unbranded config (evidence-gated branding not yet chosen)', () => {
+  afterEach(() => { cleanup(); vi.clearAllMocks(); vi.unstubAllGlobals(); });
+
+  it('renders the payer experience when brand/pwa colors are empty instead of failing as incomplete', async () => {
+    const unbranded = {
+      ...config,
+      brand: { display_name: 'Acme Water', primary_color: '', secondary_color: '', font_family: null },
+      pwa: { name: 'Acme Water Payments', short_name: 'Acme Water', theme_color: '', background_color: '' },
+    };
+    vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify(unbranded), { status: 200 })));
+    const { App } = await import('./App');
+    render(<App />);
+
+    expect(await screen.findByRole('heading', { name: 'Pay your bill' })).toBeDefined();
+    expect(screen.queryByText(/configuration is incomplete/i)).toBeNull();
+    // Empty colors must not override the skin's default brand token.
+    expect(document.documentElement.style.getPropertyValue('--brand')).toBe('');
+  });
+});
+
 async function reachReview(user: ReturnType<typeof userEvent.setup>) {
   await user.click(await screen.findByTestId('lookup-submit'));
   await user.click(await screen.findByTestId('review-submit'));
