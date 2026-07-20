@@ -30,7 +30,15 @@ public interface IBillerResearchCoordinator
         CancellationToken cancellationToken = default);
 }
 
-public sealed record ResearchExecutionContext(string BillerId, string RunId, IOrchestrationEventSink ActivitySink);
+/// <summary>
+/// Carries the per-turn execution identity separately from the persisted shared-context run.
+/// Activity uses <see cref="ExecutionId"/>; MCP capabilities use <see cref="ContextRunId"/>.
+/// </summary>
+public sealed record ResearchExecutionContext(
+    string BillerId,
+    string ExecutionId,
+    string ContextRunId,
+    IOrchestrationEventSink ActivitySink);
 
 public sealed record ResearchAgentInvocationContext(AgentContextSnapshot SharedContext);
 

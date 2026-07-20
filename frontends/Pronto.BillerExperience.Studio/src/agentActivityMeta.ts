@@ -14,7 +14,11 @@ export function agentActivityMeta(
 }
 
 export function latestAgentActivity(activity: AgentActivity[]): AgentActivity[] {
-  return [...activity]
+  const latestRunId = [...activity]
+    .sort((left, right) => left.sequence - right.sequence)
+    .at(-1)?.run_id;
+  return activity
+    .filter(item => item.run_id === latestRunId)
     .reverse()
     .filter((item, index, all) => all.findIndex(candidate => candidate.agent_id === item.agent_id) === index)
     .reverse();

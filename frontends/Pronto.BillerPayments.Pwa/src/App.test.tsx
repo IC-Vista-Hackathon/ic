@@ -64,6 +64,16 @@ describe('unbranded config (evidence-gated branding not yet chosen)', () => {
     // Header must still paint a background (falls back to the brand token) so its white title stays visible.
     expect(screen.getByTestId('app-header').style.background).toBe('var(--brand)');
   });
+
+  it('renders when optional sections (ui/preferences/billing) are null instead of failing as invalid', async () => {
+    const partial = { ...config, ui: null, preferences: null, billing: null };
+    vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify(partial), { status: 200 })));
+    const { App } = await import('./App');
+    render(<App />);
+
+    expect(await screen.findByRole('heading', { name: 'Pay your bill' })).toBeDefined();
+    expect(screen.queryByText(/billing options are invalid|preferences are invalid|interface configuration is invalid/i)).toBeNull();
+  });
 });
 
 async function reachReview(user: ReturnType<typeof userEvent.setup>) {

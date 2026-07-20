@@ -35,11 +35,15 @@ public sealed partial class BillerOnboardingService(
     IComplianceReviewService? complianceReviewService = null,
     IBillingDiscovery? billingDiscovery = null,
     IPayerSeeder? payerSeeder = null,
-    IComplianceAttestationService? complianceAttestationService = null)
+    IComplianceAttestationService? complianceAttestationService = null,
+    Microsoft.Extensions.Options.IOptions<BillerExperienceOptions>? options = null,
+    IHostApplicationLifetime? applicationLifetime = null)
 {
     private const string RunId = "onboarding";
     private readonly IComplianceReviewService _compliance = complianceReviewService ?? CreateDefaultComplianceService();
     private readonly IComplianceAttestationService _attestation = complianceAttestationService ?? CreateDefaultAttestationService();
+    private readonly OrchestrationOptions _orchestrationOptions = options?.Value.Orchestration ?? new();
+    private readonly CancellationToken _applicationStopping = applicationLifetime?.ApplicationStopping ?? CancellationToken.None;
 
     public async ValueTask<(BillerResponse Biller, OnboardingSessionResponse Session, ExperienceRevisionResponse Draft)> CreateAsync(
         CreateBillerRequest request,
@@ -263,8 +267,13 @@ public sealed partial class BillerOnboardingService(
         var effectiveBillingProfile = assumptionTurn?.State.Profile ?? sourceBillingProfile;
         activity?.SetTag("ic.billing.category_count", effectiveBillingProfile.Categories.Count);
         activity?.SetTag("ic.billing.discovery_complete", billingDiscovery?.Inspect(effectiveBillingProfile).Progress.IsComplete ?? false);
+        using var workflowCancellation = CancellationTokenSource.CreateLinkedTokenSource(_applicationStopping);
+        workflowCancellation.CancelAfter(TimeSpan.FromSeconds(Math.Max(1, _orchestrationOptions.WorkflowTimeoutSeconds)));
+        var workflowToken = workflowCancellation.Token;
+        var executionId = Guid.NewGuid().ToString("N");
+        activity?.SetTag("ic.orchestration.execution_id", executionId);
         var orchestrationContext = new OrchestrationContext(
-            run.Id,
+            executionId,
             Activity.Current?.TraceId.ToString() ?? Guid.NewGuid().ToString("N"),
             billerId,
             run.Id);
@@ -280,7 +289,7 @@ public sealed partial class BillerOnboardingService(
             workflow,
             new BillerExperienceChatWorkflowInput(biller, experience, messages, effectiveBillingProfile, eventSink),
             orchestrationContext,
-            cancellationToken);
+            workflowToken);
         var discoveryReply = assumptionTurn?.AddedAssumptions.Count > 0
             ? assumptionTurn.Reply
             : discoveryTurn?.Reply;
@@ -305,7 +314,7 @@ public sealed partial class BillerOnboardingService(
             },
             Findings = generated.Findings
         };
-        var latestRun = await GetRequiredRunAsync(billerId, cancellationToken);
+        var latestRun = await GetRequiredRunAsync(billerId, workflowToken);
         var updatedRun = latestRun with
         {
             State = nextState,
@@ -316,11 +325,11 @@ public sealed partial class BillerOnboardingService(
             UpdatedAt = DateTimeOffset.UtcNow
         };
 
-        var savedExperience = await repository.SaveExperienceAsync(updatedExperience, experience.ETag, cancellationToken);
-        var savedRun = await repository.SaveRunAsync(updatedRun, latestRun.ETag, cancellationToken);
+        var savedExperience = await repository.SaveExperienceAsync(updatedExperience, experience.ETag, workflowToken);
+        var savedRun = await repository.SaveRunAsync(updatedRun, latestRun.ETag, workflowToken);
         if ((discoveryTurn?.AnswerAccepted == true || assumptionTurn?.AddedAssumptions.Count > 0) && agentContextService is not null)
         {
-            await ShareBillingProfileAsync(billerId, savedRun.Id, effectiveBillingProfile, cancellationToken);
+            await ShareBillingProfileAsync(billerId, savedRun.Id, effectiveBillingProfile, workflowToken);
         }
         BillerExperienceTelemetry.ChatTurns.Add(1, new KeyValuePair<string, object?>("provider", draftGenerator.Provider));
         RecordTransition(run.State, nextState);

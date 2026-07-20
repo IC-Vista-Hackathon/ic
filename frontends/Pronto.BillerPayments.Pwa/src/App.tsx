@@ -529,13 +529,16 @@ function validateConfig(value: unknown): ExperienceDefinition {
   ) {
     throw new Error('The payment experience configuration is incomplete.');
   }
-  if (value.ui !== undefined && !isValidUi(value.ui)) {
+  // ui/preferences/billing are optional sections a biller may not have configured yet; a null
+  // (not just absent) value must be treated as "not provided" and skipped — the renderer already
+  // null-guards them (e.g. `config?.billing?.categories ?? []`) — rather than failing validation.
+  if (value.ui != null && !isValidUi(value.ui)) {
     throw new Error('The payment experience interface configuration is invalid.');
   }
-  if (value.preferences !== undefined && !isValidPreferences(value.preferences)) {
+  if (value.preferences != null && !isValidPreferences(value.preferences)) {
     throw new Error('The payment experience preferences are invalid.');
   }
-  if (value.billing !== undefined && !isValidBilling(value.billing)) {
+  if (value.billing != null && !isValidBilling(value.billing)) {
     throw new Error('The payment experience billing options are invalid.');
   }
   const accepted = isRecord(value.preferences) && isStringArray(value.preferences.accepted_methods)
