@@ -46,5 +46,5 @@ PRONTO_FUNCTIONAL_BASE_URL=http://pronto-nonprod.eastus2.cloudapp.azure.com \
 | `HealthAndConfigTests` | FR-9 | passing |
 | `OnboardingBootstrapTests` | FR-1, FR-2 | passing |
 | `AgenticInvoiceSeedingTests` | FR-6 | **known-gap** (hard-coded invoice templates) |
-| `BrandResearchTests` | FR-3, FR-4 | **known-gap** (research doesn't scrape brand) |
-| `PrematureBrandingTests` | FR-5 | **known-gap** (fabricated branding before research) |
+| `BrandResearchTests` | FR-3, FR-4 | passing |
+| `PrematureBrandingTests` | FR-5 | passing |

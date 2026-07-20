@@ -1,4 +1,4 @@
-import type { AgentActivitySnapshot, Bootstrap, ChatResponse, Deployment, ExperienceDefinition, ExperienceRevision, PreviewInvoice, Session } from './types';
+import type { AgentActivitySnapshot, Bootstrap, ChatResponse, Deployment, ExperienceDefinition, ExperienceRevision, PreviewInvoice, PreviewTenant, Session } from './types';
 import { logError, logEvent, newTrace } from './telemetry';
 import { fetchWithTimeout, requestError } from './http';
 
@@ -46,6 +46,12 @@ export const api = {
     request<Deployment>(`/billers/${billerId}/config/publish`, { method: 'POST', body: JSON.stringify({ biller_id: billerId, revision }) }, billerId),
   deployment: (billerId: string, deploymentId: string) =>
     request<Deployment>(`/billers/${billerId}/deployments/${deploymentId}`, undefined, billerId),
+  // Provision (or refresh) the isolated, seeded preview tenant the built PWA renders against.
+  provisionPreview: (billerId: string) =>
+    request<PreviewTenant>(`/billers/${billerId}/preview`, { method: 'POST' }, billerId),
+  // Wipe + deterministically re-seed the preview tenant for a fresh demo run.
+  resetPreview: (billerId: string) =>
+    request<PreviewTenant>(`/billers/${billerId}/preview/reset`, { method: 'POST' }, billerId),
 };
 
 async function supportingRequest<T>(path: string, billerId: string): Promise<T> {

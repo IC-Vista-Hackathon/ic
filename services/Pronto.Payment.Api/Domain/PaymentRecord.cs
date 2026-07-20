@@ -90,6 +90,14 @@ public sealed record PaymentRecord
     public string? FailureReason { get; init; }
 
     /// <summary>
+    /// True when this settlement belongs to an isolated Studio preview tenant (a <c>preview-</c>
+    /// biller partition). Derived server-side from the biller id — the client never declares it, so
+    /// money semantics are unchanged. Preview settlements are real service state on the fake rail
+    /// but are excluded from genuine-traffic reporting/reconciliation.
+    /// </summary>
+    public bool IsPreview { get; init; }
+
+    /// <summary>
     /// True for a synthetic canary payment minted by the post-publish assurance layer to prove the
     /// live payer path still settles. Canary records run the genuine end-to-end workflow on the
     /// fake rail but are excluded from reconciliation of genuine traffic and from real reporting,
@@ -139,7 +147,8 @@ public sealed record PaymentRecord
         CreatedAt: CreatedAt,
         InstallmentPlanId: InstallmentPlanId,
         InstallmentSequence: InstallmentSequence,
-        InstallmentCount: InstallmentCount);
+        InstallmentCount: InstallmentCount,
+        IsPreview: IsPreview);
 
     /// <summary>
     /// The payment id to use for a request. When a client supplies an idempotency key the id is

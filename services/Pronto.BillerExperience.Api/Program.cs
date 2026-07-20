@@ -9,6 +9,7 @@ using Azure.Storage.Blobs;
 using Pronto.BillerExperience.Api;
 using Pronto.BillerExperience.Api.Application;
 using Pronto.BillerExperience.Api.Application.Agents;
+using Pronto.BillerExperience.Api.Application.Preview;
 using Pronto.BillerExperience.Api.Application.Compliance;
 using Pronto.BillerExperience.Api.Application.Compliance.Checkers;
 using Pronto.BillerExperience.Api.Configuration;
@@ -87,6 +88,7 @@ builder.Services.Configure<BillerExperienceOptions>(builder.Configuration.GetSec
 builder.Services.Configure<MaintenanceOptions>(builder.Configuration.GetSection(MaintenanceOptions.SectionName));
 builder.Services.AddSingleton<IOrchestrationRunner, OrchestrationRunner>();
 builder.Services.AddSingleton<BillerOnboardingService>();
+builder.Services.AddSingleton<PreviewProvisioningService>();
 builder.Services.AddSingleton<IBillingDiscovery, BillingDiscoveryEngine>();
 builder.Services.AddSingleton<AgentContextService>();
 

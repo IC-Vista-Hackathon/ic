@@ -69,6 +69,29 @@ public sealed class InvoiceApiIntegrationTests : IClassFixture<TestingAppFactory
     }
 
     [Fact]
+    public async Task PreviewTenantReseedIsDeterministicAndDoesNotAccumulate()
+    {
+        var client = _factory.CreateClient();
+        // preview- marks the isolated preview partition; a Studio "Restart preview" re-seeds it.
+        // F1's per-account replace-on-reseed makes this deterministic without accumulating slots.
+        const string biller = "preview-integration-biller";
+        const string account = "4421";
+        var seedBase = $"/billers/{biller}/invoices";
+
+        for (var run = 0; run < 3; run++)
+        {
+            var response = await client.PostAsJsonAsync(
+                $"{seedBase}/seed", new SeedRequest(Count: 4, AccountNumber: account), Wire);
+            Assert.Equal(HttpStatusCode.Created, response.StatusCode);
+        }
+
+        var list = await client.GetFromJsonAsync<InvoiceList>($"{seedBase}?account_number={account}", Wire);
+        // Three re-seeds leave exactly one seed set — a reset replaces, it doesn't accumulate.
+        Assert.NotNull(list);
+        Assert.Equal(4, list!.Invoices.Count);
+    }
+
+    [Fact]
     public async Task MultipleCategoryInvoicesAreSeededAndReturnedForOneAccount()
     {
         var client = _factory.CreateClient();

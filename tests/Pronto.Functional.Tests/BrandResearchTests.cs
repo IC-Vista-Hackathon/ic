@@ -6,16 +6,11 @@ namespace Pronto.Functional.Tests;
 /// <summary>
 /// FR-3 — The biller research agent must scrape the biller's own website and pull real brand
 /// evidence (logo, colors, styling, copy). FR-4 — that evidence must flow into the draft the
-/// biller previews.
-///
-/// KNOWN GAP: today research is skipped/deterministic (the crawler only extracts page title and
-/// meta description — no logo/colors/styling), so the draft keeps its placeholder brand and no
-/// research agent runs to completion. Example biller sites that SHOULD yield brand evidence:
+/// biller previews. Example biller sites that yield brand evidence:
 /// https://www.happypantsnyc.com and https://thankful-sea-0d2febf0f.7.azurestaticapps.net .
 /// See docs/pronto-functional-requirements.md (FR-3, FR-4).
 /// </summary>
 [Trait(Categories.Name, Categories.Functional)]
-[Trait(Categories.Name, Categories.KnownGap)]
 public sealed class BrandResearchTests
 {
     private const string FabricatedDefaultPrimaryColor = "#085368";

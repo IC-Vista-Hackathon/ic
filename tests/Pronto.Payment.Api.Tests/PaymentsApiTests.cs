@@ -201,4 +201,60 @@ public sealed class PaymentsApiTests : IClassFixture<TestingAppFactory>
         Assert.Equal(firstInvoice.Id, payment.InvoiceId);
     }
 
+    [Fact]
+    public async Task PreviewTenantPaymentIsFlaggedPreview()
+    {
+        var billerId = "preview-" + Guid.NewGuid().ToString("N");
+        var invoice = fakeInvoices.AddDueInvoice(billerId, amountCents: 7000);
+
+        var response = await client.PostAsJsonAsync(
+            "payments",
+            new CreatePaymentRequest(billerId, invoice.Id, "card", IdempotencyKey: "preview-payment"),
+            Wire);
+
+        Assert.Equal(HttpStatusCode.Created, response.StatusCode);
+        var payment = await response.Content.ReadFromJsonAsync<PaymentResponse>(Wire);
+        // Real settlement on the fake rail — amount/fee/total are still server-computed …
+        Assert.Equal(PaymentStatus.Succeeded, payment!.Status);
+        Assert.Equal(7000, payment.AmountCents);
+        // … but the record is flagged preview so it can be excluded from real reporting.
+        Assert.True(payment.IsPreview);
+    }
+
+    [Fact]
+    public async Task GenuineTenantPaymentIsNotFlaggedPreview()
+    {
+        var billerId = Guid.NewGuid().ToString();
+        var invoice = fakeInvoices.AddDueInvoice(billerId, amountCents: 7000);
+
+        var response = await client.PostAsJsonAsync(
+            "payments",
+            new CreatePaymentRequest(billerId, invoice.Id, "card", IdempotencyKey: "genuine-payment"),
+            Wire);
+
+        var payment = await response.Content.ReadFromJsonAsync<PaymentResponse>(Wire);
+        Assert.False(payment!.IsPreview);
+    }
+
+    [Fact]
+    public async Task PreviewPaymentsAreIsolatedFromTheLiveTenantPartition()
+    {
+        var liveBillerId = Guid.NewGuid().ToString("N");
+        var previewBillerId = "preview-" + liveBillerId;
+        var previewInvoice = fakeInvoices.AddDueInvoice(previewBillerId, amountCents: 6000);
+        await client.PostAsJsonAsync(
+            "payments",
+            new CreatePaymentRequest(previewBillerId, previewInvoice.Id, "card", IdempotencyKey: "iso-preview"),
+            Wire);
+
+        // The preview settlement lives only in the preview partition; the live biller's reporting
+        // list never sees it (isolation by /biller_id), and the preview list carries the flag.
+        var livePayments = await client.GetFromJsonAsync<PaymentResponse[]>(
+            $"payments?biller_id={liveBillerId}", Wire);
+        Assert.Empty(livePayments!);
+
+        var previewPayments = await client.GetFromJsonAsync<PaymentResponse[]>(
+            $"payments?biller_id={previewBillerId}", Wire);
+        Assert.All(previewPayments!, payment => Assert.True(payment.IsPreview));
+    }
 }
