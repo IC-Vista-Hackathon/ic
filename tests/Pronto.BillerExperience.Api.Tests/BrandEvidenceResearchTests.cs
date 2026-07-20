@@ -187,6 +187,44 @@ public sealed class BrandEvidenceResearchTests
     }
 
     [Fact]
+    public void ApplyLetsExplicitBillerBrandOverrideGeneratedAndResearch()
+    {
+        // The draft carries non-blank colors/font (as if a model re-emitted its own), and research
+        // suggests yet others — the biller's explicit selection must win over both.
+        var definition = UnbrandedDefinition() with
+        {
+            Brand = new ExperienceBrand("City of Vista", "#111111", "#222222", null, "Times")
+        };
+        var research = ResearchWith(
+            (BrandEvidenceFacts.PrimaryColor, "#ff5a1f"),
+            (BrandEvidenceFacts.SecondaryColor, "#1e88e5"));
+        var biller = Biller() with { Brand = new BillerBrand("#085368", "#18b4e9", null, "Poppins") };
+
+        var applied = ResearchBrandApplicator.Apply(definition, biller, research);
+
+        Assert.Equal("#085368", applied.Brand.PrimaryColor);
+        Assert.Equal("#18b4e9", applied.Brand.SecondaryColor);
+        Assert.Equal("Poppins", applied.Brand.FontFamily);
+    }
+
+    [Fact]
+    public void ApplyKeepsExplicitBillerBrandEvenWithoutResearchFacts()
+    {
+        var definition = UnbrandedDefinition() with
+        {
+            Brand = new ExperienceBrand("City of Vista", "#111111", "#222222", null, null)
+        };
+        var research = new BillerResearchResponse(ResearchOutcome.Degraded, [], [], []);
+        var biller = Biller() with { Brand = new BillerBrand("#085368", "#18b4e9", null, "Poppins") };
+
+        var applied = ResearchBrandApplicator.Apply(definition, biller, research);
+
+        Assert.Equal("#085368", applied.Brand.PrimaryColor);
+        Assert.Equal("#18b4e9", applied.Brand.SecondaryColor);
+        Assert.Equal("Poppins", applied.Brand.FontFamily);
+    }
+
+    [Fact]
     public void ApplyWithoutFactsReturnsDraftUnchanged()
     {
         var definition = UnbrandedDefinition();

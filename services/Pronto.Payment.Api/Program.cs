@@ -55,6 +55,15 @@ builder.Services.AddHttpClient<IBillerAccountClient, HttpBillerAccountClient>(cl
     .AddHttpMessageHandler<CorrelationPropagationHandler>()
     .AddServiceBearerToken(builder.Configuration, builder.Environment);
 
+// Read fee policy from the Biller Experience config endpoint so a biller that absorbs fees never
+// has one added to the payer's quote. Falls back to demo defaults on any read failure.
+builder.Services.RemoveAll<IBillerConfigClient>();
+builder.Services.AddHttpClient<IBillerConfigClient, HttpBillerConfigClient>(client =>
+    client.BaseAddress = new Uri(
+        builder.Configuration["Services:BillerExperienceApi"] ?? "http://localhost:5000"))
+    .AddHttpMessageHandler<CorrelationPropagationHandler>()
+    .AddServiceBearerToken(builder.Configuration, builder.Environment);
+
 var app = builder.Build();
 
 app.UseServiceDefaults();

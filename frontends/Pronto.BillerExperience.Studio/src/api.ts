@@ -29,7 +29,7 @@ async function request<T>(path: string, init?: RequestInit, billerId?: string, t
 }
 
 export const api = {
-  create: (input: { display_name: string; slug: string; bill_type: string; postal_code: string; website?: string }) =>
+  create: (input: { display_name: string; slug: string; bill_type: string; postal_code: string; website?: string; brand?: { primary_color: string; secondary_color: string; font_family?: string } }) =>
     request<Bootstrap>('/billers', { method: 'POST', body: JSON.stringify(input) }),
   chat: (billerId: string, message: string, billingAnswers?: Array<{ dimension: 'categories'|'cadence'|'state_rules'|'payment_terms'; answer: string }>) =>
     request<ChatResponse>(`/billers/${billerId}/chat`, { method: 'POST', body: JSON.stringify({ message, billing_answers: billingAnswers }) }, billerId, CHAT_REQUEST_TIMEOUT_MS),
