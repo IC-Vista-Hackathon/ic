@@ -833,20 +833,23 @@ export function App() {
     const { vertical, website, skipWebsite, colorChoice, customPrimary, customSecondary, customAccent, fontChoice, extractedColors } = st;
     let palette: Palette;
     let colorsFromLogo = false;
-    if (website && !skipWebsite) {
+    // An explicit color override always wins, even when a website was scanned — otherwise the
+    // biller's manually chosen colors are silently dropped in favor of scraped/simulated ones.
+    if (colorChoice === 'custom') {
+      palette = { primary: customPrimary, secondary: customSecondary, accent: customAccent, font: paletteFromString(vertical || 'default').font };
+    } else if (website && !skipWebsite) {
       if (extractedColors && extractedColors.length >= 2) {
         palette = { primary: extractedColors[0], secondary: extractedColors[1], accent: extractedColors[2] || '#f5f5f7', font: paletteFromString(website).font };
         colorsFromLogo = true;
       } else {
         palette = paletteFromString(website);
       }
-    } else if (skipWebsite && colorChoice === 'custom') {
-      palette = { primary: customPrimary, secondary: customSecondary, accent: customAccent, font: paletteFromString(vertical || 'default').font };
     } else {
       palette = paletteFromString(vertical || 'default');
     }
-    if (skipWebsite && fontChoice !== 'auto') palette = { ...palette, font: fontChoice };
-    else if (skipWebsite && fontChoice === 'auto') palette = { ...palette, font: 'Arial' };
+    // An explicit font choice always wins; only fall back to Arial for the no-website "auto" path.
+    if (fontChoice !== 'auto') palette = { ...palette, font: fontChoice };
+    else if (skipWebsite) palette = { ...palette, font: 'Arial' };
     return { ...palette, initials: initialsFrom(st.bizName), colorsFromLogo };
   };
 
@@ -981,12 +984,18 @@ export function App() {
           ? (/^https?:\/\//i.test(s.website.trim()) ? s.website.trim() : `https://${s.website.trim()}`)
           : undefined;
         const primaryState = s.selectedStates[0] ?? 'California';
+        // Send an explicitly chosen brand so it's honored end-to-end (draft → research → preview →
+        // publish); leave it unset for the "use scraped colors" path so research can fill it in.
+        const brand = s.colorChoice === 'custom'
+          ? { primary_color: s.customPrimary, secondary_color: s.customSecondary, ...(s.fontChoice !== 'auto' ? { font_family: s.fontChoice } : {}) }
+          : undefined;
         const created = await api.create({
           display_name: s.bizName,
           slug,
           bill_type: vertical,
           postal_code: STATE_POSTAL_CODE[primaryState] ?? '10001',
           website,
+          brand,
         });
         billerId = created.biller.biller_id;
         patch({ backendBillerId: billerId, backendDraft: created.draft, backendSession: created.session });
@@ -1498,7 +1507,7 @@ export function App() {
   const selfServiceUpdateLabel = s.selfServiceUpdate ? 'Yes' : 'No';
   const verticalSummaryLabel = (VERTICALS.find((v) => v.id === s.vertical) || { label: 'Not set' }).label;
   const locationSummaryLabel = `${s.bizName || 'Unnamed business'} - ${s.selectedStates.length ? s.selectedStates.join(', ') : 'No states selected'}`;
-  const brandSourceLabel = brand.colorsFromLogo ? `Colors extracted from the logo at ${s.website}` : s.website && !s.skipWebsite ? `Logo colors unavailable - using a simulated palette for ${s.website}` : 'Simulated default palette for this vertical';
+  const brandSourceLabel = s.colorChoice === 'custom' ? 'Your selected brand colors' : brand.colorsFromLogo ? `Colors extracted from the logo at ${s.website}` : s.website && !s.skipWebsite ? `Logo colors unavailable - using a simulated palette for ${s.website}` : 'Simulated default palette for this vertical';
 
   const reminderOptions = [{ id: 'email', label: 'Email' }, { id: 'text', label: 'Text (SMS)' }, { id: 'both', label: 'Both' }, { id: 'none', label: 'None' }].map((r) => ({ ...r, selected: s.reminderChannel === r.id, onSelect: () => patch({ reminderChannel: r.id, editingSection: null }) }));
   const methodLabels: Record<string, string> = { ach: 'ACH', card: 'Credit/Debit Cards', applepay: 'Apple Pay', googlepay: 'Google Pay', paypal: 'PayPal', other: 'Other' };
@@ -2424,7 +2433,7 @@ export function App() {
             </div>
             <div style={css('display:flex;gap:var(--invoicecloud-spacing-s);flex-wrap:wrap')}>
               <button type="button" onClick={openSignup} style={css('background:none;border:1px solid rgba(255,255,255,.3);color:#fff;border-radius:10px;padding:12px 20px;font-size:14px;cursor:pointer')}>Save without publishing</button>
-              <button type="button" onClick={publishFromPreview} style={css('background:var(--invoicecloud-secondary);color:var(--invoicecloud-utility-neutral-100);border:none;border-radius:10px;padding:12px 24px;font-size:14px;font-weight:700;cursor:pointer')}>{billingInterviewPending(s.backendSession) ? 'Finish billing interview' : 'Publish →'}</button>
+              <button type="button" onClick={publishFromPreview} style={css('background:#fff;color:var(--invoicecloud-utility-neutral-100);border:none;border-radius:10px;padding:12px 24px;font-size:14px;font-weight:700;cursor:pointer')}>{billingInterviewPending(s.backendSession) ? 'Finish billing interview' : 'Publish →'}</button>
             </div>
           </div>
         </div>
