@@ -86,6 +86,117 @@ public sealed class ServiceMcpToolsWriteTests
     }
 
     [Fact]
+    public async Task BindExecutionCapabilityRebindsVerifiedPayerToExecutionAndPreservesBinding()
+    {
+        var (tools, capabilities, payers, payments) = Build(seedingEnabled: false);
+        payers.Payer = NewPayer("payer-9", "ACCT-1");
+
+        // Policy verifies the payer; that token is bound to Policy and cannot submit a payment.
+        var policyPayerToken = await VerifiedToken(tools, capabilities, agentId: "policy", canWrite: true);
+        await Assert.ThrowsAsync<UnauthorizedAccessException>(() =>
+            tools.SubmitPaymentAsync(policyPayerToken, "intent-1", "inv-1", "card", payerConfirmed: true, scheduledFor: null, CancellationToken.None).AsTask());
+
+        // Re-issuing at the handoff yields an Execution-bound capability that submits and keeps the payer.
+        var bound = await tools.BindExecutionCapabilityAsync(policyPayerToken, CancellationToken.None);
+        var payment = await tools.SubmitPaymentAsync(
+            bound.ExecutionCapabilityToken, "intent-1", "inv-1", "card", payerConfirmed: true, scheduledFor: null, CancellationToken.None);
+        Assert.Equal(PaymentStatus.Succeeded, payment.Status);
+        Assert.Equal("payer-9", payments.LastRequest!.PayerAccountId);
+    }
+
+    [Fact]
+    public async Task BindExecutionCapabilityNeverExtendsTheOriginalExpiration()
+    {
+        // The re-issued Execution capability may narrow the lifetime but must never outlive the
+        // presented one, even though it is minted later (when a fresh now+lifetime would be later).
+        var clock = new MutableTimeProvider(new DateTimeOffset(2026, 7, 15, 0, 0, 0, TimeSpan.Zero));
+        var (tools, capabilities, payers, _) = Build(seedingEnabled: false, timeProvider: clock);
+        payers.Payer = NewPayer("payer-9", "ACCT-1");
+
+        var policyPayerToken = await VerifiedToken(tools, capabilities, agentId: "policy", canWrite: true);
+        var originalExpiry = capabilities.Validate(policyPayerToken, writeRequired: true, payerRequired: true).ExpiresAt;
+
+        // Time passes (still inside the 30-minute lifetime) before the handoff re-issues the token.
+        clock.Advance(TimeSpan.FromMinutes(10));
+        var bound = await tools.BindExecutionCapabilityAsync(policyPayerToken, CancellationToken.None);
+        var boundExpiry = capabilities.Validate(bound.ExecutionCapabilityToken, writeRequired: true, payerRequired: true).ExpiresAt;
+
+        Assert.Equal(originalExpiry, boundExpiry);
+        Assert.True(boundExpiry <= originalExpiry);
+        // A naive re-issue would have expired at now+lifetime (10 minutes later); the cap prevented that.
+        Assert.True(boundExpiry < clock.GetUtcNow().AddMinutes(30));
+    }
+
+    [Fact]
+    public async Task BindExecutionCapabilityRequiresWriteCapablePayerBoundCapability()
+    {
+        var (tools, capabilities, payers, _) = Build(seedingEnabled: false);
+        payers.Payer = NewPayer("payer-9", "ACCT-1");
+
+        // A biller capability that never verified a payer cannot be rebound.
+        var billerOnly = capabilities.Issue(BillerId, "run-1", "policy", canWrite: true);
+        await Assert.ThrowsAsync<UnauthorizedAccessException>(() =>
+            tools.BindExecutionCapabilityAsync(billerOnly, CancellationToken.None).AsTask());
+
+        // A read-only payer capability cannot be rebound for the (write) payment path.
+        var readOnlyPayer = await VerifiedToken(tools, capabilities, agentId: "policy", canWrite: false);
+        await Assert.ThrowsAsync<UnauthorizedAccessException>(() =>
+            tools.BindExecutionCapabilityAsync(readOnlyPayer, CancellationToken.None).AsTask());
+    }
+
+    [Fact]
+    public async Task GuestPaymentPathCreatesAndSubmitsWithoutPayerBinding()
+    {
+        var (tools, capabilities, _, payments) = Build(seedingEnabled: false);
+        // A guest has no payer account: Execution uses its own write-capable biller capability.
+        var guest = capabilities.Issue(BillerId, "run-1", ExecutionAgent, canWrite: true);
+
+        var intent = await tools.CreatePaymentIntentAsync(guest, "inv-1", "card", scheduledFor: null, CancellationToken.None);
+        Assert.Equal("requires_confirmation", intent.Status);
+        Assert.Null(intent.PayerAccountId);
+
+        var payment = await tools.SubmitPaymentAsync(
+            guest, intent.IntentId, "inv-1", "card", payerConfirmed: true, scheduledFor: null, CancellationToken.None);
+        Assert.Equal(PaymentStatus.Succeeded, payment.Status);
+        Assert.Null(payments.LastRequest!.PayerAccountId);
+        Assert.Equal(intent.IntentId, payments.LastIdempotencyKey);
+    }
+
+    [Fact]
+    public async Task GuestSubmitStillRequiresExecutionAgentAndConfirmation()
+    {
+        var (tools, capabilities, _, payments) = Build(seedingEnabled: false);
+
+        // A non-Execution biller capability cannot submit, even as a guest.
+        var policyGuest = capabilities.Issue(BillerId, "run-1", "policy", canWrite: true);
+        await Assert.ThrowsAsync<UnauthorizedAccessException>(() =>
+            tools.SubmitPaymentAsync(policyGuest, "intent-1", "inv-1", "card", payerConfirmed: true, scheduledFor: null, CancellationToken.None).AsTask());
+
+        // The Execution guest without explicit confirmation is refused.
+        var execGuest = capabilities.Issue(BillerId, "run-1", ExecutionAgent, canWrite: true);
+        await Assert.ThrowsAsync<UnauthorizedAccessException>(() =>
+            tools.SubmitPaymentAsync(execGuest, "intent-1", "inv-1", "card", payerConfirmed: false, scheduledFor: null, CancellationToken.None).AsTask());
+
+        Assert.Null(payments.LastIdempotencyKey);
+    }
+
+    [Fact]
+    public async Task GuestSubmitForwardsIntentIdAsIdempotencyKeyOnRetry()
+    {
+        var (tools, capabilities, _, payments) = Build(seedingEnabled: false);
+        var guest = capabilities.Issue(BillerId, "run-1", ExecutionAgent, canWrite: true);
+
+        var first = await tools.SubmitPaymentAsync(
+            guest, "intent-42", "inv-1", "card", payerConfirmed: true, scheduledFor: null, CancellationToken.None);
+        var second = await tools.SubmitPaymentAsync(
+            guest, "intent-42", "inv-1", "card", payerConfirmed: true, scheduledFor: null, CancellationToken.None);
+
+        // The intent id is the idempotency key, so a retry resolves to the same payment downstream.
+        Assert.Equal("intent-42", payments.LastIdempotencyKey);
+        Assert.Equal(first.BillerId, second.BillerId);
+    }
+
+    [Fact]
     public async Task SeedInvoicesIsGatedOffByDefault()
     {
         var (toolsDisabled, capabilities, _, _) = Build(seedingEnabled: false);
@@ -104,6 +215,46 @@ public sealed class ServiceMcpToolsWriteTests
             toolsEnabled.SeedInvoicesAsync(readOnly, count: 3, accountNumber: null, billType: null, CancellationToken.None).AsTask());
     }
 
+    [Fact]
+    public async Task RegisterPayerRequiresWriteCapableBillerCapabilityAndBindsBillerFromToken()
+    {
+        var (tools, capabilities, payers, _) = Build(seedingEnabled: false);
+
+        // A read-only capability cannot register a payer.
+        var readOnly = capabilities.Issue(BillerId, "run-1", "policy", canWrite: false);
+        await Assert.ThrowsAsync<UnauthorizedAccessException>(() =>
+            tools.RegisterPayerAsync(readOnly, "New Payer", "new@example.com", null, ["ACCT-7"],
+                autopay: null, paperless: null, paymentDay: null, CancellationToken.None).AsTask());
+        Assert.Null(payers.LastRegisterRequest);
+
+        // A write-capable biller capability registers, binding the biller from the token (never an argument).
+        var writeBiller = capabilities.Issue(BillerId, "run-1", "policy", canWrite: true);
+        var registered = await tools.RegisterPayerAsync(
+            writeBiller, "New Payer", "new@example.com", "555-0100", ["ACCT-7"],
+            autopay: true, paperless: null, paymentDay: 12, CancellationToken.None);
+
+        Assert.Equal(BillerId, payers.LastRegisterRequest!.BillerId);
+        Assert.Equal("New Payer", payers.LastRegisterRequest.Name);
+        Assert.Equal(["ACCT-7"], payers.LastRegisterRequest.AccountNumbers);
+        Assert.NotNull(payers.LastRegisterRequest.Preferences);
+        Assert.True(payers.LastRegisterRequest.Preferences!.Autopay);
+        Assert.Equal(12, payers.LastRegisterRequest.Preferences.PaymentDay);
+        Assert.Equal("payer-new", registered.PayerId);
+    }
+
+    [Fact]
+    public async Task RegisterPayerLeavesPreferencesNullWhenNoPreferenceFieldsSupplied()
+    {
+        var (tools, capabilities, payers, _) = Build(seedingEnabled: false);
+        var writeBiller = capabilities.Issue(BillerId, "run-1", "policy", canWrite: true);
+
+        await tools.RegisterPayerAsync(
+            writeBiller, "New Payer", "new@example.com", null, ["ACCT-7"],
+            autopay: null, paperless: null, paymentDay: null, CancellationToken.None);
+
+        Assert.Null(payers.LastRegisterRequest!.Preferences);
+    }
+
     private static async Task<string> VerifiedToken(
         ServiceMcpTools tools, AgentContextCapabilityService capabilities, string agentId, bool canWrite)
     {
@@ -116,7 +267,14 @@ public sealed class ServiceMcpToolsWriteTests
         new(payerId, BillerId, "Test Payer", "payer@example.com", null, [accountNumber],
             new PayerPreferences(Autopay: false, Paperless: false, Channels: [], PaymentDay: null));
 
-    private static (ServiceMcpTools Tools, AgentContextCapabilityService Capabilities, FakePayerAccountServiceClient Payers, FakePaymentServiceClient Payments) Build(bool seedingEnabled)
+    private sealed class MutableTimeProvider(DateTimeOffset now) : TimeProvider
+    {
+        private DateTimeOffset _now = now;
+        public override DateTimeOffset GetUtcNow() => _now;
+        public void Advance(TimeSpan by) => _now += by;
+    }
+
+    private static (ServiceMcpTools Tools, AgentContextCapabilityService Capabilities, FakePayerAccountServiceClient Payers, FakePaymentServiceClient Payments) Build(bool seedingEnabled, TimeProvider? timeProvider = null)
     {
         var options = Options.Create(new BillerExperienceOptions
         {
@@ -130,7 +288,7 @@ public sealed class ServiceMcpToolsWriteTests
             },
         });
         var capabilities = new AgentContextCapabilityService(
-            options, TimeProvider.System, NullLogger<AgentContextCapabilityService>.Instance);
+            options, timeProvider ?? TimeProvider.System, NullLogger<AgentContextCapabilityService>.Instance);
         var payments = new FakePaymentServiceClient();
         var payers = new FakePayerAccountServiceClient();
         var tools = new ServiceMcpTools(
@@ -190,6 +348,7 @@ public sealed class ServiceMcpToolsWriteTests
     {
         public PayerResponse? Payer { get; set; }
         public string? LastPreferencesPayerId { get; private set; }
+        public RegisterPayerRequest? LastRegisterRequest { get; private set; }
 
         public ValueTask<PayerResponse?> FindByAccountAsync(string billerId, string accountNumber, CancellationToken cancellationToken)
             => ValueTask.FromResult(Payer);
@@ -201,6 +360,20 @@ public sealed class ServiceMcpToolsWriteTests
             LastPreferencesPayerId = payerId;
             return ValueTask.FromResult(new PayerPreferences(
                 request.Autopay ?? false, request.Paperless ?? false, [], request.PaymentDay));
+        }
+
+        public ValueTask<PayerResponse> RegisterAsync(RegisterPayerRequest request, CancellationToken cancellationToken)
+        {
+            LastRegisterRequest = request;
+            return ValueTask.FromResult(new PayerResponse(
+                PayerId: "payer-new",
+                BillerId: request.BillerId,
+                Name: request.Name,
+                Email: request.Email,
+                Phone: request.Phone,
+                AccountNumbers: request.AccountNumbers,
+                Preferences: request.Preferences
+                    ?? new PayerPreferences(Autopay: false, Paperless: false, Channels: [], PaymentDay: null)));
         }
     }
 }

@@ -24,16 +24,27 @@ public sealed partial class AgentContextCapabilityService(
     /// supplied as a tool argument, so payer-scoped tools trust the bound id, not the caller.
     /// </summary>
     public string Issue(string billerId, string runId, string agentId, bool canWrite, string? payerId)
+        => Issue(billerId, runId, agentId, canWrite, payerId, notAfter: null);
+
+    /// <summary>
+    /// Issues a capability, capping its expiration at <paramref name="notAfter"/> when supplied.
+    /// Used when re-issuing a capability at a handoff (e.g. <c>bind_execution_capability</c>): the
+    /// re-bound token may narrow the lifetime but must never outlive the presented capability.
+    /// </summary>
+    public string Issue(string billerId, string runId, string agentId, bool canWrite, string? payerId, DateTimeOffset? notAfter)
     {
         try
         {
             EnsureConfigured();
+            var expiresAt = timeProvider.GetUtcNow().AddMinutes(Math.Clamp(_options.CapabilityLifetimeMinutes, 1, 120));
+            if (notAfter is { } cap && cap < expiresAt)
+                expiresAt = cap;
             var claims = new AgentContextCapability(
                 billerId,
                 runId,
                 agentId,
                 canWrite,
-                timeProvider.GetUtcNow().AddMinutes(Math.Clamp(_options.CapabilityLifetimeMinutes, 1, 120)),
+                expiresAt,
                 payerId);
             var payload = Base64UrlEncode(JsonSerializer.SerializeToUtf8Bytes(claims, JsonOptions));
             var signature = Sign(payload);

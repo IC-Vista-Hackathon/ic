@@ -7,12 +7,14 @@ using Microsoft.Extensions.Options;
 using System.ClientModel;
 using System.ClientModel.Primitives;
 using Pronto.BillerExperience.Api.Configuration;
+using Pronto.BillerExperience.Api.Infrastructure.Mcp;
 
 #pragma warning disable OPENAI001
 
 namespace Pronto.BillerExperience.Api.Infrastructure.Research;
 
-public sealed record DesiredFoundryAgent(string Name, string Model, string Instructions, string Fingerprint, string Capability);
+public sealed record DesiredFoundryAgent(
+    string Name, string Model, string Instructions, string Fingerprint, string Capability, IReadOnlyList<string> AllowedTools);
 public sealed record ExistingFoundryAgent(string Name, string? Fingerprint, bool HasSharedContextMcp, string? Capability);
 
 public interface IFoundryAgentAdministrationGateway
@@ -87,9 +89,52 @@ public sealed partial class FoundryAgentReconciler(
                     : item.Name == "research-coordinator"
                         ? "research_consolidation"
                         : item.Name.Replace('-', '_');
-                var fingerprint = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes($"{model}\n{instructions}\n{options.McpConnectionId}\n{capability}"))).ToLowerInvariant();
-                return new DesiredFoundryAgent(item.Name, model, instructions, fingerprint, capability);
+                var allowedTools = LoadAllowedMcpTools(Path.GetDirectoryName(item.Instructions)!);
+                var fingerprint = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(
+                    $"{model}\n{instructions}\n{options.McpConnectionId}\n{capability}\n{string.Join(',', allowedTools)}"))).ToLowerInvariant();
+                return new DesiredFoundryAgent(item.Name, model, instructions, fingerprint, capability, allowedTools);
             }).ToArray();
+    }
+
+    /// <summary>
+    /// The MCP tools an agent may call over the shared-context connection: the shared-context tools
+    /// every provisioned agent gets, plus the router tools the agent declares in its
+    /// <c>tools.json</c> that the MCP server actually exposes. Non-MCP declarations (e.g.
+    /// <c>update_config</c>, <c>research_website</c>, file_search) are ignored so an agent is never
+    /// granted a tool outside its declared, server-backed set.
+    /// </summary>
+    public static IReadOnlyList<string> LoadAllowedMcpTools(string agentDirectory)
+    {
+        var allowed = new List<string>(SharedContextTools);
+        var toolsPath = Path.Join(agentDirectory, "tools.json");
+        if (!File.Exists(toolsPath)) return allowed;
+        using var document = JsonDocument.Parse(File.ReadAllText(toolsPath));
+        if (!document.RootElement.TryGetProperty("tools", out var tools) || tools.ValueKind != JsonValueKind.Array)
+            return allowed;
+        var declaredToolNames = tools.EnumerateArray()
+            .Where(tool =>
+                tool.TryGetProperty("function", out var function) &&
+                function.TryGetProperty("name", out var name) &&
+                name.ValueKind == JsonValueKind.String)
+            .Select(tool => tool.GetProperty("function").GetProperty("name").GetString());
+        foreach (var value in declaredToolNames)
+        {
+            if (!string.IsNullOrWhiteSpace(value) && McpServerTools.Contains(value) && !allowed.Contains(value))
+                allowed.Add(value);
+        }
+        return allowed;
+    }
+
+    private static readonly string[] SharedContextTools = ["get_goal_context", "append_context"];
+
+    private static readonly HashSet<string> McpServerTools = BuildMcpServerTools();
+
+    private static HashSet<string> BuildMcpServerTools()
+    {
+        var set = new HashSet<string>(SharedContextTools, StringComparer.Ordinal);
+        foreach (var descriptor in new ServiceToolRegistry().All)
+            set.Add(descriptor.Name);
+        return set;
     }
 
     [LoggerMessage(2680, LogLevel.Information, "Verified Foundry agent {AgentName} at desired fingerprint {Fingerprint} with shared-context MCP")]
@@ -102,7 +147,6 @@ public sealed partial class FoundryAgentReconciler(
 
 public sealed class FoundryAgentAdministrationGateway(AIProjectClient project, IOptions<BillerExperienceOptions> options) : IFoundryAgentAdministrationGateway
 {
-    private static readonly string[] AllowedMcpTools = ["get_goal_context", "append_context"];
     private readonly AgentProvisioningOptions configuration = options.Value.AgentProvisioning;
     private readonly Uri mcpEndpoint = CreateMcpEndpoint(options.Value.Mcp.PublicEndpoint);
 
@@ -130,7 +174,7 @@ public sealed class FoundryAgentAdministrationGateway(AIProjectClient project, I
                 server_label = "ic_shared_context",
                 server_url = mcpEndpoint.AbsoluteUri,
                 project_connection_id = configuration.McpConnectionId,
-                allowed_tools = AllowedMcpTools,
+                allowed_tools = agent.AllowedTools,
                 require_approval = "never"
             }
         };

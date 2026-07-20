@@ -27,6 +27,10 @@ spec:
           env:
             - name: BillerExperience__SupportingServices__InvoiceBaseUrl
               value: http://ic-invoice-api:8080/
+            - name: BillerExperience__SupportingServices__PaymentBaseUrl
+              value: http://ic-payment-api:8080/
+            - name: BillerExperience__SupportingServices__PayerAccountBaseUrl
+              value: http://ic-payer-account-api:8080/
           readinessProbe:
             httpGet:
               path: /health/ready
