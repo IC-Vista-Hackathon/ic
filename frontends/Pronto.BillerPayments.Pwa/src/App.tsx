@@ -1,10 +1,10 @@
 import { FormEvent, useEffect, useMemo, useRef, useState } from 'react';
-import { billerSlug, configEndpoint, previewBillerId } from './billerSlug';
+import { billerSlug } from './billerSlug';
 import { settleInvoices, type BatchOutcome } from './batch';
 import { NoOpenBillError } from './errors';
 import { randomId } from './id';
 import { trackEvent } from './insights';
-import { ServicePaymentExperienceProvider, type PaymentQuote } from './provider';
+import { ServicePaymentExperienceProvider, type PaymentQuote, type AssistantRecommendation, type AssistantMessage, type AssistantAction } from './provider';
 import { BatchReview, Cart, Footer, Header, InvoiceSelectList, Intro, PaymentPlanChooser } from './skin';
 import type { BatchReviewLine, CartSummary, InstallmentOption, PaymentPlanMode, SelectableInvoice } from './skin';
 import { logError, logEvent, observed } from './telemetry';
@@ -15,6 +15,9 @@ import type { ExperienceDefinition, ExperiencePreferences, Invoice, PayerProfile
 type Step = 'lookup' | 'method' | 'review' | 'complete';
 type Page = 'payment' | 'history' | 'preferences';
 const PAYMENT_METHODS: PaymentMethod[] = ['card', 'ach'];
+// Payer assistant is opt-in. Off by default so the payer page renders exactly as it does today;
+// the local demo enables it with VITE_PAYER_ASSISTANT=true.
+const ASSISTANT_ENABLED = import.meta.env.VITE_PAYER_ASSISTANT === 'true';
 
 export function App() {
   const [config, setConfig] = useState<ExperienceDefinition>();
@@ -49,6 +52,14 @@ export function App() {
   // deselecting the offending bill clears the error without a manual retry.
   const [quoteErrors, setQuoteErrors] = useState<Record<string, string>>({});
   const [quoteAttempt, setQuoteAttempt] = useState(0);
+  const [recommendation, setRecommendation] = useState<AssistantRecommendation>();
+  const [assistantState, setAssistantState] = useState<'idle'|'thinking'|'ready'|'error'>('idle');
+  const [assistantAttempt, setAssistantAttempt] = useState(0);
+  const [chat, setChat] = useState<AssistantMessage[]>([]);
+  const [chatInput, setChatInput] = useState('');
+  const [chatBusy, setChatBusy] = useState(false);
+  const [chatAction, setChatAction] = useState<AssistantAction>();
+  const chatEndRef = useRef<HTMLDivElement>(null);
   const paymentInFlight = useRef(false);
   // One stable Idempotency-Key per invoice; reused across retries so a partially-failed
   // batch never double-charges an invoice that already settled.
@@ -59,9 +70,8 @@ export function App() {
 
   useEffect(() => {
     setConfigState('loading'); setError('');
-    const slug = billerSlug(); const preview = previewBillerId(); const configUrl = import.meta.env.VITE_CONFIG_URL ?? configEndpoint(slug, preview);
-    // Preview config is served from the draft (no published manifest); only wire the manifest for live slugs.
-    const manifest = document.querySelector<HTMLLinkElement>('#experience-manifest'); if (manifest && !preview) manifest.href = `/api/public/experiences/${encodeURIComponent(slug)}/manifest.webmanifest`;
+    const slug = billerSlug(); const configUrl = import.meta.env.VITE_CONFIG_URL ?? `/api/public/experiences/${encodeURIComponent(slug)}`;
+    const manifest = document.querySelector<HTMLLinkElement>('#experience-manifest'); if (manifest) manifest.href = `/api/public/experiences/${encodeURIComponent(slug)}/manifest.webmanifest`;
     observed('pwa.config.load', async () => { const response = await fetchWithTimeout(configUrl, { cache: 'no-store' }); if (!response.ok) throw await requestError(response, 'Experience configuration is unavailable.'); return validateConfig(await response.json()); })
       .then(value => { setConfig(value); setConfigState('ready'); document.title = value.pwa.name; document.documentElement.style.setProperty('--brand', value.brand.primary_color); document.documentElement.style.setProperty('--brand-secondary', value.brand.secondary_color); if (value.brand.font_family) document.documentElement.style.setProperty('--brand-font', value.brand.font_family); })
       .catch(caught => { setConfigState('error'); setError(`Load payment experience: ${errorMessage(caught)}`); logError('pwa.config.failed', caught, { biller_slug: slug }); });
@@ -110,6 +120,50 @@ export function App() {
       }
     }
   }, [acceptedMethods, provider, selectedInvoices, quoteAttempt]);
+
+  // Payer-side agent turn (opt-in, single-invoice only): once a bill is in hand, ask the assistant
+  // to read it and recommend a method + timing. Advisory only — it never moves money and the payer
+  // stays in control below.
+  useEffect(() => {
+    if (!ASSISTANT_ENABLED || !provider || !invoice || multi) { setRecommendation(undefined); setAssistantState('idle'); setChat([]); setChatAction(undefined); return; }
+    let cancelled = false;
+    setAssistantState('thinking'); setRecommendation(undefined); setChat([]); setChatAction(undefined);
+    provider.askAssistant(invoice.id, invoice.accountNumber)
+      .then(result => { if (!cancelled) { setRecommendation(result); setAssistantState('ready'); setChat([{ role: 'assistant', content: result.reply }]); trackEvent('pwa.assistant_recommended', { method: isPaymentMethod(result.method) ? result.method : 'card', scheduled: !!result.scheduledFor }); } })
+      .catch(caught => { if (!cancelled) { setAssistantState('error'); logError('pwa.assistant.failed', caught); } });
+    return () => { cancelled = true; };
+  }, [provider, invoice, multi, assistantAttempt]);
+  useEffect(() => { chatEndRef.current?.scrollIntoView?.({ block: 'nearest' }); }, [chat, chatBusy]);
+  async function sendChat(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    const question = chatInput.trim();
+    if (!question || !provider || !invoice || chatBusy) return;
+    const history: AssistantMessage[] = [...chat, { role: 'user', content: question }];
+    setChat(history); setChatInput(''); setChatBusy(true); setChatAction(undefined);
+    trackEvent('pwa.assistant_asked', {});
+    try {
+      const result = await provider.chat(invoice.id, invoice.accountNumber, history);
+      setChat([...history, { role: 'assistant', content: result.reply }]);
+      // Surface the in-chat confirm control only when the assistant offered one and its method
+      // is actually accepted here. The payer's tap on it is still the explicit confirmation.
+      setChatAction(result.action && isPaymentMethod(result.action.method) && acceptedMethods.includes(result.action.method) ? result.action : undefined);
+    } catch (caught) {
+      logError('pwa.assistant.failed', caught);
+      setChat([...history, { role: 'assistant', content: 'Sorry — I couldn’t answer that just now. You can still choose a method below.' }]);
+    } finally {
+      setChatBusy(false);
+    }
+  }
+  // The chat's "Confirm & pay" control: the payer's explicit confirmation. It selects the offered
+  // method and submits through the same guarded single-invoice pay() path, then lands on the receipt.
+  async function confirmFromChat(action: AssistantAction) {
+    if (!isPaymentMethod(action.method)) return;
+    selectMethod(action.method);
+    trackEvent('pwa.assistant_pay_confirmed', { method: action.method });
+    setChatAction(undefined);
+    await paySingle(action.method);
+  }
+  function applyRecommendation() { if (recommendation && isPaymentMethod(recommendation.method) && acceptedMethods.includes(recommendation.method)) selectMethod(recommendation.method); }
 
   // Aggregate money for the current method over the selected invoices. All sums are computed
   // here in the core from server quotes; the authorable cart/review only render the labels.
@@ -188,15 +242,15 @@ export function App() {
   function clearSelectedInvoices() { setSelectedIds([]); }
 
   function keyFor(invoiceId: string) { let key = paymentKeys.current.get(invoiceId); if (!key) { key = randomId(); paymentKeys.current.set(invoiceId, key); } return key; }
-  function paymentRequestFor(item: Invoice): PaymentRequest {
-    return { invoiceId: item.id, method, autoPay, paperless, scheduledFor: schedulesPayment ? item.dueDate : undefined, payerName, payerEmail, accountNumber: item.accountNumber, idempotencyKey: keyFor(item.id) };
+  function paymentRequestFor(item: Invoice, methodOverride?: PaymentMethod): PaymentRequest {
+    return { invoiceId: item.id, method: methodOverride ?? method, autoPay, paperless, scheduledFor: schedulesPayment ? item.dueDate : undefined, payerName, payerEmail, accountNumber: item.accountNumber, idempotencyKey: keyFor(item.id) };
   }
   // Build the single-invoice request for the chosen journey. Partial/installment requests carry the
   // requested amount / plan and are never pre-scheduled (the server dates the installment schedule);
   // the full path is byte-for-byte the existing request. Amounts are only *echoed* — the server
   // re-validates them against the balance it looks up.
-  function planRequestFor(item: Invoice): PaymentRequest {
-    const base = paymentRequestFor(item);
+  function planRequestFor(item: Invoice, methodOverride?: PaymentMethod): PaymentRequest {
+    const base = paymentRequestFor(item, methodOverride);
     if (planMode === 'partial') return { ...base, scheduledFor: undefined, amountCents: partialAmountCents };
     if (planMode === 'installment') return { ...base, scheduledFor: undefined, installmentCount };
     return base;
@@ -214,27 +268,28 @@ export function App() {
 
   async function pay() { return multi ? payBatch() : paySingle(); }
 
-  async function paySingle() {
+  async function paySingle(methodOverride?: PaymentMethod) {
     if (!invoice || !provider || paymentInFlight.current) return;
+    const payMethod = methodOverride ?? method;
     paymentInFlight.current = true;
     setBusy(true);
     setError('');
-    trackEvent('pwa.payment_submitted', { method, scheduled: schedulesPayment, autopay_opt_in: autoPay, paperless_opt_in: paperless });
+    trackEvent('pwa.payment_submitted', { method: payMethod, scheduled: schedulesPayment, autopay_opt_in: autoPay, paperless_opt_in: paperless });
     try {
-      const completed = await provider.pay(planRequestFor(invoice));
+      const completed = await provider.pay(planRequestFor(invoice, payMethod));
       paymentKeys.current.delete(invoice.id);
       setReceipt(completed);
       setStep('complete');
       if (completed.preferenceUpdateFailed) {
         setError('Payment completed, but optional preferences could not be saved. You can retry them from Preferences.');
       }
-      logEvent('pwa.payment.completed', { method, scheduled: schedulesPayment, autopay_opt_in: autoPay, paperless_opt_in: paperless });
-      trackEvent('pwa.payment_completed', { method, scheduled: schedulesPayment, autopay_opt_in: autoPay, paperless_opt_in: paperless });
+      logEvent('pwa.payment.completed', { method: payMethod, scheduled: schedulesPayment, autopay_opt_in: autoPay, paperless_opt_in: paperless });
+      trackEvent('pwa.payment_completed', { method: payMethod, scheduled: schedulesPayment, autopay_opt_in: autoPay, paperless_opt_in: paperless });
       if (completed.payerAccountId) await refreshHistory(invoice.accountNumber);
     } catch (caught) {
       setError(`Submit payment: ${errorMessage(caught)}`);
-      logError('pwa.payment.failed', caught, { method, scheduled: schedulesPayment });
-      trackEvent('pwa.payment_failed', { method, scheduled: schedulesPayment, error_category: categorizeError(caught) });
+      logError('pwa.payment.failed', caught, { method: payMethod, scheduled: schedulesPayment });
+      trackEvent('pwa.payment_failed', { method: payMethod, scheduled: schedulesPayment, error_category: categorizeError(caught) });
     } finally {
       paymentInFlight.current = false;
       setBusy(false);
@@ -254,7 +309,7 @@ export function App() {
     setError('');
     trackEvent('pwa.payment_submitted', { method, scheduled: schedulesPayment, autopay_opt_in: autoPay, paperless_opt_in: paperless });
     try {
-      const requests = pending.map(paymentRequestFor);
+      const requests = pending.map(item => paymentRequestFor(item));
       const result = await settleInvoices(request => provider.pay(request), requests);
       const merged = mergeOutcomes(outcomes, result.outcomes);
       setOutcomes(merged);
@@ -351,6 +406,24 @@ export function App() {
         {config.billing?.categories.length ? <section className="card" aria-label="Billing options"><h2>Billing options</h2>{config.billing.categories.map(category => <div className="history-row" key={category.id}><span><strong>{category.display_name}</strong><small>{category.cadence_label} · {category.state_summary}</small></span><strong>{paymentTermsLabel(category.payment_mode, category.maximum_installments)}</strong></div>)}</section> : null}
         {step === 'lookup' && <form className="card" onSubmit={lookup}><h2>{preferences.guest_checkout_allowed ? 'Find your bill' : 'Access your account'}</h2><p className="card-copy">{preferences.guest_checkout_allowed ? 'No sign-in required. Enter the account number shown on your bill.' : 'Enter your account number to continue to the secure payment experience.'}</p><label>Account number<input name="account" data-testid="account-input" required defaultValue="4421" autoComplete="off" /></label><button data-testid="lookup-submit" disabled={busy}>{busy ? 'Finding Bill…' : 'Continue'}</button></form>}
         {step === 'method' && invoice && <>
+          {ASSISTANT_ENABLED && !multi && assistantState !== 'idle' && <section className="card assistant" data-testid="assistant" aria-label="Payment assistant">
+            <div className="assistant-head"><span className="assistant-avatar" aria-hidden="true">✦</span><div><strong>Payment assistant</strong><small>Reviews your bill and suggests a way to pay. You decide.</small></div></div>
+            {assistantState === 'thinking' && <p className="assistant-reply" aria-live="polite">Reviewing your bill and comparing payment options…</p>}
+            {assistantState === 'error' && <div className="alert" role="alert">The assistant is unavailable right now — you can still choose a method below. <button type="button" onClick={() => setAssistantAttempt(value => value + 1)}>Retry</button></div>}
+            {assistantState === 'ready' && recommendation && <>
+              <div className="assistant-transcript" data-testid="assistant-transcript" aria-live="polite">
+                {chat.map((message, index) => <p key={index} className={`assistant-bubble ${message.role}`} data-testid={`assistant-${message.role}`}>{message.content}</p>)}
+                {chatBusy && <p className="assistant-bubble assistant" data-testid="assistant-typing">Thinking…</p>}
+                <div ref={chatEndRef} />
+              </div>
+              {chatAction && <button type="button" className="assistant-confirm" data-testid="assistant-confirm" disabled={busy} onClick={() => confirmFromChat(chatAction)}>{busy ? 'Submitting…' : `Confirm & pay ${money(chatAction.totalCents)} with ${methodLabel(chatAction.method)}`}</button>}
+              <div className="assistant-plan"><span>Recommended</span><strong>{methodLabel(recommendation.method)} · {money(recommendation.totalCents)}{recommendation.scheduledFor ? ` · scheduled ${new Date(recommendation.scheduledFor).toLocaleDateString()}` : ' · pay now'}</strong></div>
+              {isPaymentMethod(recommendation.method) && acceptedMethods.includes(recommendation.method) && method !== recommendation.method && <button type="button" data-testid="assistant-apply" onClick={applyRecommendation}>Use {methodLabel(recommendation.method)}</button>}
+              <form className="assistant-ask" onSubmit={sendChat}>
+                <input data-testid="assistant-input" value={chatInput} onChange={event => setChatInput(event.target.value)} placeholder="Ask about fees, timing, or a method…" aria-label="Ask the payment assistant" disabled={chatBusy} />
+                <button type="submit" data-testid="assistant-send" disabled={chatBusy || !chatInput.trim()}>Ask</button>
+              </form></>}
+          </section>}
           {multi && <InvoiceSelectList heading="Select the bills to pay" invoices={selectable} onToggle={toggleInvoice} onSelectAll={selectAllInvoices} onClearAll={clearSelectedInvoices} allSelected={openInvoices.length > 0 && selectedInvoices.length === openInvoices.length} />}
           <section className="card">{!multi && <Bill invoice={invoice}/>}<h2>Choose how to pay</h2><div className="choices">{acceptedMethods.includes('card') && <button data-testid="method-card" className={method === 'card' ? 'selected' : 'option'} onClick={() => selectMethod('card')}>Card <small>{multi ? methodFeeText('card') : quoteFeeText(quoteOf(invoice.id, 'card'), invoice.amountCents)}</small></button>}{acceptedMethods.includes('ach') && <button data-testid="method-ach" className={method === 'ach' ? 'selected' : 'option'} onClick={() => selectMethod('ach')}>Bank Account <small>{multi ? methodFeeText('ach') : quoteFeeText(quoteOf(invoice.id, 'ach'), invoice.amountCents)}</small></button>}</div>
           {methodQuoteError && <div className="alert" role="alert" data-testid="quote-error">We couldn’t prepare this payment method. {methodQuoteError} <button type="button" onClick={retryQuotes}>Retry quote</button></div>}
@@ -401,6 +474,7 @@ function quoteFeeText(quote: PaymentQuote | undefined, amountCents: number) {
   return fee === 0 ? 'No payer fee' : `${money(fee)} fee`;
 }
 function reminderLabel(value: number | string) { return typeof value === 'number' ? ['Email', 'Text (SMS)', 'Both', 'None'][value] : humanize(value); }
+function methodLabel(method: string) { return method === 'ach' ? 'Bank account (ACH)' : method === 'card' ? 'Card' : humanize(method); }
 function humanize(value: string) { return value.replaceAll('_', ' ').replace(/\b\w/g, match => match.toUpperCase()); }
 function paymentTermsLabel(mode: string | number | null | undefined, maximum?: number | null) { const installments = mode === 'installments_allowed' || mode === 1; if (!installments) return 'Pay in full'; return maximum ? `Up to ${maximum} installments` : 'Installments available'; }
 function money(cents: number) { return new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' }).format(cents / 100); }
