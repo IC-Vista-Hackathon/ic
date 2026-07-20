@@ -407,7 +407,11 @@ public sealed partial class BillerResearchCoordinator(
                 "MCP context orchestration is enabled but its capability issuer or gateway is unavailable.");
         }
 
-        var token = capabilityIssuer.Issue(executionContext.BillerId, executionContext.RunId, agent.Id, canWrite: true);
+        var token = capabilityIssuer.Issue(
+            executionContext.BillerId,
+            executionContext.ContextRunId,
+            agent.Id,
+            canWrite: true);
         var snapshot = await contextGateway.GetAsync(token, cancellationToken);
         return new McpInvocationContext(token, snapshot, new ResearchAgentInvocationContext(snapshot));
     }
@@ -508,7 +512,7 @@ public sealed partial class BillerResearchCoordinator(
             await executionContext.ActivitySink.PublishAsync(new OrchestrationEvent(
                 Guid.NewGuid().ToString("N"),
                 DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
-                executionContext.RunId,
+                executionContext.ExecutionId,
                 agent.Id,
                 agent.DisplayName,
                 status,
