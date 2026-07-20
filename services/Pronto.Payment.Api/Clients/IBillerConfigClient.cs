@@ -1,3 +1,9 @@
+using System.Net;
+using System.Net.Http.Json;
+using System.Text.Json;
+using System.Text.Json.Serialization;
+using Pronto.ServiceDefaults;
+
 namespace Pronto.Payment.Api.Clients;
 
 /// <summary>
@@ -48,7 +54,7 @@ public interface IBillerConfigClient
 /// </summary>
 public sealed class DemoBillerConfigClient : IBillerConfigClient
 {
-    private static readonly BillerPaymentConfig Default = new(
+    internal static readonly BillerPaymentConfig Default = new(
         PaymentMethods: ["card", "ach", "applepay", "googlepay", "paypal"],
         CardPercent: 2.5m,
         AchFlatCents: 150,
@@ -62,4 +68,66 @@ public sealed class DemoBillerConfigClient : IBillerConfigClient
 
     public Task<BillerPaymentConfig> GetAsync(string billerId, CancellationToken cancellationToken)
         => Task.FromResult(Default);
+}
+
+/// <summary>
+/// Reads the biller's fee policy from the Biller Experience config read endpoint and maps
+/// <c>fee_handling</c> onto whether the payer is charged the service fee, so a biller that absorbs
+/// fees never has one added to the payer's server-side quote/total. Everything else stays on the
+/// demo policy defaults. Preview tenants (<c>preview-{id}</c>) resolve their shadowed live biller's
+/// config. Any failure falls back to <see cref="DemoBillerConfigClient.Default"/> so a config read
+/// outage can never block a payment — it just reverts to today's behavior.
+/// </summary>
+public sealed class HttpBillerConfigClient(HttpClient http, ILogger<HttpBillerConfigClient> logger)
+    : IBillerConfigClient
+{
+    private static readonly JsonSerializerOptions Wire = new(JsonSerializerDefaults.Web)
+    {
+        PropertyNamingPolicy = JsonNamingPolicy.SnakeCaseLower,
+    };
+
+    public async Task<BillerPaymentConfig> GetAsync(string billerId, CancellationToken cancellationToken)
+    {
+        var liveBillerId = PreviewTenant.LiveBillerId(billerId);
+        try
+        {
+            using var response = await http.GetAsync(
+                new Uri($"billers/{Uri.EscapeDataString(liveBillerId)}/config", UriKind.Relative),
+                cancellationToken);
+            if (response.StatusCode == HttpStatusCode.NotFound)
+            {
+                return DemoBillerConfigClient.Default;
+            }
+            response.EnsureSuccessStatusCode();
+            var envelope = await response.Content.ReadFromJsonAsync<ConfigEnvelope>(Wire, cancellationToken);
+            var feeHandling = envelope?.Definition?.Preferences?.FeeHandling;
+            if (feeHandling is null)
+            {
+                return DemoBillerConfigClient.Default;
+            }
+            return DemoBillerConfigClient.Default with { PayerPaysFee = PayerIsCharged(feeHandling) };
+        }
+        catch (Exception exception) when (exception is not OperationCanceledException)
+        {
+            LogConfigReadFailed(logger, liveBillerId, exception);
+            return DemoBillerConfigClient.Default;
+        }
+    }
+
+    // "charge"/"mixed" pass the service fee to the payer; "absorb"/"undecided" (and anything
+    // unrecognized) do not, matching the server-side compliance fee-disclosure policy.
+    private static bool PayerIsCharged(string feeHandling) =>
+        string.Equals(feeHandling, "charge", StringComparison.OrdinalIgnoreCase) ||
+        string.Equals(feeHandling, "mixed", StringComparison.OrdinalIgnoreCase);
+
+    private sealed record ConfigEnvelope(DefinitionEnvelope? Definition);
+    private sealed record DefinitionEnvelope(PreferencesEnvelope? Preferences);
+    private sealed record PreferencesEnvelope(
+        [property: JsonPropertyName("fee_handling")] string? FeeHandling);
+
+    private static readonly Action<ILogger, string, Exception> LogConfigReadFailed =
+        LoggerMessage.Define<string>(
+            LogLevel.Warning,
+            new EventId(2100, nameof(HttpBillerConfigClient)),
+            "Could not read fee policy for biller {BillerId}; using demo defaults.");
 }
