@@ -49,6 +49,24 @@ describe('agentActivityMeta', () => {
     expect(result.inventory.map(item => item.agent_id)).toEqual(['policy']);
   });
 
+  it('shows only the latest workflow execution', () => {
+    const prior = activity(1000);
+    const latest: AgentActivity = {
+      ...activity(500),
+      event_id: 'event-2',
+      sequence: 2,
+      run_id: 'run-2',
+      agent_id: 'experience-designer',
+      display_name: 'Experience Designer',
+      status: 'completed',
+      error_code: undefined,
+    };
+
+    const result = partitionAgentActivity([prior, latest]);
+
+    expect(result.invoked).toEqual([latest]);
+  });
+
   it('does not repeat an agent id that is equivalent to its display name', () => {
     expect(shouldShowAgentId({ agent_id: 'biller-payment-policy-research', display_name: 'Biller Payment Policy Research' })).toBe(false);
     expect(shouldShowAgentId({ agent_id: 'policy-v2', display_name: 'Policy' })).toBe(true);

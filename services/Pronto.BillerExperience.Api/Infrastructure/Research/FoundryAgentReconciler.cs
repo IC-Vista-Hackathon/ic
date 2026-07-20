@@ -14,8 +14,19 @@ using Pronto.BillerExperience.Api.Infrastructure.Mcp;
 namespace Pronto.BillerExperience.Api.Infrastructure.Research;
 
 public sealed record DesiredFoundryAgent(
-    string Name, string Model, string Instructions, string Fingerprint, string Capability, IReadOnlyList<string> AllowedTools);
-public sealed record ExistingFoundryAgent(string Name, string? Fingerprint, bool HasSharedContextMcp, string? Capability);
+    string Name,
+    string Model,
+    string Instructions,
+    string Fingerprint,
+    string Capability,
+    IReadOnlyList<string> AllowedTools,
+    bool RuntimeEnabled);
+public sealed record ExistingFoundryAgent(
+    string Name,
+    string? Fingerprint,
+    bool HasSharedContextMcp,
+    string? Capability,
+    bool RuntimeEnabled);
 
 public interface IFoundryAgentAdministrationGateway
 {
@@ -48,7 +59,8 @@ public sealed partial class FoundryAgentReconciler(
                 if (existing.TryGetValue(agent.Name, out var current) &&
                     current.Fingerprint == agent.Fingerprint &&
                     current.HasSharedContextMcp &&
-                    string.Equals(current.Capability, agent.Capability, StringComparison.OrdinalIgnoreCase))
+                    string.Equals(current.Capability, agent.Capability, StringComparison.OrdinalIgnoreCase) &&
+                    current.RuntimeEnabled == agent.RuntimeEnabled)
                 {
                     LogVerified(logger, agent.Name, agent.Fingerprint);
                     continue;
@@ -57,8 +69,9 @@ public sealed partial class FoundryAgentReconciler(
                 var verified = (await gateway.ListAsync(stoppingToken)).SingleOrDefault(item => item.Name == agent.Name);
                 if (verified?.Fingerprint != agent.Fingerprint ||
                     !verified.HasSharedContextMcp ||
-                    !string.Equals(verified.Capability, agent.Capability, StringComparison.OrdinalIgnoreCase))
-                    throw new InvalidOperationException($"Foundry agent '{agent.Name}' was created without its required capability metadata or shared-context MCP attachment.");
+                    !string.Equals(verified.Capability, agent.Capability, StringComparison.OrdinalIgnoreCase) ||
+                    verified.RuntimeEnabled != agent.RuntimeEnabled)
+                    throw new InvalidOperationException($"Foundry agent '{agent.Name}' was created without its required runtime metadata or shared-context MCP attachment.");
                 LogReconciled(logger, agent.Name, agent.Fingerprint);
             }
         }
@@ -74,6 +87,10 @@ public sealed partial class FoundryAgentReconciler(
         var billerResearchWorkers = new HashSet<string>(
             ["biller-research", "biller-brand-research", "biller-payment-policy-research"],
             StringComparer.OrdinalIgnoreCase);
+        var activeFoundryAgents = new HashSet<string>(billerResearchWorkers, StringComparer.OrdinalIgnoreCase)
+        {
+            "research-coordinator"
+        };
         return Directory.GetDirectories(root)
             .Select(path => (Name: Path.GetFileName(path), Instructions: Path.Combine(path, "instructions.md")))
             // The grounded compliance agent is provisioned exclusively by the index workflow,
@@ -89,10 +106,18 @@ public sealed partial class FoundryAgentReconciler(
                     : item.Name == "research-coordinator"
                         ? "research_consolidation"
                         : item.Name.Replace('-', '_');
+                var runtimeEnabled = activeFoundryAgents.Contains(item.Name);
                 var allowedTools = LoadAllowedMcpTools(Path.GetDirectoryName(item.Instructions)!);
                 var fingerprint = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(
-                    $"{model}\n{instructions}\n{options.McpConnectionId}\n{capability}\n{string.Join(',', allowedTools)}"))).ToLowerInvariant();
-                return new DesiredFoundryAgent(item.Name, model, instructions, fingerprint, capability, allowedTools);
+                    $"{model}\n{instructions}\n{options.McpConnectionId}\n{capability}\n{string.Join(',', allowedTools)}\n{runtimeEnabled}"))).ToLowerInvariant();
+                return new DesiredFoundryAgent(
+                    item.Name,
+                    model,
+                    instructions,
+                    fingerprint,
+                    capability,
+                    allowedTools,
+                    runtimeEnabled);
             }).ToArray();
     }
 
@@ -158,8 +183,10 @@ public sealed class FoundryAgentAdministrationGateway(AIProjectClient project, I
             var latest = agent.GetLatestVersion();
             latest.Metadata.TryGetValue("ic.fingerprint", out var fingerprint);
             latest.Metadata.TryGetValue("ic.capabilities", out var capability);
+            var runtimeEnabled = latest.Metadata.TryGetValue("ic.enabled", out var enabled) &&
+                                 bool.TryParse(enabled, out var parsedEnabled) && parsedEnabled;
             var hasMcp = latest.Definition is DeclarativeAgentDefinition definition && definition.Tools.Any(IsRequiredMcpTool);
-            result.Add(new ExistingFoundryAgent(agent.Name, fingerprint, hasMcp, capability));
+            result.Add(new ExistingFoundryAgent(agent.Name, fingerprint, hasMcp, capability, runtimeEnabled));
         }
         return result;
     }
@@ -186,8 +213,9 @@ public sealed class FoundryAgentAdministrationGateway(AIProjectClient project, I
             {
                 ["ic.fingerprint"] = agent.Fingerprint,
                 ["ic.approved"] = "true",
-                ["ic.enabled"] = "true",
+                ["ic.enabled"] = agent.RuntimeEnabled.ToString().ToLowerInvariant(),
                 ["ic.capabilities"] = agent.Capability,
+                ["ic.runtime"] = agent.RuntimeEnabled ? "foundry" : "definition_only",
                 ["ic.mcp.required"] = "ic-shared-context-mcp"
             },
             definition = new

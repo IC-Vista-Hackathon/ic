@@ -117,11 +117,17 @@ public sealed class BillerResearchCoordinatorTests
         var dispatcher = new StubDispatcher((agent, _) => Completed(agent.Id));
         var consolidator = new StubConsolidator(Completed("consolidated"));
         var coordinator = Create(catalog, dispatcher, ["one", "two"], consolidator);
+        var sink = new RecordingSink();
 
-        var response = await coordinator.ResearchAsync(Request());
+        var response = await coordinator.ResearchAsync(
+            Request(),
+            ExecutionContext(sink));
 
         Assert.True(consolidator.Called);
         Assert.Contains(response.Facts, fact => fact.Value == "consolidated");
+        Assert.Contains(sink.Events, item => item.AgentId == "research-coordinator" && item.Status == OrchestrationEventStatus.Discovered);
+        Assert.Contains(sink.Events, item => item.AgentId == "research-coordinator" && item.Status == OrchestrationEventStatus.Running);
+        Assert.Contains(sink.Events, item => item.AgentId == "research-coordinator" && item.Status == OrchestrationEventStatus.Completed && item.DurationMs >= 0);
     }
 
     [Fact]
@@ -134,14 +140,12 @@ public sealed class BillerResearchCoordinatorTests
         var coordinator = Create(catalog, dispatcher, []);
         var sink = new RecordingSink();
 
-        await coordinator.ResearchAsync(Request(), new ResearchExecutionContext("biller-1", "run-1", sink));
+        await coordinator.ResearchAsync(Request(), ExecutionContext(sink));
 
         Assert.Contains(sink.Events, item => item.AgentId == "eligible" && item.Status == OrchestrationEventStatus.Discovered);
-        Assert.Contains(sink.Events, item => item.AgentId == "rejected" && item.Status == OrchestrationEventStatus.Discovered && item.Summary.Contains("not approved"));
-        Assert.Contains(sink.Events, item => item.AgentId == "rejected" && item.Status == OrchestrationEventStatus.Skipped && item.ErrorCode == "research.agent_ineligible");
         Assert.Contains(sink.Events, item => item.AgentId == "eligible" && item.Status == OrchestrationEventStatus.Running);
         Assert.Contains(sink.Events, item => item.AgentId == "eligible" && item.Status == OrchestrationEventStatus.Completed && item.DurationMs >= 0);
-        Assert.DoesNotContain(sink.Events, item => item.AgentId == "rejected" && item.Status == OrchestrationEventStatus.Running);
+        Assert.DoesNotContain(sink.Events, item => item.AgentId == "rejected");
     }
 
     [Fact]
@@ -157,7 +161,7 @@ public sealed class BillerResearchCoordinatorTests
 
         var research = coordinator.ResearchAsync(
             Request(),
-            new ResearchExecutionContext("biller-1", "run-1", sink),
+            ExecutionContext(sink),
             cancellation.Token);
         await dispatcher.Started.Task.WaitAsync(TimeSpan.FromSeconds(2));
         cancellation.Cancel();
@@ -172,11 +176,12 @@ public sealed class BillerResearchCoordinatorTests
     }
 
     [Fact]
-    public async Task OrchestrationReadsAndWritesAgentScopedContextThroughMcp()
+    public async Task OrchestrationUsesContextRunIdForMcpAndExecutionIdForActivity()
     {
         var dispatcher = new StubDispatcher((agent, _) => Completed(agent.Id));
         var issuer = new StubCapabilityIssuer();
         var gateway = new StubContextGateway();
+        var sink = new RecordingSink();
         var coordinator = Create(
             new StubCatalog([Agent("worker", "biller_research")]),
             dispatcher,
@@ -187,9 +192,11 @@ public sealed class BillerResearchCoordinatorTests
 
         await coordinator.ResearchAsync(
             Request(),
-            new ResearchExecutionContext("biller-1", "run-1", new RecordingSink()));
+            ExecutionContext(sink, executionId: "turn-42", contextRunId: "onboarding"));
 
-        Assert.Equal(("biller-1", "run-1", "worker", true), issuer.Issued);
+        Assert.Equal(("biller-1", "onboarding", "worker", true), issuer.Issued);
+        Assert.NotEmpty(sink.Events);
+        Assert.All(sink.Events, item => Assert.Equal("turn-42", item.RunId));
         var context = Assert.Single(dispatcher.InvocationContexts);
         Assert.Equal("biller-1", context!.SharedContext.BillerId);
         Assert.Equal(4, context.SharedContext.Version);
@@ -214,7 +221,7 @@ public sealed class BillerResearchCoordinatorTests
 
         var response = await coordinator.ResearchAsync(
             Request(),
-            new ResearchExecutionContext("biller-1", "run-1", new RecordingSink()));
+            ExecutionContext(new RecordingSink()));
 
         Assert.Equal(ResearchOutcome.Failed, response.Outcome);
         Assert.Equal("research.mcp_context_read_failed", response.ErrorCode);
@@ -236,12 +243,12 @@ public sealed class BillerResearchCoordinatorTests
 
         var response = await coordinator.ResearchAsync(
             Request(),
-            new ResearchExecutionContext("biller-1", "run-1", new RecordingSink()));
+            ExecutionContext(new RecordingSink()));
 
         Assert.Equal(ResearchOutcome.Degraded, response.Outcome);
         Assert.Contains("research.mcp_context_write_failed", response.Warnings);
         Assert.Single(response.Facts);
-        Assert.Equal(2, gateway.GetCount);
+        Assert.Equal(3, gateway.GetCount);
         Assert.Equal(2, gateway.AppendCount);
     }
 
@@ -319,6 +326,14 @@ public sealed class BillerResearchCoordinatorTests
             contextGateway);
 
     private static BillerResearchRequest Request() => new(new Uri("https://example.com"), "brand");
+    private static ResearchExecutionContext ExecutionContext(
+        IOrchestrationEventSink sink,
+        string executionId = "run-1",
+        string contextRunId = "run-1") => new(
+        BillerId: "biller-1",
+        ExecutionId: executionId,
+        ContextRunId: contextRunId,
+        ActivitySink: sink);
     private static ResearchAgentDescriptor Agent(string id, string capability) => new(id, id, new HashSet<string> { capability });
 
     private static BillerResearchResponse Completed(string value)

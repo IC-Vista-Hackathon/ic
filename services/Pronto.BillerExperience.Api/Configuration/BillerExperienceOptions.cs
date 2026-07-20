@@ -7,10 +7,16 @@ public sealed class BillerExperienceOptions
     public ModelOptions Model { get; set; } = new();
     public PublishedExperienceOptions PublishedExperience { get; set; } = new();
     public SupportingServicesOptions SupportingServices { get; set; } = new();
+    public OrchestrationOptions Orchestration { get; set; } = new();
     public ResearchOptions Research { get; set; } = new();
     public ComplianceOptions Compliance { get; set; } = new();
     public McpOptions Mcp { get; set; } = new();
     public AgentProvisioningOptions AgentProvisioning { get; set; } = new();
+}
+
+public sealed class OrchestrationOptions
+{
+    public int WorkflowTimeoutSeconds { get; set; } = 660;
 }
 
 public sealed class AgentProvisioningOptions
