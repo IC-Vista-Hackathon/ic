@@ -19,7 +19,9 @@ public sealed partial class BillerResearchCoordinator(
 {
     private readonly ResearchOptions _options = options.Value.Research;
     private readonly McpOptions _optionsForMcp = options.Value.Mcp;
-    private readonly SemaphoreSlim _contextWriteGate = new(1, 1);
+    private readonly SemaphoreSlim[] _contextWriteGates = Enumerable.Range(0, 32)
+        .Select(_ => new SemaphoreSlim(1, 1))
+        .ToArray();
 
     public async Task<BillerResearchResponse> ResearchAsync(
         BillerResearchRequest request,
@@ -45,10 +47,34 @@ public sealed partial class BillerResearchCoordinator(
             throw;
         }
 
-        var agents = discovered
-            .Where(agent => IsEligible(agent, _options.AllowedAgentIds))
+        var eligibility = discovered
+            .Select(agent => new { Agent = agent, Reason = IneligibilityReason(agent, _options.AllowedAgentIds) })
+            .ToArray();
+        var eligible = eligibility.Where(item => item.Reason is null).Select(item => item.Agent).ToArray();
+        var agents = eligible
             .Take(Math.Max(1, _options.MaxAgentCount))
             .ToArray();
+
+        var exclusionCounts = eligibility
+            .Where(item => item.Reason is not null)
+            .GroupBy(item => item.Reason!, StringComparer.Ordinal)
+            .ToDictionary(group => group.Key, group => group.Count(), StringComparer.Ordinal);
+        if (eligible.Length > agents.Length)
+        {
+            exclusionCounts["agent_limit"] = eligible.Length - agents.Length;
+        }
+        foreach (var exclusion in exclusionCounts)
+        {
+            ResearchTelemetry.AgentExclusions.Add(exclusion.Value,
+                new KeyValuePair<string, object?>("reason", exclusion.Key));
+            activity?.SetTag($"research.agent.excluded.{exclusion.Key}", exclusion.Value);
+        }
+        if (exclusionCounts.Count > 0)
+        {
+            LogAgentExclusions(logger,
+                string.Join(", ", exclusionCounts.OrderBy(item => item.Key).Select(item => $"{item.Key}={item.Value}")),
+                Activity.Current?.TraceId.ToString());
+        }
 
         LogAgentSelection(
             logger,
@@ -80,6 +106,9 @@ public sealed partial class BillerResearchCoordinator(
             (agent, _, token) => new ValueTask<AgentResult>(DispatchAsync(agent, request, executionContext, token)),
             cancellationToken: cancellationToken);
         var results = fanOut.Select(item => item.Output ?? new AgentResult(null, "research.agent_failed", true)).ToArray();
+        var deterministic = agents.Select((agent, index) => new { agent, results[index].Response })
+            .FirstOrDefault(item => item.agent.Provider.Equals("local", StringComparison.OrdinalIgnoreCase))
+            ?.Response;
         var successful = results.Where(result => result.Response is not null).Select(result => result.Response!).ToArray();
         var warnings = results.Where(result => result.ErrorCode is not null)
             .Select(result => result.ErrorCode!)
@@ -140,6 +169,7 @@ public sealed partial class BillerResearchCoordinator(
                 var consolidated = await consolidator.ConsolidateAsync(request, successful, executionContext, cancellationToken);
                 if (consolidated.Outcome != ResearchOutcome.Failed)
                 {
+                    consolidated = PreserveDeterministicBrandEvidence(consolidated, deterministic);
                     await PublishActivityAsync(
                         executionContext,
                         coordinatorAgent,
@@ -438,7 +468,9 @@ public sealed partial class BillerResearchCoordinator(
             content,
             sources,
             External: true);
-        await _contextWriteGate.WaitAsync(cancellationToken);
+        var contextKey = $"{context.Snapshot.BillerId}\n{context.Snapshot.RunId}";
+        var gate = _contextWriteGates[(contextKey.GetHashCode(StringComparison.Ordinal) & int.MaxValue) % _contextWriteGates.Length];
+        await gate.WaitAsync(cancellationToken);
         try
         {
             try
@@ -477,16 +509,63 @@ public sealed partial class BillerResearchCoordinator(
         }
         finally
         {
-            _contextWriteGate.Release();
+            gate.Release();
         }
     }
 
-    private bool IsEligible(ResearchAgentDescriptor agent, string[] allowedAgentIds) =>
-        agent.Approved &&
-        agent.Enabled &&
-        (allowedAgentIds.Length == 0 || allowedAgentIds.Contains(agent.Id, StringComparer.OrdinalIgnoreCase)) &&
-        agent.Capabilities.Any(capability =>
-            capability.Equals(_options.RequiredCapability, StringComparison.OrdinalIgnoreCase));
+    private string? IneligibilityReason(ResearchAgentDescriptor agent, string[] allowedAgentIds)
+    {
+        if (!agent.Approved) return "not_approved";
+        if (!agent.Enabled) return "disabled";
+        if (!agent.Id.Equals(LocalResearchAgentCatalog.SameSiteAgent.Id, StringComparison.OrdinalIgnoreCase) &&
+            allowedAgentIds.Length > 0 &&
+            !allowedAgentIds.Contains(agent.Id, StringComparer.OrdinalIgnoreCase))
+            return "not_allowlisted";
+        return agent.Capabilities.Any(capability =>
+            capability.Equals(_options.RequiredCapability, StringComparison.OrdinalIgnoreCase))
+            ? null
+            : "missing_capability";
+    }
+
+    private static BillerResearchResponse PreserveDeterministicBrandEvidence(
+        BillerResearchResponse consolidated,
+        BillerResearchResponse? deterministic)
+    {
+        if (deterministic is null)
+        {
+            return consolidated;
+        }
+
+        var localBrandFacts = deterministic.Facts
+            .Where(fact => CanonicalBrandFactNames.Contains(fact.Name))
+            .ToArray();
+        if (localBrandFacts.Length == 0)
+        {
+            return consolidated;
+        }
+
+        var replacedNames = localBrandFacts.Select(fact => fact.Name).ToHashSet(StringComparer.OrdinalIgnoreCase);
+        var facts = consolidated.Facts
+            .Where(fact => !replacedNames.Contains(fact.Name))
+            .Concat(localBrandFacts)
+            .ToArray();
+        var sources = consolidated.Sources.Concat(deterministic.Sources)
+            .GroupBy(source => source.Url)
+            .Select(group => group.OrderByDescending(source => source.RetrievedAt).First())
+            .ToArray();
+        return consolidated with { Facts = facts, Sources = sources };
+    }
+
+    private static readonly HashSet<string> CanonicalBrandFactNames = new(
+        [
+            BrandEvidenceFacts.DisplayName,
+            BrandEvidenceFacts.PrimaryColor,
+            BrandEvidenceFacts.SecondaryColor,
+            BrandEvidenceFacts.LogoUrl,
+            BrandEvidenceFacts.FontFamily,
+            BrandEvidenceFacts.Tagline
+        ],
+        StringComparer.OrdinalIgnoreCase);
 
     private ResearchAgentDescriptor CoordinatorAgent() => new(
         string.IsNullOrWhiteSpace(_options.CoordinatorAgentId)
@@ -535,7 +614,13 @@ public sealed partial class BillerResearchCoordinator(
         AgentContextSnapshot Snapshot,
         ResearchAgentInvocationContext InvocationContext);
 
-    public void Dispose() => _contextWriteGate.Dispose();
+    public void Dispose()
+    {
+        foreach (var gate in _contextWriteGates)
+        {
+            gate.Dispose();
+        }
+    }
 
     [LoggerMessage(2650, LogLevel.Error, "Research agent catalog discovery failed; trace {TraceId}")]
     private static partial void LogCatalogFailure(ILogger logger, Exception exception, string? traceId);
@@ -572,4 +657,7 @@ public sealed partial class BillerResearchCoordinator(
 
     [LoggerMessage(2661, LogLevel.Information, "Research selected {SelectedCount} eligible agents from {DiscoveredCount}; ignored {IgnoredCount} inventory agents; trace {TraceId}")]
     private static partial void LogAgentSelection(ILogger logger, int discoveredCount, int selectedCount, int ignoredCount, string? traceId);
+
+    [LoggerMessage(2662, LogLevel.Information, "Research agent exclusions by reason: {Exclusions}; trace {TraceId}")]
+    private static partial void LogAgentExclusions(ILogger logger, string exclusions, string? traceId);
 }

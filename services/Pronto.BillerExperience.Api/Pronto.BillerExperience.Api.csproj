@@ -3,6 +3,7 @@
     <Description>HTTP API for Pronto Biller Studio onboarding and publication.</Description>
   </PropertyGroup>
   <ItemGroup>
+    <PackageReference Include="AngleSharp" />
     <PackageReference Include="Azure.AI.OpenAI" />
     <PackageReference Include="Azure.AI.Projects" />
     <PackageReference Include="Azure.AI.Projects.Agents" />

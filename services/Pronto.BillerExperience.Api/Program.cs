@@ -125,8 +125,9 @@ if (!string.IsNullOrWhiteSpace(options.Research.FoundryProjectEndpoint))
         services.GetRequiredService<TokenCredential>()));
     builder.Services.AddSingleton<IFoundryAgentServiceGateway, FoundryAgentServiceGateway>();
     builder.Services.AddSingleton<FoundryResearchAgentAdapter>();
-    builder.Services.AddSingleton<IResearchAgentCatalog>(services => services.GetRequiredService<FoundryResearchAgentAdapter>());
-    builder.Services.AddSingleton<IResearchAgentDispatcher>(services => services.GetRequiredService<FoundryResearchAgentAdapter>());
+    builder.Services.AddSingleton<SameSiteResearchAgentDispatcher>();
+    builder.Services.AddSingleton<IResearchAgentCatalog, CompositeResearchAgentCatalog>();
+    builder.Services.AddSingleton<IResearchAgentDispatcher, CompositeResearchAgentDispatcher>();
     builder.Services.AddSingleton<IBillerResearchCoordinator>(services => new BillerResearchCoordinator(
         services.GetRequiredService<IResearchAgentCatalog>(),
         services.GetRequiredService<IResearchAgentDispatcher>(),

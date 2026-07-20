@@ -30,6 +30,23 @@ public sealed class BillerResearchCoordinatorTests
     }
 
     [Fact]
+    public async Task BuiltInLocalWorkerIsNotExcludedByFoundryAllowlist()
+    {
+        var catalog = new StubCatalog([
+            Agent("same-site-research", "biller_research") with { Provider = "local" },
+            Agent("foundry-worker", "biller_research") with { Provider = "foundry" },
+            Agent("other-foundry-worker", "biller_research") with { Provider = "foundry" }]);
+        var dispatcher = new StubDispatcher((agent, _) => Completed(agent.Id));
+        var coordinator = Create(catalog, dispatcher, ["foundry-worker"]);
+
+        await coordinator.ResearchAsync(Request());
+
+        Assert.Contains("same-site-research", dispatcher.Dispatched);
+        Assert.Contains("foundry-worker", dispatcher.Dispatched);
+        Assert.DoesNotContain("other-foundry-worker", dispatcher.Dispatched);
+    }
+
+    [Fact]
     public async Task ResearchReturnsDegradedResultWhenOneAgentFails()
     {
         var catalog = new StubCatalog([Agent("one", "biller_research"), Agent("two", "biller_research")]);
@@ -128,6 +145,37 @@ public sealed class BillerResearchCoordinatorTests
         Assert.Contains(sink.Events, item => item.AgentId == "research-coordinator" && item.Status == OrchestrationEventStatus.Discovered);
         Assert.Contains(sink.Events, item => item.AgentId == "research-coordinator" && item.Status == OrchestrationEventStatus.Running);
         Assert.Contains(sink.Events, item => item.AgentId == "research-coordinator" && item.Status == OrchestrationEventStatus.Completed && item.DurationMs >= 0);
+    }
+
+    [Fact]
+    public async Task ConsolidationCannotReplaceDeterministicFirstPartyBrandEvidence()
+    {
+        var source = new Uri("https://example.com/site.css");
+        var local = new BillerResearchResponse(
+            ResearchOutcome.Completed,
+            [new ResearchFact(BrandEvidenceFacts.PrimaryColor, "#123456", source, 0.9)],
+            [new ResearchSource(source, null, DateTimeOffset.UtcNow)],
+            []);
+        var consolidated = new BillerResearchResponse(
+            ResearchOutcome.Completed,
+            [new ResearchFact(BrandEvidenceFacts.PrimaryColor, "#abcdef", new Uri("https://search.example/"), 0.8)],
+            [new ResearchSource(new Uri("https://search.example/"), null, DateTimeOffset.UtcNow)],
+            []);
+        var dispatcher = new StubDispatcher((agent, _) => agent.Provider == "local" ? local : Completed(agent.Id));
+        var coordinator = Create(
+            new StubCatalog([
+                Agent("same-site-research", "biller_research") with { Provider = "local" },
+                Agent("foundry-worker", "biller_research") with { Provider = "foundry" }]),
+            dispatcher,
+            [],
+            new StubConsolidator(consolidated));
+
+        var response = await coordinator.ResearchAsync(Request());
+
+        var color = Assert.Single(response.Facts, fact => fact.Name == BrandEvidenceFacts.PrimaryColor);
+        Assert.Equal("#123456", color.Value);
+        Assert.Equal(source, color.SourceUrl);
+        Assert.Contains(response.Sources, item => item.Url == source);
     }
 
     [Fact]

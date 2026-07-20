@@ -72,6 +72,9 @@ public sealed class ResearchOptions
     public int MaxPages { get; set; } = 5;
     public int MaxLinksPerPage { get; set; } = 20;
     public int MaxResponseBytes { get; set; } = 512_000;
+    public int MaxStylesheets { get; set; } = 6;
+    public int MaxStylesheetBytes { get; set; } = 256_000;
+    public int MaxTotalStylesheetBytes { get; set; } = 768_000;
     public int RequestTimeoutSeconds { get; set; } = 10;
     public int MaxFactLength { get; set; } = 500;
     public int MaxAgentCount { get; set; } = 4;

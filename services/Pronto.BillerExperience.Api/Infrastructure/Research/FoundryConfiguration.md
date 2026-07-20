@@ -28,9 +28,17 @@ ic.enabled=true
 ```
 
 `ic.enabled` is optional and defaults to true. Metadata approval is always required. When
-`AllowedAgentIds` is non-empty it is an additional allowlist; when empty, every metadata-approved,
-enabled agent with the required capability is eligible. The coordinator agent is invoked only
-through `IFoundryResearchConsolidator`; it is not included automatically in worker fan-out.
+When `AllowedAgentIds` is non-empty it is an additional allowlist for Foundry workers; when empty, every
+metadata-approved, enabled agent with the required capability is eligible. The built-in
+`same-site-research` worker always remains eligible and is placed first in the worker pool. It
+fetches the biller's HTML and a bounded set of same-origin HTTPS stylesheets, and its canonical
+first-party brand facts take precedence over model consolidation. The coordinator agent is invoked
+only through `IFoundryResearchConsolidator`; it is not included automatically in worker fan-out.
+
+Website and stylesheet reads are bounded independently with `MaxResponseBytes`, `MaxStylesheets`,
+`MaxStylesheetBytes`, and `MaxTotalStylesheetBytes`. Oversized resources retain a usable prefix and
+surface a `research.response_truncated` or `research.stylesheet_truncated` warning instead of
+failing the complete research run.
 
 Web access is a property of each versioned worker agent. Provision a web-search or Bing Grounding tool (or an
 approved `research_website` function backed by the hardened same-site reader) on every worker that
@@ -38,3 +46,8 @@ is expected to browse. The orchestration service does not accept uncited output:
 fact must contain an absolute HTTPS source.
 
 Agents must return the cited JSON shape included in the invocation prompt. Outputs without at least one valid fact and absolute HTTPS source fail closed with `research.foundry_invalid_output`.
+
+Application Insights exposes exclusion counts in `ic.biller.research.agent_exclusions` with a
+`reason` dimension (`not_approved`, `disabled`, `not_allowlisted`, `missing_capability`, or
+`agent_limit`). Response byte counts, truncations, stylesheet fetches, dispatch outcomes, and
+SDK-native citation counts have separate `ic.biller.research.*` instruments.

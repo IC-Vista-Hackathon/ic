@@ -60,6 +60,42 @@ public sealed class FoundryResearchAgentAdapterTests
     }
 
     [Fact]
+    public async Task DispatchNormalizesBrandAliasesAndGivesBrandAgentTypedAssignment()
+    {
+        var gateway = new StubGateway
+        {
+            Output = new FoundryAgentOutput(
+                """{"facts":[{"name":"primaryColor","value":"#123456","sourceUrl":"https://example.com","confidence":0.9}],"sources":[],"warnings":[]}""",
+                [])
+        };
+        var adapter = Create(gateway);
+        var descriptor = new ResearchAgentDescriptor(
+            "biller-brand-research", "Brand Research", new HashSet<string> { "biller_research" });
+
+        var response = await adapter.DispatchAsync(descriptor, Request(), null, CancellationToken.None);
+
+        Assert.Equal(BrandEvidenceFacts.PrimaryColor, Assert.Single(response.Facts).Name);
+        Assert.Contains("Find official brand identity evidence", gateway.Prompt);
+        Assert.Contains("brand_primary_color", gateway.Prompt);
+    }
+
+    [Fact]
+    public async Task CompositeCatalogAlwaysPlacesDeterministicSameSiteWorkerFirst()
+    {
+        var gateway = new StubGateway
+        {
+            Agents = [Agent("foundry-worker", ("ic.approved", "true"), ("ic.capabilities", "biller_research"))]
+        };
+        var catalog = new CompositeResearchAgentCatalog(Create(gateway));
+
+        var agents = await catalog.ListAsync(CancellationToken.None);
+
+        Assert.Equal("same-site-research", agents[0].Id);
+        Assert.Equal("local", agents[0].Provider);
+        Assert.Contains(agents, agent => agent.Id == "foundry-worker" && agent.Provider == "foundry");
+    }
+
+    [Fact]
     public async Task DispatchSkipsValidEmptyEvidenceWithoutAcceptingUncitedFacts()
     {
         var gateway = new StubGateway

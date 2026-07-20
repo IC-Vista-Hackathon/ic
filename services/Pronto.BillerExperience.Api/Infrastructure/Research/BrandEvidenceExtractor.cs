@@ -17,6 +17,17 @@ public static class BrandEvidenceFacts
     public const string LogoUrl = "brand_logo_url";
     public const string FontFamily = "brand_font_family";
     public const string Tagline = "brand_tagline";
+
+    public static string NormalizeName(string name) => name.Trim().ToLowerInvariant() switch
+    {
+        "brand.primary_color" or "brandprimarycolor" or "primary_color" or "primarycolor" => PrimaryColor,
+        "brand.secondary_color" or "brandsecondarycolor" or "secondary_color" or "secondarycolor" => SecondaryColor,
+        "brand.logo_url" or "brandlogourl" or "logo_url" or "logourl" => LogoUrl,
+        "brand.font_family" or "brandfontfamily" or "font_family" or "fontfamily" => FontFamily,
+        "brand.display_name" or "branddisplayname" or "display_name" or "displayname" => DisplayName,
+        "brand.tagline" or "tagline" => Tagline,
+        _ => name.Trim()
+    };
 }
 
 /// <summary>
@@ -29,7 +40,10 @@ public static partial class BrandEvidenceExtractor
 {
     private const int MaxValueLength = 500;
 
-    public static IReadOnlyList<ResearchFact> Extract(string html, Uri pageUri)
+    public static IReadOnlyList<ResearchFact> Extract(
+        string html,
+        Uri pageUri,
+        IReadOnlyList<BrandStylesheet>? stylesheets = null)
     {
         if (string.IsNullOrEmpty(html))
         {
@@ -43,8 +57,8 @@ public static partial class BrandEvidenceExtractor
         AddDisplayName(facts, metas, html, pageUri);
         AddTagline(facts, metas, html, pageUri);
         AddLogo(facts, metas, links, html, pageUri);
-        AddColors(facts, metas, html, pageUri);
-        AddFont(facts, html, pageUri);
+        AddColors(facts, metas, html, pageUri, stylesheets ?? []);
+        AddFont(facts, html, pageUri, stylesheets ?? []);
 
         return facts;
     }
@@ -77,66 +91,53 @@ public static partial class BrandEvidenceExtractor
         Add(facts, BrandEvidenceFacts.LogoUrl, resolved?.AbsoluteUri, pageUri, 0.85);
     }
 
-    private static void AddColors(List<ResearchFact> facts, MetaBag metas, string html, Uri pageUri)
+    private static void AddColors(
+        List<ResearchFact> facts,
+        MetaBag metas,
+        string html,
+        Uri pageUri,
+        IReadOnlyList<BrandStylesheet> stylesheets)
     {
-        var ordered = new List<string>();
-
-        // theme-color is the site's declared brand color, so it leads.
-        if (NormalizeHex(metas.Name("theme-color")) is { } themed)
+        var palette = CssBrandEvidenceExtractor.Extract(
+            metas.Name("theme-color"), html, pageUri, stylesheets);
+        if (palette.Primary is { } primary)
         {
-            ordered.Add(themed);
+            Add(facts, BrandEvidenceFacts.PrimaryColor, primary.Value, primary.SourceUrl, primary.Confidence);
         }
-
-        // Then the most prominent non-neutral colors declared anywhere in the markup/CSS, by frequency.
-        var counts = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
-        foreach (Match match in HexColorRegex().Matches(html))
+        if (palette.Secondary is { } secondary)
         {
-            if (NormalizeHex(match.Value) is not { } hex || IsNeutral(hex))
-            {
-                continue;
-            }
-
-            counts[hex] = counts.TryGetValue(hex, out var existing) ? existing + 1 : 1;
-        }
-
-        foreach (var hex in counts.OrderByDescending(pair => pair.Value).ThenBy(pair => pair.Key, StringComparer.Ordinal)
-                     .Select(pair => pair.Key)
-                     .Where(hex => !ordered.Contains(hex, StringComparer.OrdinalIgnoreCase)))
-        {
-            ordered.Add(hex);
-        }
-
-        if (ordered.Count > 0)
-        {
-            Add(facts, BrandEvidenceFacts.PrimaryColor, ordered[0], pageUri, 0.8);
-        }
-        if (ordered.Count > 1)
-        {
-            Add(facts, BrandEvidenceFacts.SecondaryColor, ordered[1], pageUri, 0.7);
+            Add(facts, BrandEvidenceFacts.SecondaryColor, secondary.Value, secondary.SourceUrl, secondary.Confidence);
         }
     }
 
-    private static void AddFont(List<ResearchFact> facts, string html, Uri pageUri)
+    private static void AddFont(
+        List<ResearchFact> facts,
+        string html,
+        Uri pageUri,
+        IReadOnlyList<BrandStylesheet> stylesheets)
     {
-        foreach (Match match in FontFamilyRegex().Matches(html))
+        foreach (var source in new[] { new BrandStylesheet(pageUri, html) }.Concat(stylesheets))
         {
-            foreach (var raw in match.Groups["families"].Value.Split(','))
+            foreach (Match match in FontFamilyRegex().Matches(source.Content))
             {
-                var family = raw.Trim().Trim('"', '\'', '`').Trim();
-                if (family.Length == 0 || IsGenericFontFamily(family))
+                foreach (var raw in match.Groups["families"].Value.Split(','))
                 {
-                    continue;
-                }
+                    var family = raw.Trim().Trim('"', '\'', '`').Trim();
+                    if (family.Length == 0 || IsGenericFontFamily(family))
+                    {
+                        continue;
+                    }
 
-                Add(facts, BrandEvidenceFacts.FontFamily, family, pageUri, 0.65);
-                return;
+                    Add(facts, BrandEvidenceFacts.FontFamily, family, source.SourceUrl, 0.65);
+                    return;
+                }
             }
         }
     }
 
     // A hex is "neutral" when its channels are close together (white/black/greys). Neutrals dominate
     // most stylesheets (borders, text, backgrounds), so excluding them keeps the brand hue on top.
-    private static bool IsNeutral(string hex)
+    internal static bool IsNeutral(string hex)
     {
         var red = Convert.ToInt32(hex.Substring(1, 2), 16);
         var green = Convert.ToInt32(hex.Substring(3, 2), 16);
@@ -155,7 +156,7 @@ public static partial class BrandEvidenceExtractor
     };
 
     // Expands #rgb to #rrggbb and lower-cases; returns null for anything that isn't a 3/6-digit hex.
-    private static string? NormalizeHex(string? value)
+    internal static string? NormalizeHex(string? value)
     {
         if (value is null)
         {
