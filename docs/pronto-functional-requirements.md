@@ -103,15 +103,13 @@ returns first-party, **cited** brand evidence: at minimum organization/display n
 colors, a logo or wordmark URL, tagline, and tone/style. Research is bounded and safe (same-origin
 HTTPS only, SSRF-guarded); off-domain or unsafe targets are rejected.
 
-> **Known gap (issue #2).** Research either does not run (no eligible agent / skipped) or the crawler
-> (`Infrastructure/Research/HttpBillerWebsiteResearcher.cs`) only extracts `<title>` and the meta
-> description — **no colors, logo, OpenGraph image, favicon, theme-color, or typography.** Example
-> sites that should yield brand evidence: `https://www.happypantsnyc.com`,
+> **Enforced.** `BrandEvidenceExtractor` crawls the same-origin site and pulls colors, logo/wordmark,
+> theme-color, favicon, and typography, and the research event is recorded on the activity feed.
+> Example sites that yield brand evidence: `https://www.happypantsnyc.com`,
 > `https://thankful-sea-0d2febf0f.7.azurestaticapps.net`.
 
 ```gherkin
 Feature: Biller website research
-  @known-gap
   Scenario: Research runs to completion for a reachable biller site
     Given a biller with website "https://www.happypantsnyc.com"
     When the onboarding orchestration runs
@@ -133,12 +131,11 @@ Once research succeeds, the draft the biller previews reflects the supported bra
 logo pulled from the site is present, and colors are the researched brand colors rather than a
 generic default.
 
-> **Known gap (issue #2, cont.).** The draft keeps its placeholder brand (`logo_asset_id: null`,
-> primary color `#085368`) because research neither runs nor produces brand tokens.
+> **Enforced.** `ResearchBrandApplicator` maps the extracted evidence onto the draft, so the
+> previewed brand carries the site's logo and researched colors rather than a generic default.
 
 ```gherkin
 Feature: Brand evidence reaches the draft
-  @known-gap
   Scenario: Onboarding derives brand identity from the biller site
     Given a biller with website "https://www.happypantsnyc.com"
     When the onboarding orchestration runs
@@ -158,20 +155,17 @@ assert a specific brand color or design brief. Brand stays unset / clearly "not 
 until the research agent produces evidence; only then does the preview show it. If research fails,
 the UI communicates that the brand is unverified rather than silently using invented values.
 
-> **Known gap (issue #3).** `BillerOnboardingService.CreateInitialDefinition` fills the bootstrap
-> draft with a hard-coded default color (`#085368`), font, and a generic design brief at creation
-> time — before research runs — and the welcome message says "I created a starting preview." This
-> is the made-up logo/colors shown before the research agent executes.
+> **Enforced.** `BillerOnboardingService.CreateInitialDefinition` no longer fabricates a brand color,
+> font, or design brief at creation time: the bootstrap draft (returned by `POST /billers`, before
+> research) asserts no brand claim, and branding appears only once research produces evidence.
 
 ```gherkin
 Feature: Research before presentation
-  @known-gap
   Scenario: Bootstrap draft asserts no brand color before research
     When I create a biller with a website but have not run research
     Then the bootstrap draft has no brand primary color
     And it is not the fabricated default "#085368"
 
-  @known-gap
   Scenario: Bootstrap draft fabricates no design brief before research
     When I create a biller with a website but have not run research
     Then the bootstrap draft has no design brief
@@ -207,7 +201,29 @@ User approval applies only to the resulting draft and cannot bypass workflow gat
 a passing compliance check enforced server-side, and only the payment path (post explicit payer
 confirmation) moves money. Agents cannot set readiness, approve, or publish.
 
-Test: _covered by existing in-process tests; deployed coverage to be added with the publish flow._
+The server-side publish gate is a **deterministic compliance suite** that emits a signed, auditable
+attestation (F8): a compliant revision publishes and the 202 response carries an `attestation` with
+`passed: true`, a signature, and per-checker results; a revision that violates a hard checker is
+blocked at publish with a 422 problem-details response whose `findings` name the failing checker —
+even when it passed the advisory approval review. The color-contrast checker is a good black-box
+probe: a valid-hex but sub-WCAG-AA palette is accepted at approval yet blocked at publish.
+
+```gherkin
+Feature: Deterministic publish gate with signed attestation
+  Scenario: A compliant revision publishes with a verifiable attestation
+    Given an approved revision whose palette clears WCAG AA and whose fees are disclosed
+    When I publish it
+    Then the response is 202 Accepted
+    And it carries a compliance attestation with passed=true, a signature, and checker results
+
+  Scenario: A hard checker blocks publish after an advisory-clean approval
+    Given a revision with a valid-hex but sub-WCAG-AA brand color that approval accepts
+    When I publish it
+    Then the response is 422 with a finding on "brand.primary_color"
+```
+
+Tests: `CompliancePublishGateTests.PublishProducesSignedAttestationForCompliantRevision`,
+`CompliancePublishGateTests.PublishIsBlockedByHardComplianceChecker`
 
 ---
 
@@ -228,6 +244,38 @@ Feature: Deployed health
 
 Tests: `HealthAndConfigTests.ApiLivenessAndReadinessProbesReturnOk`,
 `HealthAndConfigTests.PublicTelemetryConfigExposesExpectedShape`
+
+---
+
+## FR-10 — Studio preview runs the shipped bundle against an isolated, seeded, resettable tenant
+
+The Studio preview renders the same built payer PWA as production, but scoped to an isolated
+`preview-{billerId}` partition seeded with synthetic demo data (F2). Provisioning seeds that
+partition; the served preview config is the current draft with its `biller_id` rewritten to the
+preview tenant (so every downstream service call targets the isolated partition); and reset
+re-seeds deterministically — a repeat converges on the same seed set rather than accumulating.
+
+```gherkin
+Feature: Real-services Studio preview
+  Scenario: Provisioning seeds an isolated preview tenant
+    Given a biller
+    When I provision its preview
+    Then I get a preview tenant id of "preview-{billerId}" with a seeded demo account
+    And the preview partition has demo invoices for that account
+
+  Scenario: The served preview config is scoped to the preview tenant
+    When I fetch the preview config
+    Then its biller_id is the preview tenant, not the live biller
+
+  Scenario: Reset is deterministic
+    Given a provisioned, seeded preview
+    When I reset it
+    Then the preview account's seeded invoice count is unchanged (re-seed converges)
+```
+
+Tests: `StudioPreviewTests.ProvisioningSeedsAnIsolatedPreviewTenant`,
+`StudioPreviewTests.PreviewConfigServesTheDraftScopedToThePreviewTenant`,
+`StudioPreviewTests.ResetIsDeterministicAndDoesNotAccumulateSeedData`
 
 ---
 
