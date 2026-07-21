@@ -53,12 +53,14 @@ test('the assistant answers a follow-up question in the transcript', async ({ pa
 });
 
 test('a slow assistant turn still resolves without a timeout error', async ({ page }) => {
-  // The payer-chat turn runs a server-side agent pipeline; a realistic delay must not trip the
-  // client timeout (guards the same class of bug as the publish timeout, at the UI boundary).
-  await installHarness(page, { assistantDelayMs: 3_000 });
+  // The payer-chat turn runs a server-side agent pipeline; the reply lands slower than the generic
+  // 15s request budget and must still resolve on the longer assistant budget. A regression back to
+  // the 15s default would abort here — so the delay is deliberately above 15s, mirroring the Studio
+  // slow-publish test (guards the same class of bug as the publish timeout, at the UI boundary).
+  await installHarness(page, { assistantDelayMs: 16_000 });
 
   await findBill(page);
 
-  await expect(page.getByTestId('assistant-assistant').first()).toContainText('card', { timeout: 15_000 });
+  await expect(page.getByTestId('assistant-assistant').first()).toContainText('card', { timeout: 25_000 });
   await expect(page.getByTestId('error')).toHaveCount(0);
 });

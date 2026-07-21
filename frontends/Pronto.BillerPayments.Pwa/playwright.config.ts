@@ -10,7 +10,9 @@ const BASE_PATH = '/pay/';
 
 export default defineConfig({
   testDir: './e2e',
-  timeout: 30_000,
+  // Generous per-test budget: the slow-assistant test intentionally delays the payer-chat reply
+  // past the generic 15s request budget to prove the turn resolves on the longer assistant budget.
+  timeout: 60_000,
   fullyParallel: true,
   forbidOnly: !!process.env.CI,
   retries: process.env.CI ? 1 : 0,
