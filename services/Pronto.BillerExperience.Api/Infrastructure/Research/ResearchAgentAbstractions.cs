@@ -129,17 +129,48 @@ public sealed class SameSiteResearchAgentDispatcher(IBillerWebsiteResearcher res
 
 public sealed class LocalResearchAgentCatalog : IResearchAgentCatalog
 {
-    private static readonly IReadOnlyList<ResearchAgentDescriptor> Agents =
-    [
+    public static readonly ResearchAgentDescriptor SameSiteAgent =
         new("same-site-research", "Same-site Research", new HashSet<string>(StringComparer.OrdinalIgnoreCase)
         {
             "biller_research"
-        })
-    ];
+        });
+
+    private static readonly IReadOnlyList<ResearchAgentDescriptor> Agents = [SameSiteAgent];
 
     public Task<IReadOnlyList<ResearchAgentDescriptor>> ListAsync(CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
         return Task.FromResult(Agents);
     }
+}
+
+/// <summary>
+/// Keeps deterministic first-party extraction in the production pool while adding Foundry's
+/// specialized web-search agents. The local worker is first so a catalog cap cannot exclude it.
+/// </summary>
+public sealed class CompositeResearchAgentCatalog(FoundryResearchAgentAdapter foundry) : IResearchAgentCatalog
+{
+    public async Task<IReadOnlyList<ResearchAgentDescriptor>> ListAsync(CancellationToken cancellationToken)
+    {
+        var agents = await foundry.ListAsync(cancellationToken);
+        return new[] { LocalResearchAgentCatalog.SameSiteAgent }
+            .Concat(agents.Where(agent => !agent.Id.Equals(
+                LocalResearchAgentCatalog.SameSiteAgent.Id,
+                StringComparison.OrdinalIgnoreCase)))
+            .ToArray();
+    }
+}
+
+public sealed class CompositeResearchAgentDispatcher(
+    SameSiteResearchAgentDispatcher sameSite,
+    FoundryResearchAgentAdapter foundry) : IResearchAgentDispatcher
+{
+    public Task<BillerResearchResponse> DispatchAsync(
+        ResearchAgentDescriptor agent,
+        BillerResearchRequest request,
+        ResearchAgentInvocationContext? invocationContext,
+        CancellationToken cancellationToken) =>
+        agent.Id.Equals(LocalResearchAgentCatalog.SameSiteAgent.Id, StringComparison.OrdinalIgnoreCase)
+            ? sameSite.DispatchAsync(agent, request, invocationContext, cancellationToken)
+            : foundry.DispatchAsync(agent, request, invocationContext, cancellationToken);
 }

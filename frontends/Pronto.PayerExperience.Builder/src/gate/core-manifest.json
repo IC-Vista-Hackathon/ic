@@ -2,7 +2,7 @@
   "algorithm": "sha256",
   "files": {
     "index.html": "f4c943eecadb5f80ef2c7916c2d3beee1b816623ef218dfb9c0e9b2c3f59fb9e",
-    "src/App.tsx": "fae23a407f7ac4e339bc616585b13d7560374741eb51f8d98c689f0fb26dfd3f",
+    "src/App.tsx": "f07d634ad8353eca97f84063947ecafe5b59bf66d551681cb06cbac40cf193af",
     "src/ErrorBoundary.tsx": "16deca540875b4a7469cafc735a3eb998cc579bf5f7c8b7532f314e90a0441bf",
     "src/batch.ts": "8b2627ece0967c2df09d936b23333a7d67e9e58982379109ce0427f6d443efee",
     "src/billerSlug.ts": "ea20e1cc910a583a1c0911ea0cbe5748ce508880b6acaf7a44a8478c40e5b60d",
@@ -16,7 +16,7 @@
     "src/skin/index.ts": "0ae3b5bde5715708f4c4616bca9f3f1f1cca59aa2d4435e8fc5f368479914d5d",
     "src/telemetry.ts": "9f4a5e52bb8caec205ace8d8d621ffcf3d75ac152f8a4fa7012b4a85ee85279a",
     "src/telemetryPolicy.ts": "858cc1b2ec685222be2845bdd4a6942c5c07b19ca624aac69323350429271241",
-    "src/types.ts": "b8234019f5d7270abf128ee2144e88bda959f849887f48c50ce84c65e812470b",
+    "src/types.ts": "9bdf893dcc7814e1a7d97ea9881df44d61c39530885ae404d30a60ce3b057686",
     "src/vite-env.d.ts": "65996936fbb042915f7b74a200fcdde7e410f32a669b1ab9597cfaa4b0faddb5",
     "vite.config.ts": "f6baaf399205666afece31eecd1bce69187f1cb8bad6f413bd346288dbbe07c8"
   }

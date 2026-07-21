@@ -67,7 +67,13 @@ export function App() {
       // Branding is evidence-gated (a biller may go live before any colors are chosen), so only
       // override the skin's default brand tokens when a value is actually set — an empty color
       // must fall back to the theme default, never blank out the button/link/bill styling.
-      .then(value => { setConfig(value); setConfigState('ready'); document.title = value.pwa.name; if (value.brand.primary_color) document.documentElement.style.setProperty('--brand', value.brand.primary_color); if (value.brand.secondary_color) document.documentElement.style.setProperty('--brand-secondary', value.brand.secondary_color); if (value.brand.font_family) document.documentElement.style.setProperty('--brand-font', value.brand.font_family); })
+      .then(value => {
+        setConfig(value); setConfigState('ready'); document.title = value.pwa.name;
+        const root = document.documentElement;
+        const tokens = [['--brand', value.brand.primary_color], ['--brand-secondary', value.brand.secondary_color], ['--brand-font', value.brand.font_family]] as const;
+        for (const [token, configured] of tokens) configured ? root.style.setProperty(token, configured) : root.style.removeProperty(token);
+        root.dataset.brandState = value.brand.primary_color ? 'branded' : 'unbranded';
+      })
       .catch(caught => { setConfigState('error'); setError(`Load payment experience: ${errorMessage(caught)}`); logError('pwa.config.failed', caught, { biller_slug: slug }); });
   }, [configAttempt]);
 

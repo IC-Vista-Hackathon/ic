@@ -54,7 +54,10 @@ async function walk(dir: string, pwaRoot: string, out: string[]): Promise<void> 
 }
 
 function hash(body: Buffer): string {
-  return createHash(MANIFEST_ALGORITHM).update(body).digest('hex');
+  // Git commonly checks text files out as CRLF on Windows and LF in Linux CI. Hash a canonical
+  // representation so regenerating the manifest on either platform produces the same result.
+  const canonical = body.toString('utf8').replace(/\r\n/g, '\n');
+  return createHash(MANIFEST_ALGORITHM).update(canonical, 'utf8').digest('hex');
 }
 
 // Compute the manifest of fixed core files from a pristine PWA directory.

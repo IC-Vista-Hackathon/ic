@@ -1,0 +1,21 @@
+# Exercise the real model and Foundry research orchestration in the pre-merge environment.
+# Nonprod consumes the shared, stateless Foundry agents but does not provision or mutate them.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: ic-biller-experience-api
+spec:
+  template:
+    metadata:
+      labels:
+        azure.workload.identity/use: "true"
+    spec:
+      containers:
+        - name: biller-experience-api
+          env:
+            - { name: BillerExperience__Model__Provider, value: AzureAI }
+            - { name: BillerExperience__Model__Endpoint, value: "https://aif-ic-hack-jk4zmntatjem4.cognitiveservices.azure.com/" }
+            - { name: BillerExperience__Model__Deployment, value: gpt-5.4-mini }
+            - { name: BillerExperience__Research__FoundryProjectEndpoint, value: "https://aif-ic-hack-jk4zmntatjem4.services.ai.azure.com/api/projects/ic" }
+            - { name: BillerExperience__Research__CoordinatorAgentId, value: research-coordinator }
+            - { name: BillerExperience__AgentProvisioning__Enabled, value: "false" }

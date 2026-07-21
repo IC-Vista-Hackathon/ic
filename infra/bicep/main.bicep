@@ -82,8 +82,9 @@ module publisherIdentity 'modules/workloadIdentity.bicep' = {
 
 // Dedicated identity for the nonprod (per-PR) environment. Kept separate from the prod
 // workload identity so a nonprod pod's token can NEVER reach prod Cosmos: this identity is
-// federated only to system:serviceaccount:ic-nonprod:ic-workload and granted data access only
-// on the nonprod Cosmos account. Separate identities also mean each has a single federated
+// federated only to system:serviceaccount:ic-nonprod:ic-workload. It can consume the shared,
+// stateless Foundry agents but receives Cosmos data access only on the nonprod account.
+// Separate identities also mean each has a single federated
 // credential, avoiding the ConcurrentFederatedIdentityCredentialsWritesForSingleManagedIdentity
 // error that forced serialized writes when both federations lived on one identity.
 module nonprodWorkloadIdentity 'modules/workloadIdentity.bicep' = {
@@ -145,6 +146,9 @@ module aiFoundry 'modules/aiFoundry.bicep' = {
     name: 'aif-${prefix}-${suffix}'
     location: location
     workloadIdentityPrincipalId: workloadIdentity.outputs.principalId
+    additionalConsumerPrincipalIds: [
+      nonprodWorkloadIdentity.outputs.principalId
+    ]
     foundryOwnerPrincipalIds: foundryOwnerPrincipalIds
     appInsightsId: appInsights.outputs.id
     appInsightsConnectionString: appInsights.outputs.connectionString

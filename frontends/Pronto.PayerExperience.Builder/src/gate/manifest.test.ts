@@ -48,6 +48,14 @@ describe('core hash manifest', () => {
     assert.equal(verifiedCount, Object.keys(expected.files).length);
   });
 
+  it('produces the same core hash for LF and CRLF checkouts', async () => {
+    const expected = await computeCoreManifest(pwa);
+    await writeFile(join(pwa, 'src', 'App.tsx'), 'export const App = () => null;\r\n');
+    const actual = await computeCoreManifest(pwa);
+    assert.equal(actual.files['src/App.tsx'], expected.files['src/App.tsx']);
+    await writeFile(join(pwa, 'src', 'App.tsx'), 'export const App = () => null;\n');
+  });
+
   it('fails when a fixed core file is mutated', async () => {
     const expected = await computeCoreManifest(pwa);
     await writeFile(join(pwa, 'src', 'App.tsx'), 'export const App = () => "tampered";\n');

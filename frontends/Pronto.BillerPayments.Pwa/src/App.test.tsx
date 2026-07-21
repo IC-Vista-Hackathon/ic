@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { cleanup, render, screen, waitFor } from '@testing-library/react';
+import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import type { Invoice, PayerProfile, PaymentHistory, PaymentReceipt } from './types';
 
@@ -41,7 +41,12 @@ const config = {
 };
 
 describe('unbranded config (evidence-gated branding not yet chosen)', () => {
-  afterEach(() => { cleanup(); vi.clearAllMocks(); vi.unstubAllGlobals(); });
+  afterEach(() => {
+    cleanup(); vi.clearAllMocks(); vi.unstubAllGlobals();
+    document.documentElement.style.removeProperty('--brand');
+    document.documentElement.style.removeProperty('--brand-secondary');
+    delete document.documentElement.dataset.brandState;
+  });
 
   it('renders the payer experience when brand/pwa colors are empty instead of failing as incomplete', async () => {
     const unbranded = {
@@ -49,6 +54,8 @@ describe('unbranded config (evidence-gated branding not yet chosen)', () => {
       brand: { display_name: 'Acme Water', primary_color: '', secondary_color: '', font_family: null },
       pwa: { name: 'Acme Water Payments', short_name: 'Acme Water', theme_color: '', background_color: '' },
     };
+    document.documentElement.style.setProperty('--brand', '#085368');
+    document.documentElement.style.setProperty('--brand-secondary', '#18b4e9');
     vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify(unbranded), { status: 200 })));
     const { App } = await import('./App');
     render(<App />);
@@ -57,6 +64,8 @@ describe('unbranded config (evidence-gated branding not yet chosen)', () => {
     expect(screen.queryByText(/configuration is incomplete/i)).toBeNull();
     // Empty colors must not override the skin's default brand token.
     expect(document.documentElement.style.getPropertyValue('--brand')).toBe('');
+    expect(document.documentElement.style.getPropertyValue('--brand-secondary')).toBe('');
+    expect(document.documentElement.dataset.brandState).toBe('unbranded');
     // Header must still paint a background (falls back to the brand token) so its white title stays visible.
     expect(screen.getByTestId('app-header').style.background).toBe('var(--brand)');
   });
@@ -69,6 +78,27 @@ describe('unbranded config (evidence-gated branding not yet chosen)', () => {
 
     expect(await screen.findByRole('heading', { name: 'Pay your bill' })).toBeDefined();
     expect(screen.queryByText(/billing options are invalid|preferences are invalid|interface configuration is invalid/i)).toBeNull();
+  });
+});
+
+describe('researched brand logo', () => {
+  afterEach(() => { cleanup(); vi.clearAllMocks(); vi.unstubAllGlobals(); });
+
+  it('renders the configured logo and falls back to initials if the asset fails', async () => {
+    const branded = {
+      ...config,
+      brand: { ...config.brand, logo_asset_id: 'https://acme.example/logo.svg' },
+    };
+    vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify(branded), { status: 200 })));
+    const { App } = await import('./App');
+    render(<App />);
+
+    const logo = await screen.findByRole('img', { name: 'Acme Water logo' });
+    expect(logo.getAttribute('src')).toBe('https://acme.example/logo.svg');
+
+    fireEvent.error(logo);
+    expect(screen.queryByRole('img', { name: 'Acme Water logo' })).toBeNull();
+    expect(screen.getByText('AW')).toBeDefined();
   });
 });
 

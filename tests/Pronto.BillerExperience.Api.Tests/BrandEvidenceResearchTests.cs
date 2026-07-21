@@ -91,6 +91,45 @@ public sealed class BrandEvidenceResearchTests
     }
 
     [Fact]
+    public void ExtractWeightsSemanticStylesheetTokensAndPreservesTheirSource()
+    {
+        var stylesheetUri = new Uri(PageUri, "/assets/brand.css");
+        var stylesheets = new[]
+        {
+            new BrandStylesheet(stylesheetUri, """
+                :root {
+                  --brand-primary: rgb(12, 72, 150);
+                  --brand-secondary: hsl(42, 90%, 50%);
+                }
+                body { color: #cc33aa; }
+                """)
+        };
+
+        var facts = BrandEvidenceExtractor.Extract("<html><head></head></html>", PageUri, stylesheets);
+
+        var primary = facts.Single(fact => fact.Name == BrandEvidenceFacts.PrimaryColor);
+        var secondary = facts.Single(fact => fact.Name == BrandEvidenceFacts.SecondaryColor);
+        Assert.Equal("#0c4896", primary.Value);
+        Assert.Equal("#f2ad0d", secondary.Value);
+        Assert.Equal(stylesheetUri, primary.SourceUrl);
+        Assert.Equal(stylesheetUri, secondary.SourceUrl);
+    }
+
+    [Fact]
+    public void StylesheetDiscoveryRejectsOffOriginAndNonHttpsLinks()
+    {
+        const string html = """
+            <link rel="stylesheet" href="/site.css">
+            <link rel="stylesheet" href="https://cdn.example/site.css">
+            <link rel="stylesheet" href="http://www.happypants.example/insecure.css">
+            """;
+
+        var links = BrandStylesheetDiscovery.Extract(html, PageUri);
+
+        Assert.Equal([new Uri("https://www.happypants.example/site.css")], links);
+    }
+
+    [Fact]
     public void ApplyMapsEvidenceOntoUnbrandedDraft()
     {
         var definition = UnbrandedDefinition();

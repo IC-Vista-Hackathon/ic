@@ -73,6 +73,13 @@ public sealed partial class HttpBillerWebsiteResearcher(
                     continue;
                 }
 
+                ResearchTelemetry.ResponseBytes.Record(page.BytesRead, new KeyValuePair<string, object?>("research.resource_type", "html"));
+                if (page.Truncated)
+                {
+                    warnings.Add("research.response_truncated");
+                    ResearchTelemetry.TruncatedResponses.Add(1, new KeyValuePair<string, object?>("research.resource_type", "html"));
+                }
+
                 var retrievedAt = DateTimeOffset.UtcNow;
                 var title = Extract(TitleRegex(), page.Html!, _options.MaxFactLength);
                 var description = Extract(MetaDescriptionRegex(), page.Html!, _options.MaxFactLength);
@@ -85,7 +92,9 @@ public sealed partial class HttpBillerWebsiteResearcher(
                 // authoritative value per token instead of merging conflicting per-page signals.
                 if (!brandEvidenceCaptured)
                 {
-                    facts.AddRange(BrandEvidenceExtractor.Extract(page.Html!, page.FinalUri!));
+                    var stylesheets = await FetchStylesheetsAsync(
+                        page.Html!, page.FinalUri!, website.Host, sources, warnings, cancellationToken);
+                    facts.AddRange(BrandEvidenceExtractor.Extract(page.Html!, page.FinalUri!, stylesheets));
                     brandEvidenceCaptured = true;
                 }
 
@@ -193,21 +202,9 @@ public sealed partial class HttpBillerWebsiteResearcher(
                 return PageResult.Failure("research.unsupported_content_type", false);
             }
 
-            if (response.Content.Headers.ContentLength > _options.MaxResponseBytes)
-            {
-                LogPageFailure(logger, "research.response_too_large", allowedHost, (int)response.StatusCode);
-                return PageResult.Failure("research.response_too_large", false);
-            }
-
             await using var stream = await response.Content.ReadAsStreamAsync(timeout.Token);
-            var html = await ReadBoundedAsync(stream, Math.Max(1, _options.MaxResponseBytes), timeout.Token);
-            if (html is null)
-            {
-                LogPageFailure(logger, "research.response_too_large", allowedHost, (int)response.StatusCode);
-                return PageResult.Failure("research.response_too_large", false);
-            }
-
-            return PageResult.Success(responseUri, html);
+            var content = await ReadBoundedAsync(stream, Math.Max(1, _options.MaxResponseBytes), timeout.Token);
+            return PageResult.Success(responseUri, content.Text, content.BytesRead, content.Truncated);
         }
 
         return PageResult.Failure("research.invalid_redirect", false);
@@ -240,7 +237,109 @@ public sealed partial class HttpBillerWebsiteResearcher(
 
     private static bool IsUnsafeAddress(IPAddress address) => ResearchAddressGuard.IsUnsafe(address);
 
-    private static async Task<string?> ReadBoundedAsync(Stream stream, int maximumBytes, CancellationToken cancellationToken)
+    private async Task<IReadOnlyList<BrandStylesheet>> FetchStylesheetsAsync(
+        string html,
+        Uri pageUri,
+        string allowedHost,
+        List<ResearchSource> sources,
+        List<string> warnings,
+        CancellationToken cancellationToken)
+    {
+        var stylesheets = new List<BrandStylesheet>();
+        var remainingBytes = Math.Max(0, _options.MaxTotalStylesheetBytes);
+        foreach (var stylesheetUri in BrandStylesheetDiscovery.Extract(html, pageUri)
+                     .Take(Math.Max(0, _options.MaxStylesheets)))
+        {
+            if (remainingBytes == 0)
+            {
+                warnings.Add("research.stylesheet_budget_exhausted");
+                break;
+            }
+
+            var maximumBytes = Math.Min(Math.Max(1, _options.MaxStylesheetBytes), remainingBytes);
+            var result = await FetchStylesheetAsync(stylesheetUri, allowedHost, maximumBytes, cancellationToken);
+            if (result.ErrorCode is not null)
+            {
+                warnings.Add(result.ErrorCode);
+                continue;
+            }
+
+            remainingBytes -= result.BytesRead;
+            stylesheets.Add(new BrandStylesheet(result.FinalUri!, result.Html!));
+            sources.Add(new ResearchSource(result.FinalUri!, null, DateTimeOffset.UtcNow));
+            ResearchTelemetry.Stylesheets.Add(1);
+            ResearchTelemetry.ResponseBytes.Record(result.BytesRead, new KeyValuePair<string, object?>("research.resource_type", "stylesheet"));
+            if (result.Truncated)
+            {
+                warnings.Add("research.stylesheet_truncated");
+                ResearchTelemetry.TruncatedResponses.Add(1, new KeyValuePair<string, object?>("research.resource_type", "stylesheet"));
+            }
+        }
+
+        return stylesheets;
+    }
+
+    private async Task<PageResult> FetchStylesheetAsync(
+        Uri uri,
+        string allowedHost,
+        int maximumBytes,
+        CancellationToken cancellationToken)
+    {
+        for (var redirectCount = 0; redirectCount <= 5; redirectCount++)
+        {
+            var targetError = await ValidateTargetAsync(uri, allowedHost, cancellationToken);
+            if (targetError is not null)
+            {
+                return PageResult.Failure(targetError, false);
+            }
+
+            using var request = new HttpRequestMessage(HttpMethod.Get, uri);
+            request.Headers.Accept.Add(new MediaTypeWithQualityHeaderValue("text/css"));
+            using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+            timeout.CancelAfter(TimeSpan.FromSeconds(Math.Max(1, _options.RequestTimeoutSeconds)));
+            using var response = await httpClient.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, timeout.Token);
+            var responseUri = response.RequestMessage?.RequestUri ?? uri;
+
+            var responseTargetError = await ValidateTargetAsync(responseUri, allowedHost, cancellationToken);
+            if (responseTargetError is not null)
+            {
+                return PageResult.Failure(responseTargetError, false);
+            }
+
+            if (IsRedirect(response.StatusCode))
+            {
+                if (response.Headers.Location is null || redirectCount == 5)
+                {
+                    return PageResult.Failure("research.stylesheet_invalid_redirect", false);
+                }
+                uri = response.Headers.Location.IsAbsoluteUri
+                    ? response.Headers.Location
+                    : new Uri(uri, response.Headers.Location);
+                continue;
+            }
+
+            if (!response.IsSuccessStatusCode)
+            {
+                return PageResult.Failure("research.stylesheet_http_error", (int)response.StatusCode >= 500);
+            }
+            if (response.Content.Headers.ContentType?.MediaType is not { } mediaType ||
+                !mediaType.Equals("text/css", StringComparison.OrdinalIgnoreCase))
+            {
+                return PageResult.Failure("research.stylesheet_unsupported_content_type", false);
+            }
+
+            await using var stream = await response.Content.ReadAsStreamAsync(timeout.Token);
+            var content = await ReadBoundedAsync(stream, maximumBytes, timeout.Token);
+            return PageResult.Success(responseUri, content.Text, content.BytesRead, content.Truncated);
+        }
+
+        return PageResult.Failure("research.stylesheet_invalid_redirect", false);
+    }
+
+    private static async Task<BoundedReadResult> ReadBoundedAsync(
+        Stream stream,
+        int maximumBytes,
+        CancellationToken cancellationToken)
     {
         using var memory = new MemoryStream(Math.Min(maximumBytes, 81920));
         var buffer = new byte[81920];
@@ -250,16 +349,26 @@ public sealed partial class HttpBillerWebsiteResearcher(
             var read = await stream.ReadAsync(buffer, cancellationToken);
             if (read == 0)
             {
-                return Encoding.UTF8.GetString(memory.GetBuffer(), 0, total);
+                return new BoundedReadResult(Encoding.UTF8.GetString(memory.GetBuffer(), 0, total), total, false);
             }
 
-            total += read;
-            if (total > maximumBytes)
+            var retained = Math.Min(read, maximumBytes - total);
+            if (retained > 0)
             {
-                return null;
+                memory.Write(buffer, 0, retained);
+                total += retained;
             }
 
-            memory.Write(buffer, 0, read);
+            if (retained < read || total == maximumBytes)
+            {
+                var truncated = retained < read;
+                if (!truncated)
+                {
+                    var probe = new byte[1];
+                    truncated = await stream.ReadAsync(probe, cancellationToken) > 0;
+                }
+                return new BoundedReadResult(Encoding.UTF8.GetString(memory.GetBuffer(), 0, total), total, truncated);
+            }
         }
     }
 
@@ -308,10 +417,19 @@ public sealed partial class HttpBillerWebsiteResearcher(
         return new BillerResearchResponse(ResearchOutcome.Failed, [], [], [code], code, retryable);
     }
 
-    private sealed record PageResult(Uri? FinalUri, string? Html, string? ErrorCode, bool Retryable)
+    private sealed record BoundedReadResult(string Text, int BytesRead, bool Truncated);
+
+    private sealed record PageResult(
+        Uri? FinalUri,
+        string? Html,
+        string? ErrorCode,
+        bool Retryable,
+        int BytesRead,
+        bool Truncated)
     {
-        internal static PageResult Success(Uri uri, string html) => new(uri, html, null, false);
-        internal static PageResult Failure(string code, bool retryable) => new(null, null, code, retryable);
+        internal static PageResult Success(Uri uri, string html, int bytesRead, bool truncated) =>
+            new(uri, html, null, false, bytesRead, truncated);
+        internal static PageResult Failure(string code, bool retryable) => new(null, null, code, retryable, 0, false);
     }
 
     [GeneratedRegex(@"<title[^>]*>(.*?)</title>", RegexOptions.IgnoreCase | RegexOptions.Singleline, matchTimeoutMilliseconds: 100)]
