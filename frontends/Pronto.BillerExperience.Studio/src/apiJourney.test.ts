@@ -75,11 +75,14 @@ describe('Studio onboarding → publish journey survives slow agent gates', () =
     const bootstrap = await settle(api.create({ display_name: 'Brownsville PUB', slug: 'brownsville', bill_type: 'utility', postal_code: '78520' }));
     expect(bootstrap.biller.biller_id).toBe('b1');
 
-    // The three agentic gates each answer only after 60s; each must ride the longer budget.
+    // chat and approve are agentic gates: the backend answers each only after 60s, so each must
+    // ride the longer budget. update (PATCH /config) is a deterministic save answered immediately —
+    // it walks the journey but is correctly left on the 15s default, so it is not a guarded gate.
     await expect(settle(api.chat('b1', 'Make it feel trustworthy'))).resolves.toBeDefined();
     await expect(settle(api.update('b1', {} as never))).resolves.toBeDefined();
     await expect(settle(api.approve('b1', 'config-1'))).resolves.toBeDefined();
 
+    // publish is the third agentic gate — also answered only after 60s.
     const deployment = await settle(api.publish('b1', 'config-1'));
     expect(deployment).toMatchObject({ status: 'requested' });
 
