@@ -7,6 +7,11 @@ const supportingServicesBaseUrl = import.meta.env.VITE_SUPPORTING_SERVICES_URL ?
 // Three research workers run in bounded waves, followed by consolidation and draft generation.
 // Keep the browser budget above the backend's combined agent budgets while SSE reports progress.
 export const CHAT_REQUEST_TIMEOUT_MS = 300_000;
+// Approve and publish synchronously run the grounded Foundry compliance review (a full agent call,
+// server budget BillerExperience:Research:AgentTimeoutSeconds, default 300s) before returning, so
+// they need the same generous budget as chat — the generic 15s timeout aborts a valid review and
+// surfaces a spurious "The request timed out. Please try again."
+export const COMPLIANCE_GATE_TIMEOUT_MS = 300_000;
 export const activityUrl = (billerId: string) => `${baseUrl}/billers/${billerId}/events`;
 
 async function request<T>(path: string, init?: RequestInit, billerId?: string, timeoutMs?: number): Promise<T> {
@@ -41,9 +46,9 @@ export const api = {
   invoices: (billerId: string, accountNumber = '4421') => supportingRequest<{ invoices: PreviewInvoice[] }>(
     `/invoices/billers/${encodeURIComponent(billerId)}/invoices?account_number=${encodeURIComponent(accountNumber)}&include_closed=true`, billerId),
   approve: (billerId: string, revision: string) =>
-    request<ExperienceRevision>(`/billers/${billerId}/config/approve`, { method: 'POST', body: JSON.stringify({ revision, approved_by: 'biller-studio-user' }) }, billerId),
+    request<ExperienceRevision>(`/billers/${billerId}/config/approve`, { method: 'POST', body: JSON.stringify({ revision, approved_by: 'biller-studio-user' }) }, billerId, COMPLIANCE_GATE_TIMEOUT_MS),
   publish: (billerId: string, revision: string) =>
-    request<Deployment>(`/billers/${billerId}/config/publish`, { method: 'POST', body: JSON.stringify({ biller_id: billerId, revision }) }, billerId),
+    request<Deployment>(`/billers/${billerId}/config/publish`, { method: 'POST', body: JSON.stringify({ biller_id: billerId, revision }) }, billerId, COMPLIANCE_GATE_TIMEOUT_MS),
   deployment: (billerId: string, deploymentId: string) =>
     request<Deployment>(`/billers/${billerId}/deployments/${deploymentId}`, undefined, billerId),
   // Provision (or refresh) the isolated, seeded preview tenant the built PWA renders against.
