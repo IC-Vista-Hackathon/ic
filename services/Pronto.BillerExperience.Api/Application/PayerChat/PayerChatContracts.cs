@@ -20,7 +20,20 @@ public sealed record PayerChatMessage(string Role, string Content);
 /// <summary>Response for one payer-chat turn: a payer-facing reply plus the pipeline's artifacts.</summary>
 public sealed record PayerChatResponse(string Reply, PayerChatArtifacts Artifacts);
 
-public sealed record PayerChatArtifacts(BillSummaryView BillSummary, PaymentPlanView PaymentPlan);
+public sealed record PayerChatArtifacts(
+    BillSummaryView BillSummary,
+    PaymentPlanView PaymentPlan,
+    PayerChatAction? Action = null);
+
+/// <summary>
+/// An actionable follow-up the payer can take directly from the chat. Present only when the payer
+/// expresses intent to pay ("pay it now") — the assistant surfaces a confirm control, but the
+/// payer's explicit tap is still the confirmation; the assistant never submits on its own.
+/// </summary>
+public sealed record PayerChatAction(string Kind, string Method, int TotalCents, string? ScheduledFor)
+{
+    public const string ConfirmPayment = "confirm_payment";
+}
 
 /// <summary>Wire projection of the <see cref="BillSummary"/> artifact.</summary>
 public sealed record BillSummaryView(

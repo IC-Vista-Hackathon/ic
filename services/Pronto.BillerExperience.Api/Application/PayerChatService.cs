@@ -53,10 +53,14 @@ public sealed partial class PayerChatService(
             cancellationToken);
 
         LogTurnCompleted(logger, billerId, result.Bill.InvoiceId, result.Plan.Method, result.Quotes.Count);
-        var reply = $"Your {result.Bill.Description} bill is due {result.Bill.DueDate:MMMM d, yyyy}. {result.Plan.Rationale}";
+        var question = request.Messages?
+            .LastOrDefault(message => string.Equals(message.Role, "user", StringComparison.OrdinalIgnoreCase))?
+            .Content;
+        var reply = PayerChatResponder.Reply(question, result.Bill, result.Plan, result.Quotes);
+        var action = PayerChatResponder.DetectAction(question, result.Plan);
         return new PayerChatResponse(
             reply,
-            new PayerChatArtifacts(BillSummaryView.From(result.Bill), PaymentPlanView.From(result.Plan)));
+            new PayerChatArtifacts(BillSummaryView.From(result.Bill), PaymentPlanView.From(result.Plan), action));
     }
 
     [LoggerMessage(3000, LogLevel.Information,

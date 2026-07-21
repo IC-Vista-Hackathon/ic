@@ -279,6 +279,34 @@ Tests: `StudioPreviewTests.ProvisioningSeedsAnIsolatedPreviewTenant`,
 
 ---
 
+## FR-11 — Payer chat resolves a real bill through the router and never submits payment on its own
+
+The live portal's payer-chat turn runs the payer agent pipeline through the MCP router against the
+real Invoice/Payment services (#92): it resolves the addressed bill and server-quoted payment plan
+and returns a grounded reply plus artifacts. When the payer expresses intent to pay, the turn
+surfaces a `confirm_payment` action for the recommended method and total — but the assistant never
+submits the payment; the payer's explicit confirmation stays the gate.
+
+```gherkin
+Feature: Router-backed payer chat
+  Scenario: The opening turn resolves the bill and recommends a plan
+    Given a biller with a seeded demo invoice
+    When the payer opens chat for that invoice
+    Then the bill summary matches the invoice
+    And the payment plan recommends a method with a total of amount + a non-negative fee
+    And no confirm action is surfaced yet
+
+  Scenario: A pay-now intent surfaces a confirm control, not a payment
+    When the payer says "I want to pay it now"
+    Then the turn surfaces a confirm_payment action for the plan's method and total
+    And no payment is submitted
+```
+
+Tests: `PayerChatTests.OpeningTurnResolvesTheBillAndReturnsAGroundedPlan`,
+`PayerChatTests.PayNowIntentSurfacesAConfirmActionButNeverSubmits`
+
+---
+
 ## Cross-cutting testability requirements
 
 - **Nonprod, never prod.** Functional tests target the nonprod gateway; they must never run against

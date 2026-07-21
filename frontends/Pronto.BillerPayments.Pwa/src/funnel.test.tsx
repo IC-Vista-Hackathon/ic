@@ -19,6 +19,8 @@ vi.mock('./provider', () => ({
     findPayer = vi.fn().mockResolvedValue(payer);
     getPayments = vi.fn().mockResolvedValue([]);
     updatePreferences = vi.fn();
+    askAssistant = vi.fn().mockResolvedValue({ reply: 'ACH is cheaper.', method: 'ach', scheduledFor: '2026-08-01', feeCents: 150, totalCents: 5150, rationale: 'ACH is cheaper.' });
+    chat = vi.fn().mockResolvedValue({ reply: 'The ACH fee is $1.50.', method: 'ach', scheduledFor: '2026-08-01', feeCents: 150, totalCents: 5150, rationale: 'ACH is cheaper.' });
     pay = pay;
   },
 }));
