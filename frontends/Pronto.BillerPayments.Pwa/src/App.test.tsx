@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { cleanup, render, screen, waitFor } from '@testing-library/react';
+import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import type { Invoice, PayerProfile, PaymentHistory, PaymentReceipt } from './types';
 
@@ -78,6 +78,27 @@ describe('unbranded config (evidence-gated branding not yet chosen)', () => {
 
     expect(await screen.findByRole('heading', { name: 'Pay your bill' })).toBeDefined();
     expect(screen.queryByText(/billing options are invalid|preferences are invalid|interface configuration is invalid/i)).toBeNull();
+  });
+});
+
+describe('researched brand logo', () => {
+  afterEach(() => { cleanup(); vi.clearAllMocks(); vi.unstubAllGlobals(); });
+
+  it('renders the configured logo and falls back to initials if the asset fails', async () => {
+    const branded = {
+      ...config,
+      brand: { ...config.brand, logo_asset_id: 'https://acme.example/logo.svg' },
+    };
+    vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify(branded), { status: 200 })));
+    const { App } = await import('./App');
+    render(<App />);
+
+    const logo = await screen.findByRole('img', { name: 'Acme Water logo' });
+    expect(logo.getAttribute('src')).toBe('https://acme.example/logo.svg');
+
+    fireEvent.error(logo);
+    expect(screen.queryByRole('img', { name: 'Acme Water logo' })).toBeNull();
+    expect(screen.getByText('AW')).toBeDefined();
   });
 });
 

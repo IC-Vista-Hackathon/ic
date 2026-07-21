@@ -4,6 +4,7 @@ param name string
 param location string
 param projectName string = 'ic'
 param workloadIdentityPrincipalId string
+param additionalConsumerPrincipalIds array = []
 param foundryOwnerPrincipalIds array = []
 param appInsightsId string
 @secure()
@@ -111,25 +112,27 @@ resource sharedContextMcpConnection 'Microsoft.CognitiveServices/accounts/projec
 }
 
 // Lets services/agents call the AI Foundry project's inference endpoints with no API key.
-resource cognitiveServicesUserRoleAssignment 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
-  name: guid(account.id, workloadIdentityPrincipalId, 'CognitiveServicesUser')
+var consumerPrincipalIds = union([workloadIdentityPrincipalId], additionalConsumerPrincipalIds)
+
+resource cognitiveServicesUserRoleAssignments 'Microsoft.Authorization/roleAssignments@2022-04-01' = [for principalId in consumerPrincipalIds: {
+  name: guid(account.id, principalId, 'CognitiveServicesUser')
   scope: account
   properties: {
-    principalId: workloadIdentityPrincipalId
+    principalId: principalId
     principalType: 'ServicePrincipal'
     roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', 'a97b65f3-24c7-4388-baec-2e87135dc908')
   }
-}
+}]
 
-resource foundryAgentConsumerRoleAssignment 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
-  name: guid(account.id, workloadIdentityPrincipalId, 'FoundryAgentConsumer')
+resource foundryAgentConsumerRoleAssignments 'Microsoft.Authorization/roleAssignments@2022-04-01' = [for principalId in consumerPrincipalIds: {
+  name: guid(account.id, principalId, 'FoundryAgentConsumer')
   scope: account
   properties: {
-    principalId: workloadIdentityPrincipalId
+    principalId: principalId
     principalType: 'ServicePrincipal'
     roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', 'eed3b665-ab3a-47b6-8f48-c9382fb1dad6')
   }
-}
+}]
 
 resource foundryOwnerRoleAssignments 'Microsoft.Authorization/roleAssignments@2022-04-01' = [for principalId in foundryOwnerPrincipalIds: {
   name: guid(account.id, principalId, 'FoundryOwner')

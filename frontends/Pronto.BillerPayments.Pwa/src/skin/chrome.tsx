@@ -6,9 +6,22 @@ import type { FooterProps, HeaderProps, IntroProps } from './contract';
 // the stable core composes these and the build/typecheck gate enforces the signatures.
 
 export function Header({ brand }: HeaderProps) {
+  const logo = brand.logo_asset_id?.trim();
   return (
     <header data-testid="app-header" style={{ background: brand.primary_color || 'var(--brand)' }}>
-      <div className="mark">{initials(brand.display_name)}</div>
+      <div className="mark">
+        {logo
+          ? <>
+            <span aria-hidden="true" style={{ gridArea: '1 / 1' }}>{initials(brand.display_name)}</span>
+            <img
+              src={logo}
+              alt={`${brand.display_name} logo`}
+              style={{ display: 'block', width: '100%', height: '100%', objectFit: 'contain', borderRadius: 'inherit', gridArea: '1 / 1' }}
+              onError={event => { event.currentTarget.style.display = 'none'; }}
+            />
+          </>
+          : initials(brand.display_name)}
+      </div>
       <strong>{brand.display_name}</strong>
       <span>Secure account services</span>
     </header>

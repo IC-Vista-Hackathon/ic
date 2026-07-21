@@ -25,6 +25,9 @@ resources:
 # without any path to prod Cosmos.
 patches:
   - path: cosmos-persistence.yaml
+  # Run the actual model and Foundry research path during pre-merge validation. The dedicated
+  # nonprod identity has consumer-only access and cannot provision or change shared agents.
+  - path: biller-experience-ai.yaml
   # Nonprod-only: point the ic-workload service account at the DEDICATED nonprod workload
   # identity so its pods can reach only the nonprod Cosmos account (data-plane isolation).
   - path: service-account.yaml

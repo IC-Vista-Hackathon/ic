@@ -86,14 +86,17 @@ public sealed class HttpBillerWebsiteResearcherTests
     [Fact]
     public async Task ResearchRetainsBoundedPrefixWhenHtmlIsOversized()
     {
-        var handler = new FakeHandler(_ => Html("<title>Example Utility</title>" + new string('x', 200)));
+        var handler = new FakeHandler(_ => Html(
+            "<link rel=\"icon\" href=\"/logo.svg\"><title>Example Utility</title>" + new string('x', 200)));
 
-        var response = await Create(handler, maxBytes: 40).ResearchAsync(Request());
+        var response = await Create(handler, maxBytes: 80).ResearchAsync(Request());
 
         Assert.Equal(ResearchOutcome.Degraded, response.Outcome);
         Assert.Null(response.ErrorCode);
         Assert.Contains("research.response_truncated", response.Warnings);
         Assert.Contains(response.Facts, fact => fact.Name == "page_title" && fact.Value == "Example Utility");
+        Assert.Contains(response.Facts, fact =>
+            fact.Name == BrandEvidenceFacts.LogoUrl && fact.Value == "https://example.com/logo.svg");
     }
 
     [Fact]
