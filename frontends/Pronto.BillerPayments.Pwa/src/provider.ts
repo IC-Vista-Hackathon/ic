@@ -4,6 +4,12 @@ import { fetchWithTimeout, requestError } from './http';
 
 export interface PaymentQuote { feeCents: number; totalCents: number; amountCents: number; outstandingCents: number; }
 
+// A payer-chat turn synchronously runs the payer-side agent pipeline server-side
+// (Bill Intelligence → Financial Planning, both LLM stages), which routinely runs well past the
+// 15s generic request budget. Give it a budget above the backend's agent budget so a valid turn is
+// never cut short by a spurious "The request timed out."
+export const ASSISTANT_REQUEST_TIMEOUT_MS = 300_000;
+
 // A confirmable payment the assistant surfaced because the payer expressed intent to pay. The
 // payer's explicit tap on the confirm control is still the confirmation — the assistant never
 // submits on its own.
@@ -88,7 +94,7 @@ export class ServicePaymentExperienceProvider implements PaymentExperienceProvid
         method: 'POST',
         headers: this.headers(true),
         body: JSON.stringify({ invoice_id: invoiceId, account_number: accountNumber, ...(messages?.length ? { messages } : {}) }),
-      }));
+      }, ASSISTANT_REQUEST_TIMEOUT_MS));
     const plan = payload.artifacts.payment_plan;
     const raw = payload.artifacts.action;
     const action: AssistantAction | undefined = raw?.kind === 'confirm_payment'
