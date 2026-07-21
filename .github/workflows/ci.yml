@@ -80,6 +80,53 @@ jobs:
       - name: Test
         run: npm test
 
+  frontend-ui-e2e:
+    name: Frontend UI E2E (Playwright)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: |
+            frontends/Pronto.BillerPayments.Pwa/package-lock.json
+            frontends/Pronto.BillerExperience.Studio/package-lock.json
+
+      # Both frontends are needed: the Studio E2E builds and serves the real payer PWA to embed it
+      # in the preview iframe (the exact blank-preview regression these tests guard against).
+      - name: Install PWA deps
+        working-directory: frontends/Pronto.BillerPayments.Pwa
+        run: npm ci
+
+      - name: Install Studio deps
+        working-directory: frontends/Pronto.BillerExperience.Studio
+        run: npm ci
+
+      - name: Install Playwright browser
+        working-directory: frontends/Pronto.BillerPayments.Pwa
+        run: npx playwright install --with-deps chromium
+
+      - name: Payer PWA UI E2E
+        working-directory: frontends/Pronto.BillerPayments.Pwa
+        run: npm run test:e2e
+
+      - name: Studio UI E2E (embeds the real payer PWA)
+        working-directory: frontends/Pronto.BillerExperience.Studio
+        run: npm run test:e2e
+
+      - name: Upload Playwright artifacts
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-e2e-artifacts
+          path: |
+            frontends/Pronto.BillerPayments.Pwa/test-results
+            frontends/Pronto.BillerExperience.Studio/test-results
+          if-no-files-found: ignore
+
   payer-experience-builder:
     name: Payer Experience Builder (gates)
     runs-on: ubuntu-latest

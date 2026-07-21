@@ -9,6 +9,9 @@ dist/
 *.tsbuildinfo
 coverage/
 TestResults/
+test-results/
+playwright-report/
+.playwright/
 *.user
 *.suo
 *.nupkg
