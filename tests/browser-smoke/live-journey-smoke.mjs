@@ -42,13 +42,23 @@ const stepTimeoutMs = Number(process.env.STEP_TIMEOUT_MS ?? 30_000);
 const businessName = process.env.LIVE_SMOKE_BUSINESS ?? 'Pronto Live Smoke Water';
 
 const log = message => console.error(`[live-journey-smoke] ${message}`);
-const fail = message => { log(`FAIL: ${message}`); process.exit(1); };
-// A non-fatal infra/agent-availability condition: annotate for the workflow log, emit the result,
-// and exit 0. `::warning::` must start the line for GitHub Actions to render it as an annotation.
+
+// Ends the run early. Throwing (rather than process.exit) lets the browser close and the single
+// stdout result line flush before the process exits — calling process.exit right after console.log
+// can truncate stdout when it is a pipe (the deploy workflow captures this via command
+// substitution), the exact hazard telemetry-smoke.mjs documents.
+class SmokeStop extends Error {
+  constructor(result, exitCode) { super(result.stage); this.result = result; this.exitCode = exitCode; }
+}
+const fail = message => {
+  log(`FAIL: ${message}`);
+  throw new SmokeStop({ stage: 'failed', agentsExercised: false, confirmation: null, warned: false, error: message }, 1);
+};
+// A non-fatal infra/agent-availability condition: annotate for the workflow log and exit 0.
+// `::warning::` must start the line for GitHub Actions to render it as an annotation.
 function warnAndExit(stage, message) {
   console.error(`::warning::Live journey smoke stopped at "${stage}": ${message}. This is an agent availability/latency condition (the real Discovery/Analysis pipeline), not a frontend regression — the deployed functional tests gate backend correctness.`);
-  console.log(JSON.stringify({ stage, agentsExercised: false, confirmation: null, warned: true }));
-  process.exit(0);
+  throw new SmokeStop({ stage, agentsExercised: false, confirmation: null, warned: true }, 0);
 }
 
 const browser = await chromium.launch();
@@ -77,6 +87,8 @@ const failOrWarn = (stage, message) =>
     ? warnAndExit(stage, `${message}; the deployed backend returned ${serverErrors.length} 5xx response(s) this run (latest: ${serverErrors.slice(-2).join(' | ')})`)
     : fail(message);
 
+let result;
+let exitCode = 0;
 try {
   // ---- Phase A: Studio boots and the onboarding wizard renders (no agents; hard-fail regressions).
   log(`loading ${origin}/studio/`);
@@ -159,8 +171,22 @@ try {
     ?? (await preview.getByTestId('payment-confirmation').first().textContent({ timeout: 2_000 }).catch(() => null));
   log(`payment confirmed (${confirmation?.trim() || 'receipt shown'})`);
 
-  console.log(JSON.stringify({ stage: 'complete', agentsExercised: true, confirmation, warned: false }));
+  result = { stage: 'complete', agentsExercised: true, confirmation, warned: false };
+} catch (error) {
+  if (error instanceof SmokeStop) {
+    result = error.result;
+    exitCode = error.exitCode;
+  } else {
+    log(`FAIL: unexpected error: ${error?.stack ?? String(error)}`);
+    result = { stage: 'error', agentsExercised: false, confirmation: null, warned: false, error: String(error) };
+    exitCode = 1;
+  }
 } finally {
   await context.close();
   await browser.close();
 }
+
+// Emit the single result line and let the process exit naturally on this code, so a piped stdout
+// (the workflow's command substitution) is fully flushed first.
+console.log(JSON.stringify(result));
+process.exitCode = exitCode;
