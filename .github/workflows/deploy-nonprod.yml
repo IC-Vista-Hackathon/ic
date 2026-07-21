@@ -240,6 +240,33 @@ jobs:
             node tests/browser-smoke/telemetry-smoke.mjs)
           echo "biller Studio result: ${STUDIO_RESULT}"
 
+      # Real-agent UI journey against the just-deployed stack (nothing stubbed): drives the shipped
+      # Studio through onboarding → Build My Preview (the LIVE Discovery/Analysis agents run) →
+      # preview → and the payer pay flow inside the preview iframe (real seeded services, fake
+      # rails). This is the realistic-but-flakier tier: the deterministic Playwright UI E2E in CI
+      # gates frontend regressions per-PR; here `continue-on-error` keeps agent-latency/quota blips
+      # from blocking the shared-environment deploy. The script itself already downgrades backend
+      # 5xx / agent-unavailability to non-fatal ::warning::s and only exits non-zero on a genuine
+      # frontend regression, which surfaces here as a (non-blocking) red step.
+      - name: Live real-agent UI journey smoke
+        continue-on-error: true
+        run: |
+          GATEWAY_SVC=$(kubectl get svc -n ic-nonprod \
+            -l gateway.networking.k8s.io/gateway-name=ic-nonprod-gateway \
+            -o jsonpath='{.items[0].metadata.name}' 2>/dev/null || true)
+          GATEWAY_SVC="${GATEWAY_SVC:-ic-nonprod-gateway}"
+          kubectl port-forward -n ic-nonprod "svc/${GATEWAY_SVC}" 18083:80 >/dev/null 2>&1 &
+          PF_PID=$!
+          trap 'kill $PF_PID 2>/dev/null || true' EXIT
+          for _ in $(seq 1 30); do
+            curl -fsS -o /dev/null "http://127.0.0.1:18083/studio/" && break
+            sleep 1
+          done
+
+          LIVE_RESULT=$(TARGET_ORIGIN=http://127.0.0.1:18083 \
+            node tests/browser-smoke/live-journey-smoke.mjs)
+          echo "live journey result: ${LIVE_RESULT}"
+
       - name: Set up .NET for functional tests
         uses: actions/setup-dotnet@v4
         with:
