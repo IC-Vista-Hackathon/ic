@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { api, CHAT_REQUEST_TIMEOUT_MS } from './api';
+import { api, CHAT_REQUEST_TIMEOUT_MS, COMPLIANCE_GATE_TIMEOUT_MS } from './api';
 import { DEFAULT_REQUEST_TIMEOUT_MS } from './http';
 
 afterEach(() => {
@@ -27,6 +27,29 @@ describe('Studio API request budgets', () => {
     // value is a tuning knob and has changed twice already (120s -> 300s).
     expect(CHAT_REQUEST_TIMEOUT_MS).toBeGreaterThan(DEFAULT_REQUEST_TIMEOUT_MS);
     expect(delays).toEqual([CHAT_REQUEST_TIMEOUT_MS]);
+  });
+
+  it.each([
+    ['approve', () => api.approve('biller-1', 'rev-1')],
+    ['publish', () => api.publish('biller-1', 'rev-1')],
+  ])('gives the compliance-gated %s call the same generous budget as chat, not the generic timeout', async (_name, call) => {
+    const delays: number[] = [];
+    vi.stubGlobal('window', {
+      setTimeout: (_callback: () => void, delay: number) => { delays.push(delay); return 1; },
+      clearTimeout: () => undefined,
+    });
+    vi.stubGlobal('fetch', vi.fn(async () => new Response('{}', {
+      status: 200,
+      headers: { 'content-type': 'application/json' },
+    })));
+    vi.spyOn(console, 'info').mockImplementation(() => undefined);
+
+    await call();
+
+    // Approve/publish synchronously run the grounded compliance review, so they must not be cut
+    // short by the generic 15s timeout that produced the spurious "request timed out" on publish.
+    expect(COMPLIANCE_GATE_TIMEOUT_MS).toBeGreaterThan(DEFAULT_REQUEST_TIMEOUT_MS);
+    expect(delays).toEqual([COMPLIANCE_GATE_TIMEOUT_MS]);
   });
 });
 
