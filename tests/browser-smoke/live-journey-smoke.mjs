@@ -158,9 +158,15 @@ try {
   await preview.getByTestId('lookup-submit').click();
   const billLoaded = await preview.getByTestId('method-card').waitFor({ timeout: 25_000 }).then(() => true).catch(() => false);
   if (!billLoaded) failOrWarn('find-bill', `the seeded bill for account ${account} did not load in the preview`);
-  await preview.getByTestId('method-card').click();
-  await preview.getByTestId('review-submit').click();
-  await preview.getByTestId('pay-submit').click();
+  // Route these clicks through the same 5xx-aware classification as the waitFor guards: a backend
+  // blip on the quote/pay path can leave review-submit disabled or pay-submit unactionable, and
+  // Playwright's actionability timeout would otherwise land in the generic catch as a hard error.
+  await preview.getByTestId('method-card').click()
+    .catch(() => failOrWarn('pay', 'could not select a payment method in the preview'));
+  await preview.getByTestId('review-submit').click()
+    .catch(() => failOrWarn('pay', 'could not advance to review in the preview (quote may have failed)'));
+  await preview.getByTestId('pay-submit').click()
+    .catch(() => failOrWarn('pay', 'could not submit the payment in the preview'));
   const paid = await preview.getByTestId('payment-confirmation').waitFor({ timeout: 25_000 }).then(() => true).catch(() => false);
   if (!paid) failOrWarn('pay', 'the fake payment did not reach a confirmation receipt');
   // A single-invoice receipt exposes the confirmation code; a multi-invoice (batch) receipt shows a
