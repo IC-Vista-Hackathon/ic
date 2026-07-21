@@ -1,7 +1,8 @@
 export class UiRequestError extends Error {
   constructor(message: string, readonly status?: number, readonly code = 'request_failed', readonly correlationId?: string, readonly retryable = false) { super(message); this.name = 'UiRequestError'; }
 }
-export async function fetchWithTimeout(input: RequestInfo | URL, init: RequestInit = {}, timeoutMs = 15_000): Promise<Response> {
+export const DEFAULT_REQUEST_TIMEOUT_MS = 15_000;
+export async function fetchWithTimeout(input: RequestInfo | URL, init: RequestInit = {}, timeoutMs = DEFAULT_REQUEST_TIMEOUT_MS): Promise<Response> {
   const controller = new AbortController(); const timeout = window.setTimeout(() => controller.abort('timeout'), timeoutMs);
   try { return await fetch(input, { ...init, signal: controller.signal }); }
   catch { if (controller.signal.aborted) throw new UiRequestError('The request timed out. Please try again.', undefined, 'request_timeout', undefined, true); throw new UiRequestError('The service could not be reached. Please try again.', undefined, 'network_error', undefined, true); }

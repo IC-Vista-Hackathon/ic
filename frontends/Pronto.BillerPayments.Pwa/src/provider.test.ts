@@ -1,7 +1,8 @@
 // @vitest-environment jsdom
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { settleInvoices } from './batch';
-import { ServicePaymentExperienceProvider } from './provider';
+import { ASSISTANT_REQUEST_TIMEOUT_MS, ServicePaymentExperienceProvider } from './provider';
+import { DEFAULT_REQUEST_TIMEOUT_MS } from './http';
 import type { PaymentRequest } from './types';
 
 interface PaymentPost {
@@ -146,5 +147,37 @@ describe('ServicePaymentExperienceProvider.quote', () => {
     await provider.quote('inv-1', 'card');
 
     expect(urls[0]).not.toContain('amount_cents');
+  });
+});
+
+describe('ServicePaymentExperienceProvider assistant turn budget', () => {
+  afterEach(() => { vi.restoreAllMocks(); vi.unstubAllGlobals(); });
+
+  function assistantResponse() {
+    return new Response(JSON.stringify({
+      reply: 'Pay by card now to avoid the late fee.',
+      artifacts: { payment_plan: { method: 'card', when: 'now', fee_cents: 250, total_cents: 12750, rationale: 'cheapest now' } },
+    }), { status: 200 });
+  }
+
+  it.each([
+    ['askAssistant', (provider: ServicePaymentExperienceProvider) => provider.askAssistant('inv-1', '4421')],
+    ['chat', (provider: ServicePaymentExperienceProvider) => provider.chat('inv-1', '4421', [{ role: 'user', content: 'What should I do?' }])],
+  ])('runs the payer-chat %s turn on the assistant budget, not the generic timeout', async (_name, call) => {
+    const delays: number[] = [];
+    // fetchWithTimeout arms the abort via window.setTimeout(_, timeoutMs); capture the budget it used.
+    vi.spyOn(window, 'setTimeout').mockImplementation(((_handler: TimerHandler, delay?: number) => {
+      delays.push(delay ?? 0); return 1 as unknown as ReturnType<typeof setTimeout>;
+    }) as typeof setTimeout);
+    vi.stubGlobal('fetch', vi.fn(async () => assistantResponse()));
+    const provider = new ServicePaymentExperienceProvider('biller-1');
+
+    await call(provider);
+
+    // The payer-chat turn awaits a multi-stage LLM pipeline, so it must not inherit the 15s default
+    // that produced the spurious "request timed out" seen on publish.
+    expect(ASSISTANT_REQUEST_TIMEOUT_MS).toBeGreaterThan(DEFAULT_REQUEST_TIMEOUT_MS);
+    expect(delays).toContain(ASSISTANT_REQUEST_TIMEOUT_MS);
+    expect(delays).not.toContain(DEFAULT_REQUEST_TIMEOUT_MS);
   });
 });
