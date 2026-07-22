@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { api, CHAT_REQUEST_TIMEOUT_MS, COMPLIANCE_GATE_TIMEOUT_MS } from './api';
+import { api, CHAT_REQUEST_TIMEOUT_MS, COMPLIANCE_GATE_TIMEOUT_MS, SERVER_WORKFLOW_TIMEOUT_MS } from './api';
 import { DEFAULT_REQUEST_TIMEOUT_MS } from './http';
 
 afterEach(() => {
@@ -24,8 +24,14 @@ describe('Studio API request budgets', () => {
 
     // Assert the relationship, not the literal: the chat budget must exceed the generic
     // request timeout so multi-agent research is never cut short by the default. The exact
-    // value is a tuning knob and has changed twice already (120s -> 300s).
+    // value is a tuning knob and has changed already (120s -> 300s -> above the workflow cap).
     expect(CHAT_REQUEST_TIMEOUT_MS).toBeGreaterThan(DEFAULT_REQUEST_TIMEOUT_MS);
+    // A chat turn runs the whole server workflow synchronously, capped server-side at
+    // Orchestration:WorkflowTimeoutSeconds — not the 300s single-agent ceiling. If the browser
+    // budget sits at/under the workflow cap, a slow-but-valid turn (e.g. a no-website biller)
+    // aborts client-side with a spurious "request timed out" that a retry only repeats. Guard that
+    // the browser waits past the whole-workflow cap, the exact class of bug that was reported.
+    expect(CHAT_REQUEST_TIMEOUT_MS).toBeGreaterThan(SERVER_WORKFLOW_TIMEOUT_MS);
     expect(delays).toEqual([CHAT_REQUEST_TIMEOUT_MS]);
   });
 
