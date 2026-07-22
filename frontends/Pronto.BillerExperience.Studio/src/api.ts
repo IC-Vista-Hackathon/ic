@@ -4,14 +4,24 @@ import { fetchWithTimeout, requestError } from './http';
 
 const baseUrl = import.meta.env.VITE_API_URL ?? (import.meta.env.PROD ? '/api' : 'http://localhost:5000');
 const supportingServicesBaseUrl = import.meta.env.VITE_SUPPORTING_SERVICES_URL ?? '';
-// Three research workers run in bounded waves, followed by consolidation and draft generation.
-// Keep the browser budget above the backend's combined agent budgets while SSE reports progress.
-export const CHAT_REQUEST_TIMEOUT_MS = 300_000;
+// An onboarding chat turn runs the whole server workflow synchronously: bounded research waves
+// (up to MaxAgentCount agents at MaxParallelAgents concurrency, each on the 300s
+// Research:AgentTimeoutSeconds budget) plus consolidation, draft generation, and the review steps.
+// The server caps the entire turn at Orchestration:WorkflowTimeoutSeconds (660s) — NOT the 300s
+// single-agent ceiling — so a slow-but-valid turn (e.g. a no-website biller whose research waves
+// each run long) can legitimately take well past 300s. The browser budget must therefore sit above
+// the server's whole-workflow cap, not the per-agent one; a 300s browser budget aborts a still-valid
+// turn and surfaces a spurious "The request timed out. Please try again." that a retry only repeats.
+// Keep this above SERVER_WORKFLOW_TIMEOUT_MS (with margin for network + response serialization)
+// while SSE streams progress to the preview screen.
+export const SERVER_WORKFLOW_TIMEOUT_MS = 660_000;
+export const CHAT_REQUEST_TIMEOUT_MS = 690_000;
 // Approve and publish synchronously run the grounded Foundry compliance review (a full agent call,
 // server budget BillerExperience:Research:AgentTimeoutSeconds, default 300s) before returning, so
-// they need the same generous budget as chat — the generic 15s timeout aborts a valid review and
-// surfaces a spurious "The request timed out. Please try again."
-export const COMPLIANCE_GATE_TIMEOUT_MS = 300_000;
+// they need a generous budget — the generic 15s timeout aborts a valid review and surfaces a
+// spurious "The request timed out. Please try again." Keep this above the server's 300s per-agent
+// budget (with margin) so the browser never aborts a review the server is still validly running.
+export const COMPLIANCE_GATE_TIMEOUT_MS = 330_000;
 export const activityUrl = (billerId: string) => `${baseUrl}/billers/${billerId}/events`;
 
 async function request<T>(path: string, init?: RequestInit, billerId?: string, timeoutMs?: number): Promise<T> {
