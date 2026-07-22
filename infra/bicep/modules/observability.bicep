@@ -19,7 +19,7 @@ param paymentFailedThreshold int = 5
 @description('Lookback window, in hours, for the telemetry-silence alert.')
 param telemetrySilenceLookbackHours int = 1
 
-@description('Minimum non-health request count over the lookback window before the telemetry-silence alert can fire. Guards against firing on health-probe-only traffic during genuine off-hours.')
+@description('Minimum number of browser telemetry-config fetches (GET /public/telemetry, made once per PWA/Studio load) over the lookback window before the telemetry-silence alert can fire. Using browser boots rather than all server requests keeps the alert from firing on API/agent/E2E traffic that never involves a browser.')
 param telemetrySilenceMinRequests int = 20
 
 var emailReceivers = empty(alertEmailAddress)
@@ -143,15 +143,19 @@ resource paymentFinalizedFailures 'Microsoft.Insights/scheduledQueryRules@2023-1
   }
 }
 
-// Telemetry silence: server requests are flowing but no PWA customEvents have arrived for an hour,
-// which usually means the browser telemetry pipeline (config fetch, SDK bootstrap, or ingestion)
-// is broken rather than genuine idleness.
+// Telemetry silence: browsers are booting the telemetry SDK but no customEvents have arrived for
+// an hour, which usually means the browser telemetry pipeline (SDK bootstrap or ingestion) is
+// broken rather than genuine idleness. "Browser is booting" is measured by the GET
+// /public/telemetry config fetch that every PWA/Studio load performs on startup, NOT by total
+// non-health requests: the latter is dominated by service-to-service, agent, and E2E-test traffic
+// that never involves a browser, so it fired this alert even while the browser pipeline was
+// healthy (verified end-to-end delivery with zero human sessions in the window).
 resource telemetrySilence 'Microsoft.Insights/scheduledQueryRules@2023-12-01' = {
   name: 'ic-hack-telemetry-silence'
   location: location
   properties: {
     displayName: 'PWA telemetry silence'
-    description: 'Fires when requests are flowing but zero customEvents have arrived over the lookback window (browser telemetry pipeline likely broken).'
+    description: 'Fires when browsers are booting the telemetry SDK (GET /public/telemetry) but zero customEvents have arrived over the lookback window (browser telemetry pipeline likely broken).'
     severity: 1
     enabled: true
     scopes: [appInsightsId]
@@ -161,7 +165,7 @@ resource telemetrySilence 'Microsoft.Insights/scheduledQueryRules@2023-12-01' = 
     criteria: {
       allOf: [
         {
-          query: 'let lookback = ${telemetrySilenceLookbackHours}h;\nlet event_count = toscalar(customEvents | where timestamp > ago(lookback) | count);\nlet request_count = toscalar(requests | where timestamp > ago(lookback) | where url !has "/health/" and name !has "health" | count);\nprint silent = iff(request_count >= ${telemetrySilenceMinRequests} and event_count == 0, 1, 0)\n| where silent == 1'
+          query: 'let lookback = ${telemetrySilenceLookbackHours}h;\nlet event_count = toscalar(customEvents | where timestamp > ago(lookback) | count);\nlet browser_boot_count = toscalar(requests | where timestamp > ago(lookback) | where name has "public/telemetry" | count);\nprint silent = iff(browser_boot_count >= ${telemetrySilenceMinRequests} and event_count == 0, 1, 0)\n| where silent == 1'
           timeAggregation: 'Count'
           operator: 'GreaterThan'
           threshold: 0
